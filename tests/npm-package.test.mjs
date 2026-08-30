@@ -51,7 +51,9 @@ test('repository release surfaces match the package support contract', () => {
     assert.match(workflow, new RegExp(`\\n\\s+- ${nodeVersion}\\n`));
   }
   assert.match(workflow, /run: npm test/);
+  assert.match(workflow, /run: npm run test:compat/);
   assert.match(workflow, /run: npm run test:full/);
+  assert.match(workflow, /run: npm run test:package/);
 
   for (const readmePath of ['README.md', 'README.ko-KR.md']) {
     const readme = readFileSync(path.join(ROOT, readmePath), 'utf8');

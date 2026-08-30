@@ -47,6 +47,18 @@ import {
 } from './p2a_paths.mjs';
 import { commandLine } from './p2a_run_commands.mjs';
 import { atomicWriteJson, withRunStoreLocks } from './p2a_run_store.mjs';
+import {
+  assertVerificationObligations,
+  configuredVerificationObligations,
+  executedPassedVerificationItems,
+  failedVerificationItems,
+  incompleteVerificationItems,
+} from './p2a_verification_evidence.mjs';
+import {
+  classifyVerificationProfile,
+  productRevisionExcludedPaths,
+} from './p2a_verification_profile.mjs';
+import { projectConfigCandidatePaths } from './p2a_project_config.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.projectRoot;
@@ -85,7 +97,7 @@ function usage() {
     '  --artifacts <dir>    Iterative artifact root; uses the active iteration task graph.',
     '  --spec <path>        Spec JSON path for prompt context. Only supported with --graph.',
     '  --maintenance        With --artifacts, operate on the maintenance task graph.',
-    '  --note <text>        For block, record a human follow-up note in blockNote. Repeatable.',
+    '  --note <text>        For block or todo recovery, record the human decision in blockNote. Repeatable.',
     '  --reopen             With todo, explicitly reopen a done task. Requires --note.',
   ].join('\n');
 }
@@ -140,7 +152,7 @@ function parseArgs(argv) {
   if (artifactsPath && specPath) throw new Error('--spec is only supported with --graph; --artifacts uses the active iteration spec');
   if (graphPath) assertNotUninitializedScaffoldGraph(graphPath);
   if (reopen && command !== 'todo') throw new Error('--reopen is only supported with todo');
-  if (notes.length && command !== 'block' && !(command === 'todo' && reopen)) throw new Error('--note is only supported with block or todo --reopen');
+  if (notes.length && command !== 'block' && command !== 'todo') throw new Error('--note is only supported with block or todo');
   return { command, graphPath, artifactsPath, specPath, maintenance, reopen, notes, taskId: positional[0], extra: positional.slice(1), iterationState: null };
 }
 
@@ -356,6 +368,9 @@ const EXECUTION_ENVELOPE_SOURCE_REFS = [
   'product.non_goals',
   'product.core_flows',
   'product.success_criteria',
+  'implementation.architecture',
+  'implementation.interfaces',
+  'implementation.dependencies',
   'implementation.verification',
 ];
 
@@ -481,6 +496,26 @@ function runsDirForTaskArgs(args) {
   if (args.artifactsPath) return resolveRunsDir({ artifacts: args.artifactsPath });
   if (args.graphPath) return resolveRunsDir({ graph: args.graphPath });
   return null;
+}
+
+function projectConfigForTaskRun(args, run) {
+  const runsDir = runsDirForTaskArgs(args);
+  const candidates = projectConfigCandidatePaths({
+    workspacePath: run.workspacePath,
+    projectRoot: ROOT,
+    artifactRoot: args.iterationState?.artifactRoot ?? (runsDir ? path.dirname(runsDir) : null),
+    graphPath: args.graphPath,
+  });
+  for (const candidate of candidates) {
+    if (!existsSync(candidate)) continue;
+    try {
+      if (!lstatSync(candidate).isFile()) continue;
+      return JSON.parse(readFileSync(candidate, 'utf8'));
+    } catch (error) {
+      throw new Error(`project config is malformed: ${candidate} (${error.message})`);
+    }
+  }
+  return {};
 }
 
 function latestRunProblem(message, strict) {
@@ -707,12 +742,6 @@ function changedPlan2AgentControlFiles(run) {
   });
 }
 
-function executedPassedVerification(run) {
-  return run.verification.filter((item) => item.status === 'passed'
-    && (item.source === 'config' || item.source === 'command')
-    && item.exitCode === 0);
-}
-
 function assertVisualReviewDoneEvidence(args, task, run) {
   if (!run.visualReview?.required) return;
   try {
@@ -763,19 +792,60 @@ function assertDoneShortcutGuard(args, task, graph) {
     const suffix = run.failure?.class ? ` (${run.failure.class})` : '';
     throw new Error(`${task.id} cannot be marked done because latest run ${run.runId} is ${run.status}${suffix}`);
   }
-  const failedVerification = run.verification.filter((item) => item.status === 'failed');
+  const verificationProfile = classifyVerificationProfile([run]);
+  const runsDir = runsDirForTaskArgs(args);
+  const workspacePath = path.resolve(run.workspacePath);
+  if (!existsSync(workspacePath) || !lstatSync(workspacePath).isDirectory()) {
+    throw new Error(`${task.id} cannot be marked done because latest run ${run.runId} workspace is missing: ${workspacePath}`);
+  }
+  const workspaceExclusions = workspaceRevisionExcludedPathsForRun(
+    runsDir,
+    run,
+    {
+      artifactRoot: args.iterationState?.artifactRoot,
+      graphPath: args.graphPath,
+      workspacePath,
+    },
+  );
+  const currentWorkspaceRevision = workspaceRevisionSha256(workspacePath, workspaceExclusions);
+  const currentProductRevision = workspaceRevisionSha256(workspacePath, [
+    ...workspaceExclusions,
+    ...productRevisionExcludedPaths(workspacePath),
+  ]);
+  const sealedRevisionMatches = verificationProfile.id === 'isolated_code'
+    ? run.workspaceRevisionSha256 === currentWorkspaceRevision
+      || run.productRevisionSha256 === currentProductRevision
+    : run.workspaceRevisionSha256 === currentWorkspaceRevision;
+  if (!sealedRevisionMatches) {
+    throw new Error(`${task.id} cannot be marked done because latest run ${run.runId} verification evidence is stale for the current workspace`);
+  }
+  const verificationOptions = {
+    workspaceRevisionSha256: currentWorkspaceRevision,
+    ...(verificationProfile.id === 'isolated_code'
+      ? { productRevisionSha256: currentProductRevision }
+      : {}),
+  };
+  const failedVerification = failedVerificationItems(run.verification, verificationOptions);
   if (failedVerification.length) {
     throw new Error(`${task.id} cannot be marked done because latest run ${run.runId} has failed verification: ${failedVerification.map((item) => item.type).join(', ')}`);
   }
   if (run.verification.length === 0) {
     throw new Error(`${task.id} cannot be marked done because latest run ${run.runId} has no verification evidence`);
   }
-  const incompleteVerification = run.verification.filter((item) => item.status === 'skipped' || item.status === 'not_run');
+  const incompleteVerification = incompleteVerificationItems(run.verification, verificationOptions);
   if (incompleteVerification.length) {
     throw new Error(`${task.id} cannot be marked done because latest run ${run.runId} has incomplete verification: ${incompleteVerification.map((item) => `${item.type}:${item.status}`).join(', ')}`);
   }
-  if (executedPassedVerification(run).length === 0) {
+  if (executedPassedVerificationItems(run.verification, verificationOptions).length === 0) {
     throw new Error(`${task.id} cannot be marked done because latest run ${run.runId} has no executed passed verification evidence`);
+  }
+  const configuredObligations = verificationProfile.id === 'docs_metadata'
+    ? []
+    : configuredVerificationObligations(projectConfigForTaskRun(args, run));
+  try {
+    assertVerificationObligations(run.verification, configuredObligations, verificationOptions);
+  } catch (error) {
+    throw new Error(`${task.id} cannot be marked done because latest run ${run.runId} ${error.message}`);
   }
   const controlFiles = changedPlan2AgentControlFiles(run);
   if (controlFiles.length) {
@@ -827,13 +897,14 @@ function transitionTask(graph, task, command, args = {}) {
     }
     if (task.status !== 'blocked' && task.status !== 'in_progress') throw new Error(`${task.id} must be blocked or in_progress before todo; current status is ${task.status}`);
     task.status = 'todo';
+    if (args.notes?.length) task.blockNote = args.notes.join('\n');
   }
 }
 
 function clearBlockReasonIfUnblocked(task, command, args = {}) {
   if (command === 'done' || command === 'todo' || command === 'start') {
     delete task.blockReason;
-    if (!(command === 'todo' && args.reopen)) delete task.blockNote;
+    if (!(command === 'todo' && (args.reopen || args.notes?.length))) delete task.blockNote;
   }
 }
 

@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -122,6 +123,7 @@ test('entry contract documentation records validation, dialogue, and compatibili
   assert.match(contract, /## 2\. 최소 문서 계약/);
   assert.match(contract, /## 3\. 발견과 우선순위/);
   assert.match(contract, /`p2a next --entry <path>`/);
+  assert.match(contract, /`p2a next --idea/);
   assert.match(contract, /collection-report\.md/);
   assert.match(contract, /next-iteration-recommendations\.md/);
   assert.match(contract, /handoff-manifest\.md/);
@@ -141,7 +143,7 @@ test('entry contract documentation records validation, dialogue, and compatibili
   assert.match(contract, /approved spec이 없을 때 downstream task 생성을 막는 규칙/);
   assert.match(
     harnessGuide,
-    /Entry document scope confirmation\(Gate A\)[\s\S]*Project constitution approval\(Gate ②\)[\s\S]*Product spec \+ Implementation plan\(Gate B\)/,
+    /Entry document scope confirmation\(Gate A\)[\s\S]*Material project constitution approval\(Gate ②, 필요한 경우만\)[\s\S]*Product spec \+ Implementation plan\(Gate B\)/,
   );
 });
 
@@ -682,12 +684,13 @@ test('a plain description without dictionary keywords still validates with a sco
   }
 });
 
-test('a fresh harness without an entry document requires a document path', () => {
+test('a fresh harness without an entry offers idea text or a document path', () => {
   const root = project();
   try {
     const next = runNext(root);
     assert.equal(next.state, 'entry_missing');
     assert.equal(next.command.kind, 'approval');
+    assert.match(next.command.display, /p2a next --idea "<what to build>"/);
     assert.match(next.command.display, /p2a next --entry <path>/);
 
     const invalid = runNext(root, ['--entry', 'missing.md']);
@@ -696,6 +699,141 @@ test('a fresh harness without an entry document requires a document path', () =>
     assert.match(invalid.command.display, /validate --entry .*missing\.md/);
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('next materializes a conversational idea as a stable provisional entry snapshot', () => {
+  const root = project();
+  try {
+    const idea = '초보자가 릴리스 상태를 한눈에 확인하고 다음 작업을 선택할 수 있는 화면을 만든다.';
+    const first = runNext(root, ['--contract', 'v2', '--idea', idea]);
+    assert.equal(first.state, 'gate_what');
+    assert.equal(first.command.kind, 'skill');
+    const entryPath = first.command.args[1];
+    assert.match(posix(entryPath), /\.plan2agent\/entries\/idea-[a-f0-9]{12}\.md$/);
+    assert.equal(readFileSync(entryPath, 'utf8'), `${idea}\n`);
+
+    const resumed = runNext(root, ['--contract', 'v2']);
+    assert.equal(resumed.state, 'gate_what');
+    assert.equal(resumed.command.kind, 'skill');
+    assert.equal(resumed.command.args[1], entryPath);
+
+    const second = runNext(root, ['--contract', 'v2', '--idea', idea]);
+    assert.equal(second.state, 'gate_what');
+    assert.equal(second.command.args[1], entryPath);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('plain next resumes the provisional entry bound to persisted Gate A state', () => {
+  const root = project();
+  try {
+    const idea = '초보자가 현재 배포 실패 원인을 확인할 수 있는 화면을 만든다.';
+    const created = runNext(root, ['--contract', 'v2', '--idea', idea]);
+    const entryPath = created.command.args[1];
+    runNext(root, [
+      '--contract', 'v2',
+      '--idea', '이전 범위와 관련 없는 임시 아이디어를 남긴다.',
+    ]);
+
+    const artifactRoot = path.join(root, '.plan2agent', 'artifacts', 'sample');
+    const intake = JSON.parse(readFileSync(
+      path.join(FIXTURE_ROOT, 'cache-library', 'intake.blocked.json'),
+      'utf8',
+    ));
+    intake.idea = idea;
+    intake.summary = idea;
+    writeJson(path.join(artifactRoot, 'gate-a-intake', 'intake.json'), intake);
+
+    const resumed = runNext(root, ['--contract', 'v2']);
+    assert.equal(resumed.state, 'gate_what');
+    assert.equal(resumed.command.kind, 'skill');
+    assert.deepEqual(resumed.command.args, ['--entry', entryPath]);
+    assert.match(resumed.command.display, new RegExp(entryPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'u'));
+    assert.doesNotMatch(resumed.command.display, /<original-entry-path>/u);
+
+    const approvalReady = JSON.parse(readFileSync(
+      path.join(FIXTURE_ROOT, 'cache-library', 'intake.answered.json'),
+      'utf8',
+    ));
+    approvalReady.idea = idea;
+    approvalReady.summary = idea;
+    writeJson(path.join(artifactRoot, 'gate-a-intake', 'intake.json'), approvalReady);
+    const revoked = runP2a([
+      'decide',
+      'revoke',
+      '--artifacts',
+      artifactRoot,
+      '--quote',
+      '범위를 한 번 더 확인하자',
+    ]);
+    assert.equal(revoked.status, 0, `${revoked.stdout}${revoked.stderr}`);
+
+    const approval = runNext(root, ['--contract', 'v2']);
+    assert.equal(approval.state, 'gate_a_needs_approval');
+    assert.equal(approval.command.kind, 'approval');
+    assert.deepEqual(approval.command.argv, [
+      'decide',
+      '--quote',
+      '<user-utterance>',
+      '--entry',
+      entryPath,
+      '--artifacts',
+      path.join(root, '.plan2agent', 'artifacts', 'sample'),
+    ]);
+    assert.doesNotMatch(approval.command.display, /<original-entry-path>/u);
+
+    rmSync(entryPath);
+    writeJson(path.join(artifactRoot, 'gate-a-intake', 'intake.json'), intake);
+    const unrelatedOnly = runNext(root, ['--contract', 'v2']);
+    assert.equal(unrelatedOnly.state, 'gate_what');
+    assert.deepEqual(unrelatedOnly.command.args, []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('human next preserves the first idea summary and language before canonical intake exists', () => {
+  const root = project();
+  try {
+    const englishIdea = 'Change the login error message to plain English.';
+    const english = runP2a(['next', '--target', root, '--idea', englishIdea]);
+    assert.equal(english.status, 0, `${english.stdout}${english.stderr}`);
+    assert.match(english.stdout, /^Plan2Agent\n\n\[At a glance\]/u);
+    assert.match(
+      english.stdout,
+      /Understood request: Change the login error message to plain English\./u,
+    );
+    assert.doesNotMatch(english.stdout, /[가-힣]/u);
+
+    const koreanIdea = '로그인 API 오류 메시지를 한국어로 바꿔줘.';
+    const korean = runP2a(['next', '--target', root, '--idea', koreanIdea]);
+    assert.equal(korean.status, 0, `${korean.stdout}${korean.stderr}`);
+    assert.match(korean.stdout, /^Plan2Agent\n\n\[한눈에\]/u);
+    assert.match(korean.stdout, /이해한 요청: 로그인 API 오류 메시지를 한국어로 바꿔줘\./u);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('next refuses a provisional entry directory that redirects outside the project', () => {
+  const root = project();
+  const outside = makeTempDir('p2a-entry-outside-');
+  try {
+    symlinkSync(outside, path.join(root, '.plan2agent', 'entries'), 'dir');
+    const result = runP2a([
+      'next',
+      '--target', root,
+      '--json',
+      '--idea', 'Keep this idea inside the initialized project.',
+    ]);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /provisional entry directory must be a real directory/);
+    assert.deepEqual(readdirSync(outside), []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
   }
 });
 
@@ -849,7 +987,7 @@ test('an incomplete Radar handoff manifest warns but does not block entry', () =
   }
 });
 
-test('canonical Gate artifacts take deterministic priority over a coexisting entry document', () => {
+test('canonical work stays authoritative while an explicit competing entry is deferred', () => {
   const root = project();
   try {
     const artifactRoot = path.join(root, '.plan2agent', 'artifacts', 'webhook-api-service');
@@ -863,15 +1001,27 @@ test('canonical Gate artifacts take deterministic priority over a coexisting ent
     const directEntry = path.join(root, 'direct-entry.md');
     writeFileSync(directEntry, 'Build a competing project dashboard.\n', 'utf8');
 
-    for (const args of [
-      [],
-      ['--entry', 'direct-entry.md'],
-      ['--entry', 'missing-entry.md'],
-    ]) {
-      const next = runNext(root, args);
-      assert.equal(next.state, 'gate_c_validated_needs_iteration_init');
-      assert.equal(next.command.kind, 'cli');
-    }
+    const canonical = runNext(root);
+    assert.equal(canonical.state, 'gate_c_validated_needs_iteration_init');
+    assert.equal(canonical.command.kind, 'cli');
+
+    const deferred = runNext(root, ['--contract', 'v2', '--entry', 'direct-entry.md']);
+    assert.equal(deferred.state, 'entry_deferred');
+    assert.equal(deferred.command.kind, 'approval');
+    assert.match(deferred.reason, /will not be started or replaced implicitly/u);
+    assert.doesNotMatch(deferred.command.display, /execute start/u);
+
+    const deferredIdea = runNext(root, [
+      '--contract', 'v2',
+      '--idea', 'Add a separate operator replay dashboard.',
+    ]);
+    assert.equal(deferredIdea.state, 'entry_deferred');
+    assert.equal(deferredIdea.command.kind, 'approval');
+    assert.doesNotMatch(JSON.stringify(deferredIdea.command), /execute start/u);
+
+    const invalid = runNext(root, ['--contract', 'v2', '--entry', 'missing-entry.md']);
+    assert.equal(invalid.state, 'entry_invalid');
+    assert.equal(invalid.command.kind, 'approval');
 
     rmSync(path.join(sequenceRoot, 'handoff-manifest.md'));
     const doctor = runP2a(['doctor', '--target', root, '--json']);
@@ -930,7 +1080,7 @@ test('a confirmed entry proceeds through Gate A-C execution and opens a baseline
     fixtureIntake.evidence[0].url = 'idea.md';
     fixtureIntake.approval_audit.approval_note = 'Confirmed the scope interpretation derived from idea.md.';
     writeJson(path.join(artifactRoot, 'gate-a-intake', 'intake.json'), fixtureIntake);
-    assert.equal(runNext(root, ['--entry', 'idea.md']).state, 'shape');
+    assert.equal(runNext(root, ['--entry', 'idea.md']).state, 'gate_a_ready_for_spec');
     writeJson(path.join(root, '.plan2agent', 'constitution.json'), {
       schema_version: 'p2a.constitution.v1',
       projectId: 'webhook-api-service',

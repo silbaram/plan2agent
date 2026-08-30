@@ -30,6 +30,8 @@ import {
   runSidecarRef,
   taskContractSha256,
   taskGraphRefMatchesGraph,
+  workspaceRevisionExcludedPathsForRun,
+  workspaceRevisionSha256,
 } from '../scripts/p2a_run_paths.mjs';
 import {
   atomicWriteJson,
@@ -524,6 +526,7 @@ describe('iteration-partitioned run layout', () => {
         ...startedRun('run-successful-older-entry'),
         sourceLayout: 'graph',
         taskGraphRef,
+        workspacePath: tempRoot,
         status: 'finished',
         startedAt: '2026-07-18T00:09:00.000Z',
         updatedAt: '2026-07-18T00:10:00.000Z',
@@ -540,8 +543,20 @@ describe('iteration-partitioned run layout', () => {
           stdoutTail: null,
           stderrTail: null,
           source: 'command',
+          scope: 'full',
         }],
       };
+      const successfulRevision = workspaceRevisionSha256(
+        tempRoot,
+        workspaceRevisionExcludedPathsForRun(runsDir, successfulRun, {
+          graphPath,
+          workspacePath: tempRoot,
+        }),
+      );
+      successfulRun.workspaceRevisionSha256 = successfulRevision;
+      successfulRun.productRevisionSha256 = successfulRevision;
+      successfulRun.verification[0].workspaceRevisionSha256 = successfulRevision;
+      successfulRun.verification[0].productRevisionSha256 = successfulRevision;
       const failedLatestRun = {
         ...startedRun('run-failed-latest-entry'),
         sourceLayout: 'graph',
@@ -654,6 +669,18 @@ describe('iteration-partitioned run layout', () => {
       legacyRun.schema_version = 'p2a.run.v1';
       delete legacyRun.taskContractSha256;
       writeJson(runPath, legacyRun);
+      const staleFinish = runRuns([
+        'finish', '--runs', runsDir, '--run-id', runId, '--status', 'finished',
+      ]);
+      assert.equal(staleFinish.status, 1);
+      assert.match(staleFinish.stderr, /current workspace revision/);
+      assert.equal(JSON.parse(readFileSync(runPath, 'utf8')).schema_version, 'p2a.run.v1');
+
+      const refreshed = runRuns([
+        'verify', '--runs', runsDir, '--run-id', runId,
+        '--workspace', tempRoot, '--test-command', 'true',
+      ]);
+      assert.equal(refreshed.status, 0, refreshed.stderr);
       const finished = runRuns([
         'finish', '--runs', runsDir, '--run-id', runId, '--status', 'finished',
       ]);
@@ -1552,6 +1579,11 @@ describe('iteration-partitioned run layout', () => {
         index: interruptedIndex,
       });
       writeJson(path.join(runsDir, runRef), interruptedRun);
+
+      assert.throws(
+        () => validateRunsDir(runsDir),
+        /run write transaction is pending/,
+      );
 
       const result = runRuns(['record', '--runs', runsDir, '--run-id', run.runId, '--note', 'recovered']);
       assert.equal(result.status, 0, result.stderr);

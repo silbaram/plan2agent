@@ -22,12 +22,18 @@ import {
 } from './helpers/fixtures.mjs';
 import {
   createValidationSession,
+  executionEnvelopeSha256,
   resolveRunExecutionEnvelope,
+  validateCurrentDevelopmentContractData,
+  validateRunTaskContract,
 } from '../scripts/validate_artifacts.mjs';
 import {
   resolveCurrentDevelopmentState,
 } from '../scripts/p2a_iteration_state.mjs';
-import { runFilePath } from '../scripts/p2a_run_paths.mjs';
+import {
+  executionEnvelopeStoreRef,
+  runFilePath,
+} from '../scripts/p2a_run_paths.mjs';
 
 function writeJson(filePath, value) {
   mkdirSync(path.dirname(filePath), { recursive: true });
@@ -239,6 +245,219 @@ function tracedCommand(runner, args, fixture, historicalRoots) {
   );
   return { result, reads };
 }
+
+test('current development contract carries approved iteration constraints without a constitution', () => {
+  const fixture = currentDevelopmentFixture();
+  try {
+    const state = resolveCurrentDevelopmentState(fixture.artifactRoot);
+    const spec = JSON.parse(readFileSync(state.specPath, 'utf8'));
+    const expected = {
+      architecture: spec.implementation.architecture,
+      interfaces: spec.implementation.interfaces,
+      dependencies: spec.implementation.dependencies,
+    };
+    assert.deepEqual(state.currentDevelopmentContract.iterationConstraints, expected);
+    assert.deepEqual(state.executionEnvelope.iterationConstraints, expected);
+    assert.equal(state.currentDevelopmentContract.bindings.constitution.ref, null);
+
+    const contractPath = path.join(fixture.artifactRoot, 'current-development-contract.json');
+    const legacy = structuredClone(state.currentDevelopmentContract);
+    delete legacy.iterationConstraints;
+    assert.doesNotThrow(() => validateCurrentDevelopmentContractData(legacy));
+    writeJson(contractPath, legacy);
+    const legacyState = resolveCurrentDevelopmentState(fixture.artifactRoot);
+    assert.equal(legacyState.currentDevelopmentContract.iterationConstraints, undefined);
+    assert.deepEqual(legacyState.executionEnvelope.iterationConstraints, expected);
+
+    const routed = runP2a([
+      'next',
+      '--target', fixture.workspaceRoot,
+      '--project-id', 'webhook-api-service',
+      '--json',
+      '--contract', 'v2',
+    ]);
+    assert.equal(routed.status, 0, `${routed.stdout}\n${routed.stderr}`);
+    const action = JSON.parse(routed.stdout);
+    assert.equal(action.state, 'ready_task_available');
+
+    const migrated = runIteration([
+      'migrate-current-contract', '--artifacts', fixture.artifactRoot,
+    ]);
+    assert.equal(migrated.status, 0, `${migrated.stdout}\n${migrated.stderr}`);
+    assert.deepEqual(
+      JSON.parse(readFileSync(contractPath, 'utf8')).iterationConstraints,
+      expected,
+    );
+  } finally {
+    removeFixture(fixture);
+  }
+});
+
+test('current development contract rejects iteration constraints that differ from the bound spec', () => {
+  const fixture = currentDevelopmentFixture();
+  try {
+    const contractPath = path.join(fixture.artifactRoot, 'current-development-contract.json');
+    const contract = JSON.parse(readFileSync(contractPath, 'utf8'));
+    contract.iterationConstraints.interfaces = ['ATTACKER-CONTRACT-ONLY'];
+    writeJson(contractPath, contract);
+
+    assert.throws(
+      () => resolveCurrentDevelopmentState(fixture.artifactRoot),
+      /iterationConstraints do not match the bound active spec/,
+    );
+  } finally {
+    removeFixture(fixture);
+  }
+});
+
+test('only legacy completed evidence may omit iteration constraints from its execution envelope', () => {
+  const fixture = currentDevelopmentFixture();
+  try {
+    const runId = 'run-legacy-constraint-envelope';
+    const started = runExecute([
+      'start',
+      '--artifacts', fixture.artifactRoot,
+      '--run-id', runId,
+      '--agent-tool', 'codex',
+      '--workspace', fixture.workspaceRoot,
+    ]);
+    assert.equal(started.status, 0, `${started.stdout}\n${started.stderr}`);
+
+    const runsDir = path.join(fixture.artifactRoot, 'runs');
+    const run = JSON.parse(readFileSync(runFilePath(runsDir, runId), 'utf8'));
+    const legacyEnvelope = structuredClone(resolveRunExecutionEnvelope(run, runsDir));
+    delete legacyEnvelope.iterationConstraints;
+    const legacySha256 = executionEnvelopeSha256(legacyEnvelope);
+    run.executionEnvelopeRef = { sha256: legacySha256 };
+    run.executionEnvelopeSha256 = legacySha256;
+    writeJson(
+      path.join(runsDir, executionEnvelopeStoreRef(run, legacySha256)),
+      legacyEnvelope,
+    );
+
+    assert.throws(
+      () => validateRunTaskContract(run, fixture.artifactRoot, { runsDir }),
+      /executionEnvelope does not match its current development contract/,
+    );
+
+    run.status = 'finished';
+    run.updatedAt = '2026-08-28T00:00:00.000Z';
+    run.finishedAt = '2026-08-28T00:00:00.000Z';
+    assert.doesNotThrow(
+      () => validateRunTaskContract(run, fixture.artifactRoot, { runsDir }),
+    );
+
+    run.productRevisionSha256 = '0'.repeat(64);
+    assert.throws(
+      () => validateRunTaskContract(run, fixture.artifactRoot, { runsDir }),
+      /executionEnvelope does not match its current development contract/,
+    );
+
+    delete run.productRevisionSha256;
+    const current = resolveCurrentDevelopmentState(fixture.artifactRoot);
+    const trustedLegacyEnvelope = structuredClone(current.executionEnvelope);
+    trustedLegacyEnvelope.sourceGateRefs = [{
+      path: current.currentDevelopmentContract.bindings.activeSpec.ref,
+      sha256: current.currentDevelopmentContract.bindings.activeSpec.sha256,
+    }];
+    delete trustedLegacyEnvelope.iterationConstraints;
+    for (const field of ['architecture', 'stack', 'prohibitions', 'style']) {
+      delete trustedLegacyEnvelope[field];
+    }
+    const trustedLegacySha256 = executionEnvelopeSha256(trustedLegacyEnvelope);
+    run.executionEnvelopeRef = { sha256: trustedLegacySha256 };
+    run.executionEnvelopeSha256 = trustedLegacySha256;
+    writeJson(
+      path.join(runsDir, executionEnvelopeStoreRef(run, trustedLegacySha256)),
+      trustedLegacyEnvelope,
+    );
+    assert.doesNotThrow(
+      () => validateRunTaskContract(run, fixture.artifactRoot, { runsDir }),
+    );
+  } finally {
+    removeFixture(fixture);
+  }
+});
+
+test('current contract compatibility never trusts run-authored envelope provenance', () => {
+  const fixture = currentDevelopmentFixture();
+  try {
+    const runId = 'run-untrusted-envelope-provenance';
+    const started = runExecute([
+      'start',
+      '--artifacts', fixture.artifactRoot,
+      '--run-id', runId,
+      '--agent-tool', 'codex',
+      '--workspace', fixture.workspaceRoot,
+    ]);
+    assert.equal(started.status, 0, `${started.stdout}\n${started.stderr}`);
+
+    const runsDir = path.join(fixture.artifactRoot, 'runs');
+    const run = JSON.parse(readFileSync(runFilePath(runsDir, runId), 'utf8'));
+    const envelope = structuredClone(resolveRunExecutionEnvelope(run, runsDir));
+    envelope.sourceGateRefs = [{
+      path: 'attacker-controlled.json',
+      sha256: '0'.repeat(64),
+    }];
+    const envelopeSha256 = executionEnvelopeSha256(envelope);
+    run.executionEnvelopeRef = { sha256: envelopeSha256 };
+    run.executionEnvelopeSha256 = envelopeSha256;
+    writeJson(
+      path.join(runsDir, executionEnvelopeStoreRef(run, envelopeSha256)),
+      envelope,
+    );
+
+    assert.throws(
+      () => validateRunTaskContract(run, fixture.artifactRoot, { runsDir }),
+      /executionEnvelope does not match its current development contract/,
+    );
+
+    run.status = 'finished';
+    run.updatedAt = '2026-08-28T00:00:00.000Z';
+    run.finishedAt = '2026-08-28T00:00:00.000Z';
+    assert.throws(
+      () => validateRunTaskContract(run, fixture.artifactRoot, { runsDir }),
+      /executionEnvelope does not match its current development contract/,
+    );
+  } finally {
+    removeFixture(fixture);
+  }
+});
+
+test('opening from a legacy contract preserves iteration constraints recovered from its bound spec', () => {
+  const fixture = currentDevelopmentFixture();
+  try {
+    const contractPath = path.join(fixture.artifactRoot, 'current-development-contract.json');
+    const before = resolveCurrentDevelopmentState(fixture.artifactRoot);
+    const expected = structuredClone(before.executionEnvelope.iterationConstraints);
+    const legacy = JSON.parse(readFileSync(contractPath, 'utf8'));
+    delete legacy.iterationConstraints;
+    writeJson(contractPath, legacy);
+    archiveCurrentFixture(fixture);
+
+    const opened = runIteration([
+      'open',
+      '--artifacts', fixture.artifactRoot,
+      '--iteration-id', 'v21-legacy-contract',
+      '--idea', 'Continue from the approved legacy baseline.',
+    ]);
+    assert.equal(opened.status, 0, `${opened.stdout}\n${opened.stderr}`);
+
+    const currentSpec = JSON.parse(readFileSync(
+      path.join(fixture.artifactRoot, 'current-spec.json'),
+      'utf8',
+    ));
+    const baselineSpec = JSON.parse(readFileSync(
+      path.join(fixture.artifactRoot, currentSpec.effective_spec_ref),
+      'utf8',
+    ));
+    assert.deepEqual(baselineSpec.implementation.architecture, expected.architecture);
+    assert.deepEqual(baselineSpec.implementation.interfaces, expected.interfaces);
+    assert.deepEqual(baselineSpec.implementation.dependencies, expected.dependencies);
+  } finally {
+    removeFixture(fixture);
+  }
+});
 
 test('0, 20, and 100 archived iteration directories produce identical current validator work', () => {
   const observations = [];
@@ -611,6 +830,18 @@ test('opening a new iteration snapshots only the current contract and survives d
     assert.deepEqual(baselineSpec.product.must_preserve, contract.mustPreserve);
     assert.deepEqual(baselineSpec.product.non_goals, contract.nonGoals);
     assert.deepEqual(baselineSpec.product.success_criteria, contract.acceptance);
+    assert.deepEqual(
+      baselineSpec.implementation.architecture,
+      contract.iterationConstraints.architecture,
+    );
+    assert.deepEqual(
+      baselineSpec.implementation.interfaces,
+      contract.iterationConstraints.interfaces,
+    );
+    assert.deepEqual(
+      baselineSpec.implementation.dependencies,
+      contract.iterationConstraints.dependencies,
+    );
     assert.deepEqual(baselineSpec.implementation.verification, contract.verification);
     assert.equal(baselineSpec.evidence[0]?.source_id, 'WEB-1');
     assert.equal(

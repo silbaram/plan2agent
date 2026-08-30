@@ -1,18 +1,18 @@
 # Adaptive P2A Harness 사용자 개발 흐름
 
-이 문서는 Plan2Agent를 처음 도입하는 사용자가 Gate 승인부터 adaptive 실행·검증·종료까지의 전체 여정을 한눈에 이해하기 위한 개요다. 정확한 명령과 옵션은 [Quickstart](quickstart.md)와 [CLI 사용자 가이드](cli-reference.md), 산출물 계약은 [하네스 사용자 가이드](harness-guide.md)를 따른다.
+이 문서는 Plan2Agent를 처음 도입하는 사용자가 자연어 요청부터 adaptive 실행·검증·종료까지의 전체 여정을 한눈에 이해하기 위한 개요다. 정확한 내부 명령과 옵션은 [Quickstart](quickstart.md)와 [CLI 사용자 가이드](cli-reference.md), 산출물 계약은 [하네스 사용자 가이드](harness-guide.md)를 따른다.
 
 ## 한 줄 요약
 
-사용자는 `p2a next`를 반복하고, 제품의 범위나 의미를 결정하는 Gate에서만 명시적으로 승인한다. 실행 방식 선택, 필요한 컨텍스트 로딩, 일반적인 구현·수정·검증은 P2A와 실행 AI가 담당한다.
+사용자는 원하는 결과를 말하고 범위와 구현 계획을 확인한다. 실행 방식 선택, 필요한 컨텍스트 로딩, 일반적인 구현·수정·검증은 P2A와 실행 AI가 담당한다. Gate 이름과 상태 파일은 내부 호환 계약이므로 기본 대화에서 알 필요가 없다.
 
 ## 전체 흐름
 
 ```mermaid
 flowchart TD
-    A(["아이디어를 한 문단 문서로 작성"]):::user
+    A(["원하는 결과를 자연어로 설명"]):::user
     B["최초 1회<br/>p2a init --tools all"]:::user
-    C["p2a next --entry docs/idea.md"]:::user
+    C["p2a next --idea &quot;요청&quot;"]:::user
 
     A --> B --> C
     C --> D{"중요한 결정이<br/>남아 있는가?"}:::auto
@@ -21,13 +21,14 @@ flowchart TD
     E --> F["사용자가 질문에 답변"]:::user
     F --> D
 
-    D -->|"없음"| G["Gate A<br/>개발 범위 요약"]:::gate
-    G --> H["사용자: 이 범위로 진행해"]:::user
+    D -->|"없음"| G["목표·최소 범위·<br/>유지할 동작 요약"]:::gate
+    G --> H["사용자: 이 이해로 계획해"]:::user
 
-    H --> I["Gate ②<br/>기술 구조·금지사항·코드 원칙"]:::gate
-    I --> J["사용자: 이 구조로 진행해"]:::user
+    H --> I{"되돌리기 어려운<br/>프로젝트 원칙 결정?"}:::auto
+    I -->|"있음"| J["중요한 trade-off 설명 후<br/>프로젝트 원칙 승인"]:::gate
+    I -->|"없음"| K["변경 방법·제약·<br/>검증 방법 요약"]:::gate
+    J --> K
 
-    J --> K["Gate B<br/>제품·구현 명세"]:::gate
     K --> L["사용자: 이 명세로 개발해"]:::user
 
     L --> M["p2a next"]:::user
@@ -37,7 +38,7 @@ flowchart TD
     N -->|"순서별 확인 필요"| P["Planned<br/>작업 1개 + 2~5개 체크포인트"]:::mode
     N -->|"여러 작업·의존성"| Q["Orchestrated<br/>상세 Task Graph 생성"]:::mode
 
-    O --> R["Gate C 자동 준비·검증"]:::auto
+    O --> R["실행 준비 자동 검증"]:::auto
     P --> R
     Q --> R
 
@@ -55,7 +56,7 @@ flowchart TD
     X --> Y["실행 종료 및 증거 기록"]:::auto
     Y --> Z{"남은 작업?"}:::auto
     Z -->|"있음"| M
-    Z -->|"없음"| AA["Iteration 검증·종료"]:::done
+    Z -->|"없음"| AA["검증 근거 요약 후<br/>종료 권장·리뷰·회고 선택"]:::done
 
     classDef user fill:#fff3cd,stroke:#c58b00,color:#111;
     classDef auto fill:#e8f1ff,stroke:#3973b7,color:#111;
@@ -78,21 +79,21 @@ Mermaid를 렌더링하지 않는 터미널에서는 같은 흐름을 다음처�
 [CLI 사용자 가이드](cli-reference.md)를 따른다.
 
 ```text
-아이디어 문서
-  -> p2a next --entry docs/idea.md
+자연어 요청
+  -> p2a next --idea "원하는 결과"
   -> 필요한 질문과 답변
-  -> Gate A 범위 승인       (p2a decide)
-  -> Gate ② 프로젝트 원칙 승인 (p2a shape approve)
-  -> Gate B 명세 승인       (p2a decide)
+  -> 이해한 범위 확인
+  -> 되돌리기 어려운 프로젝트 원칙 승인 (필요할 때만)
+  -> 구현 계획 확인
   -> p2a next
   -> 실행 AI가 Direct | Planned | Orchestrated 선택
-  -> Gate C 자동 준비·검증
+  -> 실행 준비 자동 검증
   -> 구현과 검증
        |-- 일반 구현 문제: 수정 또는 retry 후 재검증
-       |-- 계약 변경 필요: Gate B로 돌아가 재승인
+       |-- 제품 의미 변경 필요: 사용자에게 변경 계획 재확인
        `-- 통과: 실행 증거 기록
   -> 남은 작업 있음: p2a next
-  `-- 모두 완료: Iteration 검증·종료
+  `-- 모두 완료: 종료 권장, 선택적으로 코드 리뷰 또는 회고
 ```
 
 ## 실행 방식 선택
@@ -120,26 +121,27 @@ p2a init --tools all --codex-profile quality
 ### 아이디어 전달
 
 ```bash
-p2a next --entry docs/idea.md
+p2a next --idea "서명을 검증해 webhook을 수신하고 전송 이력을 보여준다"
+# 긴 요구사항은 p2a next --entry docs/idea.md
 ```
 
 Codex나 Claude의 Agent 세션에서는 다음처럼 시작할 수 있다.
 
 ```text
-/p2a-next --entry docs/idea.md
+/p2a-next --idea "서명을 검증해 webhook을 수신하고 전송 이력을 보여준다"
 ```
 
-### Gate 승인 후 계속 진행
+### 확인 후 계속 진행
 
 ```bash
 p2a next
 ```
 
-각 행동이 끝날 때마다 `p2a next`를 다시 실행하면 현재 상태에서 필요한 다음 행동 하나를 안내한다.
+각 행동이 끝날 때마다 `p2a next`를 다시 실행하면 현재 상태에서 필요한 다음 행동 하나를 쉬운 말로 안내한다. 기본 출력은 내부 Gate·run·hash·artifact 경로를 숨긴다. 문제를 진단하거나 하위 명령을 직접 실행해야 할 때만 `p2a next --details` 또는 JSON을 사용한다.
 
 ## 사용자가 직접 결정하는 지점
 
-### Gate A: 범위 승인
+### 범위 확인 (내부 호환 이름: Gate A)
 
 P2A가 사용자, 목표, 범위, 제약, 제외 항목을 요약한다. 사용자는 이 요약이 의도와 맞는지 확인한다.
 
@@ -150,15 +152,15 @@ p2a decide \
   --quote "이 범위로 진행해"
 ```
 
-### Gate ②: 프로젝트 원칙 승인
+### 프로젝트 원칙 승인 (내부 Gate ②, 조건부)
 
-아키텍처, 기술 스택, 금지사항과 코드 스타일을 담은 constitution을 검토한다.
+되돌리기 어려운 아키텍처·기술 스택 결정이나 hard prohibition이 새로 필요할 때만 나타난다. 기존 constitution이 있으면 재사용하고, 없으면 보통 repository convention을 advisory로 사용하므로 작은 유지보수 작업에서는 이 단계를 건너뛴다.
 
 ```bash
 p2a shape approve --quote "이 구조로 진행해"
 ```
 
-### Gate B: 제품·구현 명세 승인
+### 구현 계획 확인 (내부 호환 이름: Gate B)
 
 모든 미해결 결정을 닫고 제품 요구사항, 구현 범위, acceptance criteria와 verification을 검토한다. 화면이 있는 작업은 이 단계에서 visual experience와 prototype도 함께 승인한다.
 
@@ -168,18 +170,22 @@ p2a decide \
   --quote "이 명세로 개발해"
 ```
 
-## Gate B 이후 P2A가 자동 처리하는 일
+## 계획 확인 이후 P2A가 자동 처리하는 일
 
 1. `p2a next`가 현재 상태와 실행 준비 행동을 반환한다.
 2. 실행 AI가 Direct, Planned 또는 Orchestrated를 선택한다.
-3. Gate C가 선택된 mode에 맞는 work item, checkpoint 또는 dependency를 검증한다.
-4. `p2a execute start`가 Gate B에서 파생한 execution envelope를 source hash와 함께 고정한다.
+3. 내부 실행 준비 단계가 선택된 mode에 맞는 work item, checkpoint 또는 dependency를 검증한다.
+4. `p2a execute start`가 승인된 계획에서 파생한 execution envelope를 source hash와 함께 고정한다.
 5. Direct/Planned 실행은 현재 단계에 필요한 canonical reference만 context packet으로 읽는다.
 6. 실행 AI가 코드를 구현하고 일반적인 코드·테스트·UI drift를 스스로 수정한다.
 7. Planned는 각 checkpoint를 순서대로 검증한다.
 8. 필요한 테스트와 선택된 visual, acceptance 또는 monitor 검증을 수행한다.
 9. `p2a execute finish`가 검증 결과, 변경 파일과 실행 증거를 기록한다.
 10. 남은 작업이 있으면 다시 `p2a next`, 모두 끝났으면 iteration을 검증하고 닫는다.
+
+제품 전체 검증이 통과한 뒤 README나 metadata만 바뀌면 전체 테스트를 반복하지 않는다. 기존 제품 검증을 유지하고 현재 문서 revision에 필요한 관련 검사만 실행한다. 반대로 제품 파일이 다시 바뀌면 이전 제품 검증을 무효화하고 full 검증을 다시 수행한다.
+
+모든 필수 검증이 최신이면 P2A는 특이 사항 유무를 요약하고 기본적으로 종료를 권장한다. 사용자는 필요할 때만 코드 리뷰나 P2A 개발 과정 회고를 선택할 수 있으며, 깨끗한 리뷰 뒤에는 같은 선택 메뉴를 반복하지 않고 종료 여부를 한 번만 확인한다.
 
 ## 새 컨텍스트 라우팅의 의미
 
@@ -206,8 +212,8 @@ Context packet은 reference의 route ID, 경로, SHA-256과 byte boundary를 함
 ## 실패했을 때
 
 - 일반적인 구현 또는 테스트 실패: 같은 승인 범위 안에서 AI가 수정하거나 retry한다.
-- Planned checkpoint 실패: 실패 증거를 보존하고 새 retry run으로 이어간다.
-- 제품 의미, acceptance criteria, 승인 범위 또는 외부 권한을 바꿔야 함: 자동으로 확장하지 않고 Gate B로 돌아가 사용자 승인을 다시 받는다.
+- Planned checkpoint 실패: 실패 attempt를 보존하고 같은 started run에서 수정·재검증한다.
+- 제품 의미, acceptance criteria, 승인 범위 또는 외부 권한을 바꿔야 함: 자동으로 확장하지 않고 변경 이유와 영향을 설명한 뒤 사용자에게 계획을 다시 확인받는다.
 - 모든 작업 완료: close-ready validation을 통과한 뒤 iteration을 닫는다.
 
 ```bash
@@ -223,6 +229,6 @@ p2a iteration close \
 
 사용자는 다음 세 가지만 기억하면 된다.
 
-1. 아이디어를 짧은 문서로 작성한다.
-2. `p2a next`가 안내하는 Gate에서만 의도를 명확히 승인한다.
-3. 승인 후에는 실행 방식 선택과 일반적인 구현·검증을 P2A에 맡긴다.
+1. 원하는 결과를 자연어로 설명한다.
+2. P2A가 요약한 범위와 구현 계획에서 중요한 결정만 확인한다.
+3. 이후 실행 방식 선택과 일반적인 구현·복구·검증은 P2A에 맡긴다.

@@ -385,6 +385,7 @@ test('two ready tasks can overlap in isolated worktrees and finish only after se
     for (const item of integrations) {
       const run = JSON.parse(readFileSync(runFilePath(runsDir, item.runId), 'utf8'));
       assert.equal(run.status, 'finished');
+      assert.equal(run.workspacePath, path.resolve(integrationWorktree));
       assert.deepEqual(run.changedFiles, [item.file]);
       assert.equal(run.verification.some((entry) => (
         entry.status === 'passed'
@@ -419,7 +420,7 @@ test('two ready tasks can overlap in isolated worktrees and finish only after se
   }
 });
 
-test('integration conflict blocks only the conflicting task and preserves canonical state', () => {
+test('integration conflict returns only the conflicting task to retryable todo and preserves canonical state', () => {
   const root = mkdtempSync(path.join(tmpdir(), 'p2a-supervised-batch-conflict-'));
   try {
     const graphPath = path.join(root, 'gate-c-task-graph', 'task-graph.json');
@@ -547,7 +548,7 @@ test('integration conflict blocks only the conflicting task and preserves canoni
 
     const graphAfterConflict = JSON.parse(readFileSync(graphPath, 'utf8'));
     assert.equal(graphAfterConflict.tasks.find((task) => task.id === 'task-001')?.status, 'done');
-    assert.equal(graphAfterConflict.tasks.find((task) => task.id === 'task-002')?.status, 'blocked');
+    assert.equal(graphAfterConflict.tasks.find((task) => task.id === 'task-002')?.status, 'todo');
     const runsDir = path.join(root, 'runs');
     const firstRun = JSON.parse(readFileSync(runFilePath(runsDir, 'run-conflict-001'), 'utf8'));
     const secondRun = JSON.parse(readFileSync(runFilePath(runsDir, 'run-conflict-002'), 'utf8'));

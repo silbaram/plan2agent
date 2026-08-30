@@ -677,12 +677,36 @@ function isExistingProjectRecommendation(filePath, run) {
   return headers.get('run_mode') === 'existing-project';
 }
 
+function singleProvisionalEntryPath(projectRoot) {
+  const entriesRoot = path.join(projectRoot, '.plan2agent', 'entries');
+  if (!isDirectory(entriesRoot)) return null;
+  const candidates = readdirSync(entriesRoot, { withFileTypes: true })
+    .filter((entry) => (
+      entry.isFile()
+      && /^idea-[a-f0-9]{12}\.md$/u.test(entry.name)
+    ))
+    .map((entry) => path.join(entriesRoot, entry.name))
+    .sort((left, right) => left.localeCompare(right));
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
 export function discoverEntryDocument(artifactRoot, options = {}) {
   if (options.entryPath) {
     return inspectEntryDocument(options.entryPath, {
       baseDir: options.baseDir,
       selection: 'explicit',
     });
+  }
+  if (options.includeSingleProvisional === true) {
+    const provisionalEntryPath = singleProvisionalEntryPath(
+      path.resolve(options.projectRoot ?? options.baseDir ?? artifactRoot),
+    );
+    if (provisionalEntryPath) {
+      return inspectEntryDocument(provisionalEntryPath, {
+        baseDir: options.baseDir,
+        selection: 'auto',
+      });
+    }
   }
   const runs = discoverFeatureRadarPreflightRuns(artifactRoot, {
     projectId: options.projectId,

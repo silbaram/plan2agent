@@ -111,6 +111,6 @@ describe('invalid failed run negative fixture', () => {
       reproduction: { steps: [], commands: [], notes: [] },
       localization: { findings: [], files: [] },
       guard: { checks: [], notes: [] },
-    }, 'failed run must include structured debug detail: reproduction, localization, guard');
+    }, 'missing required keys: reproduction, localization, guard');
   });
 });
