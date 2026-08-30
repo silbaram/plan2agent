@@ -131,7 +131,7 @@ Gate B 승인 뒤 사용자 개입이 없는 것이 목표지만, 다음 두 결
 
 ## 6. 목표 workflow
 
-`Gate A → Gate ② → Gate B 승인 → repository 조사와 mode 선택 → 자율 구현 → 통합 검증 → evidence 봉인`이 정상 흐름이다. 구현 실패는 같은 loop에서 수정하고 계약 변경만 최소 근거와 함께 Gate B로 돌아간다.
+`Gate A → (material project shape가 있을 때만 Gate ②) → Gate B 승인 → repository 조사와 mode 선택 → 자율 구현 → 통합 검증 → evidence 봉인`이 정상 흐름이다. 구현 실패는 같은 loop에서 수정하고 계약 변경만 최소 근거와 함께 Gate B로 돌아간다.
 
 Gate B 승인 뒤 `p2a next`는 자율 개발 session을 시작한다. AI가 조사 후 모드를 선택·변경하며 이는 새 승인 Gate가 아니다. 사용자는 운영 정책으로 범위를 제한할 수 있고, 판정이 애매하면 실행 단위를 넓히지 말고 verify checkpoint를 더 촘촘히 둔다.
 
@@ -264,7 +264,7 @@ selectionRationale            # 운영 mode 선택 근거
 
 ### 11-2. CLI 흐름
 
-기존 `p2a execute prepare/start/resume/status/finish`와 iteration validation 표면을 mode 공통 진입·상태·검증·evidence 전이에 재사용한다. `prepare`는 승인 Gate B와 현재 approval audit을 검증하고 Direct/Planned 호환 레코드를 원자적으로 생성한다. Planned는 `p2a runs checkpoint --milestone <id>`가 선언된 실제 명령을 순서대로 실행하며, 미검증 milestone이 있으면 finish를 거부한다. 실패·실행 불가 checkpoint evidence는 immutable이라 같은 run에서 재실행하지 않고 failed/blocked close 뒤 새 retry run으로 복구한다.
+기존 `p2a execute prepare/start/resume/status/finish`와 iteration validation 표면을 mode 공통 진입·상태·검증·evidence 전이에 재사용한다. `prepare`는 승인 Gate B와 현재 approval audit을 검증하고 Direct/Planned 호환 레코드를 원자적으로 생성한다. Planned는 `p2a runs checkpoint --milestone <id>`가 선언된 실제 명령을 순서대로 실행하며, 미검증 milestone이 있으면 finish를 거부한다. 실패·실행 불가 attempt는 append-only로 보존하고 같은 started run에서 수정 후 재실행한다.
 
 `p2a next`는 Gate B 뒤에 사용자에게 mode 선택 menu를 보여주지 않는다. 다음 중 정확히 하나의 상태 기반 행동을 반환한다.
 

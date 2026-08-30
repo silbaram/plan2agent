@@ -80,6 +80,18 @@
         "final_acceptance_review"
       ]
     },
+    "verificationScope": {
+      "type": "string",
+      "enum": ["full", "relevant"]
+    },
+    "docsMetadataBaseline": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
     "taskContractSha256": {
       "type": "string",
       "pattern": "^[a-f0-9]{64}$"
@@ -126,6 +138,28 @@
         "scope": {
           "type": "array",
           "items": { "type": "string", "minLength": 1 }
+        },
+        "iterationConstraints": {
+          "type": "object",
+          "required": ["architecture", "interfaces", "dependencies"],
+          "additionalProperties": false,
+          "properties": {
+            "architecture": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "uniqueItems": true
+            },
+            "interfaces": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "uniqueItems": true
+            },
+            "dependencies": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "uniqueItems": true
+            }
+          }
         },
         "architecture": {
           "type": "array",
@@ -371,6 +405,17 @@
       "type": "string",
       "pattern": "^[a-f0-9]{64}$"
     },
+    "productRevisionSha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "startProductRevisionSha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "productChangeDetected": {
+      "type": "boolean"
+    },
     "visualReviewEvidenceSha256": {
       "type": "string",
       "pattern": "^[a-f0-9]{64}$"
@@ -594,9 +639,21 @@
             "type": "string",
             "pattern": "^[a-f0-9]{64}$"
           },
+          "productRevisionSha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "gitHeadSha": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{40,64}$"
+          },
           "selectedFileCount": {
             "type": "integer",
             "minimum": 1
+          },
+          "relatedFilesSha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
           },
           "argv": {
             "type": "array",
@@ -1088,6 +1145,53 @@
     {
       "if": {
         "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "const": "started"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "verification": {
+            "items": {
+              "allOf": [
+                {
+                  "if": {
+                    "required": [
+                      "scope",
+                      "source"
+                    ],
+                    "properties": {
+                      "scope": {
+                        "const": "related"
+                      },
+                      "source": {
+                        "enum": [
+                          "config",
+                          "command"
+                        ]
+                      }
+                    }
+                  },
+                  "then": {
+                    "required": [
+                      "argv",
+                      "selectedFileCount"
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
           "telemetryProtocol"
         ]
       },
@@ -1111,6 +1215,23 @@
         "properties": {
           "runKind": {
             "const": "final_acceptance_review"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "verificationScope"
+        ]
+      },
+      "then": {
+        "required": [
+          "runKind"
+        ],
+        "properties": {
+          "runKind": {
+            "const": "final_verification"
           }
         }
       }
@@ -1223,10 +1344,7 @@
       },
       "then": {
         "required": [
-          "failure",
-          "reproduction",
-          "localization",
-          "guard"
+          "failure"
         ]
       }
     },

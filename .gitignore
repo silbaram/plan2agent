@@ -34,6 +34,7 @@ plans/*
 !plans/context-engineering-improvement-plan.md
 !plans/context-engineering-orchestrated-batch-baseline.json
 !plans/context-runtime-routing-improvement-plan.md
+!plans/p2a-development-secretary-transition-plan.md
 !plans/evidence/
 plans/evidence/**
 !plans/evidence/**/

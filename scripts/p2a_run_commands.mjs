@@ -73,7 +73,7 @@ export function buildRunFollowUpCommands(paths, options) {
       commands.push({
         id: 'finish',
         label: 'finish',
-        command: commandLine(paths, 'p2a_execute.mjs', ['finish', ...sourceArgs, '--run-id', runId, '--test', '--lint', '--typecheck']),
+        command: commandLine(paths, 'p2a_execute.mjs', ['finish', ...sourceArgs, '--run-id', runId]),
       });
     }
   } else if (runArgs) {

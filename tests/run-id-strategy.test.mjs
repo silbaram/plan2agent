@@ -25,6 +25,7 @@ import {
   EXECUTE_CLI,
   HANDOFF_CLI,
   ITERATION_CLI,
+  P2A_CLI,
   PROPOSALS_CLI,
   ROOT,
   RUNS_CLI,
@@ -196,6 +197,86 @@ test('p2a execute start ignores historical current-spec composition after materi
       'in_progress',
     );
     assert.equal(existsSync(path.join(artifactRoot, 'runs', 'run-index.json')), true);
+  } finally {
+    rmSync(artifactRoot, { recursive: true, force: true });
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('p2a execute start rechecks the active iteration after abandon wins the graph lock', async () => {
+  const artifactRoot = initializedArtifactRoot('execute-abandon-lock-race');
+  const workspace = tempRoot('execute-abandon-lock-race-workspace');
+  try {
+    closeInitializedIteration(artifactRoot);
+    const iterationId = 'v2-execute-abandon-lock';
+    const lifecycleCommands = [
+      [ITERATION_CLI, ['open', '--artifacts', artifactRoot, '--iteration-id', iterationId,
+        '--idea', 'Show documentation paths only while preserving code results, and complete when the related path test passes.']],
+      [ITERATION_CLI, ['draft', '--artifacts', artifactRoot]],
+      [P2A_CLI, ['decide', '--artifacts', artifactRoot,
+        '--quote', 'Approve this documentation-path-only scope.']],
+      [ITERATION_CLI, ['draft', '--artifacts', artifactRoot]],
+      [P2A_CLI, ['decide', '--artifacts', artifactRoot,
+        '--quote', 'Approve this documentation-path-only specification.']],
+      [ITERATION_CLI, ['promote-spec', '--artifacts', artifactRoot]],
+      [ITERATION_CLI, ['diff-tasks', '--artifacts', artifactRoot]],
+      [ITERATION_CLI, ['promote-tasks', '--artifacts', artifactRoot]],
+    ];
+    for (const [cli, args] of lifecycleCommands) {
+      const result = spawnSync(process.execPath, [cli, ...args], {
+        cwd: ROOT,
+        encoding: 'utf8',
+      });
+      assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    }
+
+    const graphPath = path.join(
+      artifactRoot,
+      'iterations',
+      iterationId,
+      'gate-c-task-graph',
+      'task-graph.json',
+    );
+    const graph = JSON.parse(readFileSync(graphPath, 'utf8'));
+    const task = graph.tasks.find((candidate) => candidate.status === 'todo');
+    assert.ok(task, 'fixture must expose a ready task before the lock race');
+    const runsDir = path.join(artifactRoot, 'runs');
+    let abandonPromise;
+    let startPromise;
+    withRunStoreLocks([runsDir], () => {
+      abandonPromise = iterationCliAsync([
+        'abandon',
+        '--artifacts', artifactRoot,
+        '--reason', 'Restore the approved baseline before execution starts.',
+      ]);
+      Atomics.wait(WAIT_BUFFER, 0, 0, 500);
+      startPromise = executeCliAsync([
+        'start',
+        '--artifacts', artifactRoot,
+        '--task', task.id,
+        '--run-id', 'run-abandoned-source-race',
+        '--agent-tool', 'codex',
+        '--workspace', workspace,
+      ]);
+      Atomics.wait(WAIT_BUFFER, 0, 0, 500);
+      assert.equal(
+        JSON.parse(readFileSync(path.join(artifactRoot, 'current-spec.json'), 'utf8')).active_iteration,
+        iterationId,
+      );
+    });
+
+    const [abandonResult, startResult] = await Promise.all([abandonPromise, startPromise]);
+    assert.equal(abandonResult.status, 0, `${abandonResult.stdout}${abandonResult.stderr}`);
+    assert.equal(startResult.status, 1, `${startResult.stdout}${startResult.stderr}`);
+    assert.match(
+      `${startResult.stdout}${startResult.stderr}`,
+      /execution source changed while run start was waiting for the task graph lock|active iteration or task graph changed while run start was waiting/,
+    );
+    assert.equal(existsSync(runFilePath(runsDir, 'run-abandoned-source-race')), false);
+    assert.equal(
+      JSON.parse(readFileSync(path.join(artifactRoot, 'current-spec.json'), 'utf8')).active_iteration,
+      'v1-mvp',
+    );
   } finally {
     rmSync(artifactRoot, { recursive: true, force: true });
     rmSync(workspace, { recursive: true, force: true });
@@ -1510,6 +1591,420 @@ test('iteration open serializes concurrent state changes without orphan iteratio
   }
 });
 
+test('iteration abandon restores the approved baseline without marking planning work complete', () => {
+  const artifactRoot = initializedArtifactRoot('iteration-abandon-planning');
+  try {
+    closeInitializedIteration(artifactRoot);
+    const currentSpecPath = path.join(artifactRoot, 'current-spec.json');
+    const contractPath = path.join(artifactRoot, 'current-development-contract.json');
+    const constitutionPath = path.join(artifactRoot, '.plan2agent', 'constitution.json');
+    const baselineCurrentSpec = readFileSync(currentSpecPath, 'utf8');
+    const baselineContract = readFileSync(contractPath, 'utf8');
+    assert.equal(existsSync(constitutionPath), false);
+
+    let result = spawnSync(process.execPath, [
+      ITERATION_CLI,
+      'open',
+      '--artifacts', artifactRoot,
+      '--iteration-id', 'v2-abandoned',
+      '--idea', 'Explore a change that should not ship',
+    ], { cwd: ROOT, encoding: 'utf8' });
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    const opened = JSON.parse(readFileSync(currentSpecPath, 'utf8'));
+    assert.match(opened.pending_iteration.resume_current_spec_ref, /baseline\/current-spec\.json$/);
+    assert.match(opened.pending_iteration.resume_current_spec_sha256, /^[a-f0-9]{64}$/);
+    assert.equal(opened.pending_iteration.resume_authority.constitution.state, 'absent');
+    assert.match(
+      opened.pending_iteration.resume_authority.current_development_contract_ref,
+      /baseline\/current-development-contract\.json$/,
+    );
+
+    result = spawnSync(process.execPath, [
+      ITERATION_CLI,
+      'draft',
+      '--artifacts', artifactRoot,
+    ], { cwd: ROOT, encoding: 'utf8' });
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    assert.match(result.stdout, /What observable outcome or check will show that this change is complete\?/);
+    assert.doesNotMatch(result.stdout, /CQ-\d+|ND-\d+/);
+
+    writeFileSync(constitutionPath, `${JSON.stringify({
+      schema_version: 'p2a.constitution.v1',
+      projectId: 'webhook-api-service',
+      architecture: [],
+      stack: [],
+      prohibitions: [],
+      style: { naming: ['A planning-only draft that must not survive abandon.'] },
+    }, null, 2)}\n`, 'utf8');
+
+    result = spawnSync(process.execPath, [
+      ITERATION_CLI,
+      'abandon',
+      '--artifacts', artifactRoot,
+      '--reason', 'The proposed outcome is no longer needed.',
+    ], { cwd: ROOT, encoding: 'utf8' });
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    assert.match(result.stdout, /product completion was not recorded/);
+    assert.equal(readFileSync(currentSpecPath, 'utf8'), baselineCurrentSpec);
+    assert.equal(readFileSync(contractPath, 'utf8'), baselineContract);
+    assert.equal(existsSync(constitutionPath), false);
+    assert.equal(existsSync(path.join(artifactRoot, 'decisions.jsonl')), false);
+
+    const metadata = JSON.parse(readFileSync(
+      path.join(artifactRoot, 'iterations', 'v2-abandoned', 'iteration.json'),
+      'utf8',
+    ));
+    assert.equal(metadata.status, 'abandoned');
+    assert.equal(metadata.resumed_iteration, 'v1-mvp');
+    assert.equal(metadata.abandon_reason, 'The proposed outcome is no longer needed.');
+    assert.deepEqual(metadata.resume_authority, opened.pending_iteration.resume_authority);
+
+    result = spawnSync(process.execPath, [
+      ITERATION_CLI,
+      'validate',
+      '--artifacts', artifactRoot,
+      '--require-close-ready',
+    ], { cwd: ROOT, encoding: 'utf8' });
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+  } finally {
+    rmSync(artifactRoot, { recursive: true, force: true });
+  }
+});
+
+test('iteration abandon restores exact approved constitution bytes and decision authority', () => {
+  const artifactRoot = initializedArtifactRoot('iteration-abandon-constitution');
+  const constitutionPath = path.join(artifactRoot, '.plan2agent', 'constitution.json');
+  const contractPath = path.join(artifactRoot, 'current-development-contract.json');
+  try {
+    writeFileSync(constitutionPath, `${JSON.stringify({
+      schema_version: 'p2a.constitution.v1',
+      projectId: 'webhook-api-service',
+      architecture: [],
+      stack: [],
+      prohibitions: [],
+      style: { naming: ['Preserve the approved baseline naming rule.'] },
+    }, null, 2)}\n`, 'utf8');
+    let result = spawnSync(process.execPath, [
+      P2A_CLI,
+      'shape',
+      'approve',
+      '--target', artifactRoot,
+      '--quote', 'Approve the baseline constitution.',
+    ], { cwd: ROOT, encoding: 'utf8' });
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    result = spawnSync(process.execPath, [
+      ITERATION_CLI,
+      'migrate-current-contract',
+      '--artifacts', artifactRoot,
+    ], { cwd: ROOT, encoding: 'utf8' });
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    closeInitializedIteration(artifactRoot);
+    const baselineConstitution = readFileSync(constitutionPath, 'utf8');
+    const baselineContract = readFileSync(contractPath, 'utf8');
+    const decisionsPath = path.join(artifactRoot, 'decisions.jsonl');
+    const baselineDecisions = readFileSync(decisionsPath, 'utf8');
+
+    result = spawnSync(process.execPath, [
+      ITERATION_CLI,
+      'open',
+      '--artifacts', artifactRoot,
+      '--iteration-id', 'v2-abandon-constitution',
+      '--idea', 'Explore a replacement project naming rule',
+    ], { cwd: ROOT, encoding: 'utf8' });
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+
+    writeFileSync(constitutionPath, `${JSON.stringify({
+      schema_version: 'p2a.constitution.v1',
+      projectId: 'webhook-api-service',
+      architecture: [],
+      stack: [],
+      prohibitions: [],
+      style: { naming: ['Use the replacement naming rule.'] },
+    }, null, 2)}\n`, 'utf8');
+    result = spawnSync(process.execPath, [
+      P2A_CLI,
+      'shape',
+      'approve',
+      '--target', artifactRoot,
+      '--quote', 'Approve the replacement naming rule.',
+    ], { cwd: ROOT, encoding: 'utf8' });
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+
+    result = spawnSync(process.execPath, [
+      ITERATION_CLI,
+      'abandon',
+      '--artifacts', artifactRoot,
+      '--reason', 'Return to the previously approved project shape.',
+    ], { cwd: ROOT, encoding: 'utf8' });
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    assert.equal(readFileSync(constitutionPath, 'utf8'), baselineConstitution);
+    assert.equal(readFileSync(contractPath, 'utf8'), baselineContract);
+    const restoredDecisionText = readFileSync(decisionsPath, 'utf8');
+    assert.match(restoredDecisionText, new RegExp(`^${baselineDecisions.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+
+    const decisions = restoredDecisionText
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    assert.equal(
+      decisions.some((record) => record.quote === 'Approve the replacement naming rule.'),
+      true,
+      'abandon must preserve the append-only planning decision history',
+    );
+    assert.deepEqual(
+      decisions.slice(-3).map((record) => record.type),
+      ['constitution.changed', 'gate.how.revoked', 'gate.how.approved'],
+    );
+    assert.equal(decisions.at(-1).type, 'gate.how.approved');
+    assert.equal(
+      decisions.at(-1).constitution_sha256,
+      createHash('sha256').update(baselineConstitution).digest('hex'),
+    );
+
+    result = spawnSync(process.execPath, [
+      ITERATION_CLI,
+      'validate',
+      '--artifacts', artifactRoot,
+      '--require-close-ready',
+    ], { cwd: ROOT, encoding: 'utf8' });
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+  } finally {
+    rmSync(artifactRoot, { recursive: true, force: true });
+  }
+});
+
+test('iteration abandon rechecks the task graph after waiting for its lock', async () => {
+  const artifactRoot = initializedArtifactRoot('iteration-abandon-task-graph-lock');
+  try {
+    closeInitializedIteration(artifactRoot);
+    let result = spawnSync(process.execPath, [
+      ITERATION_CLI,
+      'open',
+      '--artifacts', artifactRoot,
+      '--iteration-id', 'v2-abandon-lock',
+      '--idea', 'Explore a planning change before execution starts',
+    ], { cwd: ROOT, encoding: 'utf8' });
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+
+    const graphPath = path.join(
+      artifactRoot,
+      'iterations',
+      'v2-abandon-lock',
+      'gate-c-task-graph',
+      'task-graph.json',
+    );
+    const baselineGraphPath = path.join(
+      artifactRoot,
+      'iterations',
+      'v1-mvp',
+      'gate-c-task-graph',
+      'task-graph.json',
+    );
+    const graph = JSON.parse(readFileSync(baselineGraphPath, 'utf8'));
+    graph.version = 'v2-abandon-lock';
+    for (const task of graph.tasks) {
+      task.status = 'todo';
+      delete task.blockReason;
+      delete task.blockNote;
+    }
+    writeFileSync(graphPath, `${JSON.stringify(graph, null, 2)}\n`, 'utf8');
+
+    let abandonPromise;
+    withRunStoreLocks([path.dirname(graphPath)], () => {
+      abandonPromise = iterationCliAsync([
+        'abandon',
+        '--artifacts', artifactRoot,
+        '--reason', 'Do not abandon after execution claims work.',
+      ]);
+      Atomics.wait(WAIT_BUFFER, 0, 0, 500);
+
+      const claimedGraph = JSON.parse(readFileSync(graphPath, 'utf8'));
+      claimedGraph.tasks[0].status = 'in_progress';
+      writeFileSync(graphPath, `${JSON.stringify(claimedGraph, null, 2)}\n`, 'utf8');
+      const currentSpecWhileLocked = JSON.parse(readFileSync(
+        path.join(artifactRoot, 'current-spec.json'),
+        'utf8',
+      ));
+      assert.equal(currentSpecWhileLocked.active_iteration, 'v2-abandon-lock');
+    });
+
+    result = await abandonPromise;
+    assert.notEqual(result.status, 0);
+    assert.match(`${result.stdout}${result.stderr}`, /abandon is limited to planning state/);
+
+    const currentSpec = JSON.parse(readFileSync(
+      path.join(artifactRoot, 'current-spec.json'),
+      'utf8',
+    ));
+    assert.equal(currentSpec.active_iteration, 'v2-abandon-lock');
+    assert.equal(currentSpec.pending_iteration?.iteration_id, 'v2-abandon-lock');
+    const metadata = JSON.parse(readFileSync(
+      path.join(artifactRoot, 'iterations', 'v2-abandon-lock', 'iteration.json'),
+      'utf8',
+    ));
+    assert.notEqual(metadata.status, 'abandoned');
+  } finally {
+    rmSync(artifactRoot, { recursive: true, force: true });
+  }
+});
+
+test('iteration abandon recovers a pending run write before checking execution history', () => {
+  const artifactRoot = initializedArtifactRoot('iteration-abandon-pending-run-write');
+  try {
+    closeInitializedIteration(artifactRoot);
+    const iterationId = 'v2-abandon-pending-run';
+    let result = spawnSync(process.execPath, [
+      ITERATION_CLI,
+      'open',
+      '--artifacts', artifactRoot,
+      '--iteration-id', iterationId,
+      '--idea', 'Planning work that must not be abandoned over a pending run.',
+    ], { cwd: ROOT, encoding: 'utf8' });
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+
+    const runsDir = path.join(artifactRoot, 'runs');
+    const priorIndex = JSON.parse(readFileSync(
+      path.join(runsDir, 'run-index.json'),
+      'utf8',
+    ));
+    const priorGraphPath = path.join(
+      artifactRoot,
+      'iterations',
+      'v1-mvp',
+      'gate-c-task-graph',
+      'task-graph.json',
+    );
+    const priorGraph = JSON.parse(readFileSync(priorGraphPath, 'utf8'));
+    const transaction = pendingStartedRunTransaction(
+      priorGraphPath,
+      priorGraph,
+      'task-999',
+    );
+    transaction.run.runId = 'run-pending-abandon';
+    transaction.run.iterationId = iterationId;
+    transaction.run.sourceLayout = 'iteration';
+    transaction.run.taskGraphRef = `iterations/${iterationId}/gate-c-task-graph/task-graph.json`;
+    transaction.run.sourceSpecRef = '../gate-b-spec/spec.json';
+    transaction.runRef = canonicalRunRef(transaction.run);
+    const pendingEntry = {
+      ...transaction.index.runs[0],
+      runId: transaction.run.runId,
+      iterationId,
+      taskGraphRef: transaction.run.taskGraphRef,
+      runRef: transaction.runRef,
+    };
+    transaction.index = {
+      ...priorIndex,
+      runs: [...priorIndex.runs, pendingEntry],
+      tasks: [
+        ...priorIndex.tasks,
+        {
+          taskId: transaction.run.taskId,
+          runIds: [transaction.run.runId],
+          latestRunId: transaction.run.runId,
+        },
+      ],
+    };
+    writeFileSync(
+      runWriteTransactionPath(runsDir),
+      `${JSON.stringify(transaction, null, 2)}\n`,
+      'utf8',
+    );
+
+    result = spawnSync(process.execPath, [
+      ITERATION_CLI,
+      'abandon',
+      '--artifacts', artifactRoot,
+      '--reason', 'This must fail after recovering the started run.',
+    ], { cwd: ROOT, encoding: 'utf8' });
+
+    assert.notEqual(result.status, 0);
+    assert.match(
+      `${result.stdout}${result.stderr}`,
+      /abandon cannot replace a task graph after execution history exists.*run-pending-abandon:started/,
+    );
+    assert.equal(existsSync(runWriteTransactionPath(runsDir)), false);
+    assert.equal(existsSync(path.join(runsDir, transaction.runRef)), true);
+    const currentSpec = JSON.parse(readFileSync(
+      path.join(artifactRoot, 'current-spec.json'),
+      'utf8',
+    ));
+    assert.equal(currentSpec.active_iteration, iterationId);
+    assert.equal(currentSpec.pending_iteration?.iteration_id, iterationId);
+  } finally {
+    rmSync(artifactRoot, { recursive: true, force: true });
+  }
+});
+
+test('a zero-question draft still waits for one explicit Gate A scope approval', () => {
+  const artifactRoot = initializedArtifactRoot('iteration-zero-question-scope');
+  try {
+    closeInitializedIteration(artifactRoot);
+    const idea = 'Show documentation paths only while preserving code results, and complete when the related path test passes.';
+    let result = spawnSync(process.execPath, [
+      ITERATION_CLI,
+      'open',
+      '--artifacts', artifactRoot,
+      '--iteration-id', 'v2-zero-question',
+      '--idea', idea,
+    ], { cwd: ROOT, encoding: 'utf8' });
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+
+    result = spawnSync(process.execPath, [
+      ITERATION_CLI,
+      'draft',
+      '--artifacts', artifactRoot,
+    ], { cwd: ROOT, encoding: 'utf8' });
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    assert.match(result.stdout, /Review and explicitly approve the scope/);
+    assert.doesNotMatch(result.stdout, /Confirm these material points|CQ-\d+|ND-\d+/);
+
+    const intake = JSON.parse(readFileSync(path.join(
+      artifactRoot,
+      'iterations',
+      'v2-zero-question',
+      'gate-a-intake',
+      'intake.json',
+    ), 'utf8'));
+    assert.deepEqual(intake.clarifying_questions, []);
+    assert.equal(intake.status, 'blocked_on_user');
+    assert.equal('approval_audit' in intake, false);
+    assert.equal(existsSync(path.join(
+      artifactRoot,
+      'iterations',
+      'v2-zero-question',
+      'gate-b-spec',
+      'spec.json',
+    )), false);
+
+    result = spawnSync(process.execPath, [
+      P2A_CLI,
+      'decide',
+      '--artifacts', artifactRoot,
+      '--quote', 'Approve this documentation-path-only scope.',
+    ], { cwd: ROOT, encoding: 'utf8' });
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+
+    result = spawnSync(process.execPath, [
+      ITERATION_CLI,
+      'draft',
+      '--artifacts', artifactRoot,
+    ], { cwd: ROOT, encoding: 'utf8' });
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    const spec = JSON.parse(readFileSync(path.join(
+      artifactRoot,
+      'iterations',
+      'v2-zero-question',
+      'gate-b-spec',
+      'spec.json',
+    ), 'utf8'));
+    assert.match(JSON.stringify(spec.product), new RegExp(idea.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    assert.match(JSON.stringify(spec.implementation), new RegExp(idea.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  } finally {
+    rmSync(artifactRoot, { recursive: true, force: true });
+  }
+});
+
 test('compose and close share the artifact-state lock and preserve pending until close', async () => {
   const artifactRoot = initializedArtifactRoot('iteration-compose-state-lock');
   try {
@@ -1599,6 +2094,94 @@ test('failed compose restores current spec when status rendering fails', () => {
     assert.notEqual(result.status, 0);
     assert.equal(readFileSync(currentSpecPath, 'utf8'), beforeCompose);
     assert.equal(lstatSync(statusPath).isDirectory(), true);
+  } finally {
+    rmSync(artifactRoot, { recursive: true, force: true });
+  }
+});
+
+test('compose audits closed artifacts before rebuilding the effective spec', () => {
+  const artifactRoot = initializedArtifactRoot('iteration-compose-archive-audit');
+  try {
+    closeInitializedIteration(artifactRoot);
+    const currentSpecPath = path.join(artifactRoot, 'current-spec.json');
+    const currentSpecBefore = readFileSync(currentSpecPath);
+    const metadataPath = path.join(
+      artifactRoot,
+      'iterations',
+      'v1-mvp',
+      'iteration.json',
+    );
+    const metadata = JSON.parse(readFileSync(metadataPath, 'utf8'));
+    metadata.idea = `${metadata.idea} changed after close`;
+    writeFileSync(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, 'utf8');
+    const intakePath = path.join(
+      artifactRoot,
+      'iterations',
+      'v1-mvp',
+      'gate-a-intake',
+      'intake.json',
+    );
+    const intake = JSON.parse(readFileSync(intakePath, 'utf8'));
+    intake.known_facts.push('Changed together with archived replacement metadata.');
+    writeFileSync(intakePath, `${JSON.stringify(intake, null, 2)}\n`, 'utf8');
+
+    const result = spawnSync(process.execPath, [
+      ITERATION_CLI,
+      'compose',
+      '--artifacts',
+      artifactRoot,
+    ], { cwd: ROOT, encoding: 'utf8' });
+
+    assert.notEqual(result.status, 0);
+    assert.match(
+      `${result.stdout}${result.stderr}`,
+      /closed iteration v1-mvp artifact changed after close: .*gate-a-intake\/intake\.json/,
+    );
+    assert.deepEqual(readFileSync(currentSpecPath), currentSpecBefore);
+  } finally {
+    rmSync(artifactRoot, { recursive: true, force: true });
+  }
+});
+
+test('compose requires an explicit archive-audit bypass for pre-audit legacy history', () => {
+  const artifactRoot = initializedArtifactRoot('iteration-compose-legacy-archive-audit');
+  try {
+    const { currentSpecPath } = prepareCloseReadySecondIteration(artifactRoot);
+    const legacyCurrentSpec = JSON.parse(readFileSync(currentSpecPath, 'utf8'));
+    for (const closed of legacyCurrentSpec.closed_iterations) {
+      delete closed.artifact_hashes;
+    }
+    delete legacyCurrentSpec.last_closed_iteration.artifact_hashes;
+    writeFileSync(
+      currentSpecPath,
+      `${JSON.stringify(legacyCurrentSpec, null, 2)}\n`,
+      'utf8',
+    );
+    const beforeCompose = readFileSync(currentSpecPath);
+
+    const rejected = spawnSync(process.execPath, [
+      ITERATION_CLI,
+      'compose',
+      '--artifacts',
+      artifactRoot,
+    ], { cwd: ROOT, encoding: 'utf8' });
+    assert.notEqual(rejected.status, 0);
+    assert.match(
+      `${rejected.stdout}${rejected.stderr}`,
+      /closed iteration v1-mvp is missing artifact_hashes/,
+    );
+    assert.deepEqual(readFileSync(currentSpecPath), beforeCompose);
+
+    const allowed = spawnSync(process.execPath, [
+      ITERATION_CLI,
+      'compose',
+      '--artifacts',
+      artifactRoot,
+      '--skip-archive-audit',
+    ], { cwd: ROOT, encoding: 'utf8' });
+    assert.equal(allowed.status, 0, `${allowed.stdout}${allowed.stderr}`);
+    const composed = JSON.parse(readFileSync(currentSpecPath, 'utf8'));
+    assert.deepEqual(composed.composed_from, ['v1-mvp', 'v2-close-ready']);
   } finally {
     rmSync(artifactRoot, { recursive: true, force: true });
   }

@@ -21,6 +21,25 @@ const LEGACY_REVIEW_PASS_KEYS = ['style', 'milestone'];
 const RELATED_VERIFICATION_TYPES = new Set(['test', 'lint', 'typecheck', 'custom']);
 const RETROSPECTIVE_MEASUREMENT_CATEGORIES = new Set(['test', 'lint', 'typecheck', 'custom']);
 
+export function projectConfigCandidatePaths({
+  workspacePath = null,
+  projectRoot = null,
+  artifactRoot = null,
+  graphPath = null,
+  cwd = process.cwd(),
+} = {}) {
+  const candidates = [
+    workspacePath ? path.join(path.resolve(workspacePath), '.plan2agent', 'project.config.json') : null,
+    projectRoot ? path.join(path.resolve(projectRoot), '.plan2agent', 'project.config.json') : null,
+    artifactRoot ? path.join(path.resolve(artifactRoot), 'project.config.json') : null,
+    graphPath
+      ? path.join(path.dirname(path.resolve(graphPath)), '..', 'project.config.json')
+      : null,
+    cwd ? path.join(path.resolve(cwd), '.plan2agent', 'project.config.json') : null,
+  ].filter(Boolean).map((candidate) => path.resolve(candidate));
+  return [...new Set(candidates)];
+}
+
 export function defaultRetrospectiveSignals() {
   return {
     enabled: true,

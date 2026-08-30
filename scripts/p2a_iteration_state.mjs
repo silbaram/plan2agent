@@ -9,6 +9,7 @@ import {
   approvedExecutionEnvelope,
   currentDevelopmentContractSha256,
   executionEnvelopeFromCurrentDevelopmentContract,
+  iterationConstraintsFromSpec,
   loadJson,
   resolveSpecSourceIntake,
   validateConstitution,
@@ -520,6 +521,11 @@ export function validateClosedIterationComposition(currentSpec, artifactRoot) {
     );
     const specPath = path.join(iterationRoot, 'gate-b-spec', 'spec.json');
     const intakePath = path.join(iterationRoot, 'gate-a-intake', 'intake.json');
+    const taskGraphPath = path.join(
+      iterationRoot,
+      'gate-c-task-graph',
+      'task-graph.json',
+    );
     assertFile(specPath, `closed composition source ${source.iteration_id} spec`);
     assertFileInsideArtifactRoot(
       specPath,
@@ -531,6 +537,12 @@ export function validateClosedIterationComposition(currentSpec, artifactRoot) {
       intakePath,
       resolvedArtifactRoot,
       `closed composition source ${source.iteration_id} intake`,
+    );
+    assertFile(taskGraphPath, `closed composition source ${source.iteration_id} task graph`);
+    assertFileInsideArtifactRoot(
+      taskGraphPath,
+      resolvedArtifactRoot,
+      `closed composition source ${source.iteration_id} task graph`,
     );
     const spec = loadJson(specPath);
     if (spec.project_id !== currentSpec.project_id) {
@@ -546,6 +558,7 @@ export function validateClosedIterationComposition(currentSpec, artifactRoot) {
     return {
       ...source,
       spec,
+      task_graph: loadJson(taskGraphPath),
       metadata: optionalIterationMetadata(
         resolvedArtifactRoot,
         source.iteration_id,
@@ -768,6 +781,7 @@ function validateCompositionSourceReadiness(
       `current-spec.json source_specs ${source.iteration_id} status must be ${expectedStatus}, got ${JSON.stringify(source.status)}`,
     );
   }
+  return taskGraph;
 }
 
 export function validateCurrentSpecCompositionData(
@@ -888,7 +902,7 @@ export function validateCurrentSpecCompositionData(
         `current-spec.json source_specs ${source.iteration_id} iteration metadata mismatch`,
       );
     }
-    validateCompositionSourceReadiness(
+    const taskGraph = validateCompositionSourceReadiness(
       currentSpec,
       source,
       specPath,
@@ -901,6 +915,7 @@ export function validateCurrentSpecCompositionData(
     validatedSources.push({
       ...source,
       spec,
+      task_graph: taskGraph,
       metadata,
       source_intake: sourceIntake,
     });
@@ -1080,6 +1095,7 @@ export function materializeCurrentDevelopmentContract(state, options = {}) {
     iterationId: state.activeIteration,
     objective: envelope.objective,
     scope: envelope.scope,
+    iterationConstraints: structuredClone(envelope.iterationConstraints),
     architecture: structuredClone(constitution.architecture),
     stack: structuredClone(constitution.stack),
     prohibitions: structuredClone(constitution.prohibitions),
@@ -1125,8 +1141,37 @@ function validateCurrentDevelopmentContractDataForState(contract, state, constit
     projectId: state.projectId,
     iterationId: state.activeIteration,
   });
+  const archived = (state.currentSpec.closed_iterations ?? []).some((closed) => (
+    closed?.iteration_id === state.activeIteration && closed?.status === 'archived'
+  ));
   if (contract.projectId !== state.projectId || contract.iterationId !== state.activeIteration) {
     throw new ValidationError('current development contract identity does not match current-spec.json');
+  }
+  if (!archived && fileSha256(state.specPath) !== contract.bindings.activeSpec.sha256) {
+    throw new ValidationError('current development contract active spec changed after materialization');
+  }
+  const activeSpecMatchesBinding = (
+    existsSync(state.specPath)
+    && lstatSync(state.specPath).isFile()
+    && fileSha256(state.specPath) === contract.bindings.activeSpec.sha256
+  );
+  let iterationConstraints;
+  if (activeSpecMatchesBinding) {
+    iterationConstraints = iterationConstraintsFromSpec(loadJson(state.specPath));
+    if (
+      contract.iterationConstraints !== undefined
+      && !jsonEqual(contract.iterationConstraints, iterationConstraints)
+    ) {
+      throw new ValidationError(
+        'current development contract iterationConstraints do not match the bound active spec',
+      );
+    }
+  } else if (contract.iterationConstraints !== undefined) {
+    iterationConstraints = structuredClone(contract.iterationConstraints);
+  } else {
+    throw new ValidationError(
+      'legacy current development contract cannot recover iterationConstraints because its bound active spec changed or is unavailable',
+    );
   }
   for (const field of ['architecture', 'stack', 'prohibitions', 'style']) {
     if (!jsonEqual(contract[field], constitution[field])) {
@@ -1140,7 +1185,7 @@ function validateCurrentDevelopmentContractDataForState(contract, state, constit
   if (!jsonEqual(contract.bindings.taskGraph.tasks, expectedTaskBindings)) {
     throw new ValidationError('current development contract task bindings do not match the current task graph');
   }
-  return contract;
+  return iterationConstraints;
 }
 
 export function resolveCurrentDevelopmentState(artifactPath, options = {}) {
@@ -1208,7 +1253,12 @@ export function resolveCurrentDevelopmentState(artifactPath, options = {}) {
   if (path.resolve(graphSourceSpecPath) !== path.resolve(state.specPath)) {
     throw new ValidationError('current task graph sourceSpec does not match the current development contract activeSpec.ref');
   }
-  validateCurrentDevelopmentContractDataForState(contract, state, constitution, graph);
+  const iterationConstraints = validateCurrentDevelopmentContractDataForState(
+    contract,
+    state,
+    constitution,
+    graph,
+  );
   return {
     ...state,
     constitutionPath,
@@ -1221,6 +1271,9 @@ export function resolveCurrentDevelopmentState(artifactPath, options = {}) {
     executionEnvelope: executionEnvelopeFromCurrentDevelopmentContract(
       contract,
       currentDevelopmentRef(state.artifactRoot, contractPath),
+      {
+        iterationConstraints,
+      },
     ),
   };
 }
@@ -1441,6 +1494,82 @@ export function validateActiveIterationBaselineContract(
     );
   }
   const intakePath = activeIntakePath(state);
+  const pendingReplacement = pending.replacement ?? null;
+  const metadataReplacement = metadata?.replacement ?? null;
+  if (Boolean(pendingReplacement) !== Boolean(metadataReplacement)) {
+    throw new ValidationError(
+      'blocked scope replacement lineage must match between pending_iteration and iteration metadata',
+    );
+  }
+  if (pendingReplacement) {
+    if (
+      typeof pendingReplacement !== 'object'
+      || Array.isArray(pendingReplacement)
+      || pendingReplacement.kind !== 'blocked_scope_replan'
+      || pendingReplacement.task_coverage !== 'full_spec'
+      || !jsonEqual(pendingReplacement, metadataReplacement)
+    ) {
+      throw new ValidationError(
+        'blocked scope replacement lineage must be identical and use kind blocked_scope_replan',
+      );
+    }
+    if (
+      pendingReplacement.replaces_iteration !== pendingBaselineIteration
+      || pendingReplacement.replaces_iteration !== metadataBaselineIteration
+    ) {
+      throw new ValidationError(
+        'blocked scope replacement lineage must identify the pending baseline iteration',
+      );
+    }
+    if (
+      !Array.isArray(pendingReplacement.blocked_task_ids)
+      || pendingReplacement.blocked_task_ids.length === 0
+      || pendingReplacement.blocked_task_ids.some((taskId) => (
+        typeof taskId !== 'string' || !taskId.trim()
+      ))
+      || new Set(pendingReplacement.blocked_task_ids).size
+        !== pendingReplacement.blocked_task_ids.length
+    ) {
+      throw new ValidationError(
+        'blocked scope replacement lineage must record unique blocked_task_ids',
+      );
+    }
+    const replacedIterationIds = pendingReplacement.replaced_iteration_ids;
+    if (
+      replacedIterationIds !== undefined
+      && (
+        !Array.isArray(replacedIterationIds)
+        || replacedIterationIds.length === 0
+        || replacedIterationIds[0] !== pendingReplacement.replaces_iteration
+        || replacedIterationIds.some((iterationId) => (
+          typeof iterationId !== 'string'
+          || !/^[A-Za-z0-9._-]+$/u.test(iterationId)
+          || iterationId === state.activeIteration
+        ))
+        || new Set(replacedIterationIds).size !== replacedIterationIds.length
+      )
+    ) {
+      throw new ValidationError(
+        'blocked scope replacement lineage must record a unique direct-first replaced_iteration_ids snapshot',
+      );
+    }
+    if (typeof pendingReplacement.reason !== 'string' || !pendingReplacement.reason.trim()) {
+      throw new ValidationError('blocked scope replacement lineage must record a reason');
+    }
+    const contractSha256 = pendingReplacement.current_development_contract_sha256;
+    if (
+      typeof contractSha256 !== 'string'
+      || !/^[a-f0-9]{64}$/u.test(contractSha256)
+      || contractSha256
+        !== pending.resume_authority?.current_development_contract_sha256
+      || contractSha256
+        !== metadata?.resume_authority?.current_development_contract_sha256
+    ) {
+      throw new ValidationError(
+        'blocked scope replacement lineage must bind the resume current development contract hash',
+      );
+    }
+  }
   if (!baselineSpecRef) {
     if (pendingBaselineIteration !== null) {
       throw new ValidationError(
@@ -1510,13 +1639,19 @@ export function validateActiveIterationBaselineContract(
     options,
   );
   if (existsSync(intakePath)) {
+    const intake = loadJson(intakePath);
     assertIntakeBaselineMatchesPending(
-      loadJson(intakePath),
+      intake,
       baselineSpecRef,
       baselineSpecPath,
       state.artifactRoot,
       baselineSpecSha256,
     );
+    if (!jsonEqual(intake.baseline_context?.replacement ?? null, pendingReplacement)) {
+      throw new ValidationError(
+        'Gate A intake blocked scope replacement lineage must match pending_iteration',
+      );
+    }
   }
 }
 

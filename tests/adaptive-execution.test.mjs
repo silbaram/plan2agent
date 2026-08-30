@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -144,6 +144,9 @@ test('direct execution prepares one synthetic work item and records its strategy
     assert.equal(graph.execution.mode, 'direct');
     assert.equal(graph.execution.syntheticWorkItem, true);
     assert.equal(graph.tasks.length, 1);
+    assert.equal(graph.tasks[0].sourceSpecRefs.includes('implementation.architecture'), true);
+    assert.equal(graph.tasks[0].sourceSpecRefs.includes('implementation.interfaces'), true);
+    assert.equal(graph.tasks[0].sourceSpecRefs.includes('implementation.dependencies'), true);
     assert.equal(
       graph.tasks[0].intent,
       'Users can rely on this approved outcome: Expose one HTTP endpoint for partner webhook ingestion.',
@@ -172,6 +175,7 @@ test('direct execution prepares one synthetic work item and records its strategy
     assert.match(result.stdout, /이번 작업이 끝나면: Users can rely on this approved outcome: Expose one HTTP endpoint/u);
     assert.ok(result.stdout.indexOf('[한눈에]') < result.stdout.indexOf('- project:'));
     assert.ok(result.stdout.indexOf('[실행 명령]') < result.stdout.indexOf('[세부 계약]'));
+    assert.doesNotMatch(result.stdout, /execute finish[^\n]*--(?:test|lint|typecheck)/);
 
     result = runRuns([
       'verify',
@@ -232,6 +236,201 @@ test('direct execution prepares one synthetic work item and records its strategy
     const handedOffRunIndex = JSON.parse(readFileSync(path.join(handedOffRunsDir, 'run-index.json'), 'utf8'));
     assert.deepEqual(handedOffRunIndex.runs.map((entry) => entry.runId), [runId]);
     validateRunsDir(handedOffRunsDir);
+  } finally {
+    rmSync(fixture.workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test('retryable blocked run without a user decision returns the task to todo with class-specific detail', () => {
+  const fixture = adaptiveArtifact();
+  try {
+    let result = runExecute([
+      'prepare',
+      '--artifacts', fixture.artifactRoot,
+      '--mode', 'direct',
+      '--selection-rationale', 'Exercise automatic retry routing after a transient test failure.',
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    initialize(fixture);
+
+    const runId = 'run-retryable-test-flake';
+    result = runExecute([
+      'start',
+      '--artifacts', fixture.artifactRoot,
+      '--run-id', runId,
+      '--agent-tool', 'codex',
+      '--workspace', fixture.workspaceRoot,
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+
+    result = runExecute([
+      'finish',
+      '--artifacts', fixture.artifactRoot,
+      '--run-id', runId,
+      '--status', 'blocked',
+      '--failure-class', 'test_flake',
+      '--repro-step', 'Run the transient check once.',
+      '--guard', 'Retry the same deterministic check.',
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout, /Returning task task-001 to todo/);
+
+    const graph = JSON.parse(readFileSync(fixture.graphPath, 'utf8'));
+    assert.equal(graph.tasks[0].status, 'todo');
+    const run = JSON.parse(readFileSync(
+      runFilePath(path.join(fixture.artifactRoot, 'runs'), runId),
+      'utf8',
+    ));
+    assert.equal(run.status, 'blocked');
+    assert.deepEqual(run.verification, []);
+    assert.deepEqual(run.failure, {
+      class: 'test_flake',
+      retryable: 'yes',
+      needsUserDecision: false,
+      source: 'owner',
+    });
+    assert.ok(run.reproduction);
+    assert.ok(run.guard);
+    assert.equal('localization' in run, false);
+
+    result = runExecute([
+      'finish',
+      '--artifacts', fixture.artifactRoot,
+      '--run-id', runId,
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout, /already applied: task-001 is ready for retry/);
+  } finally {
+    rmSync(fixture.workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test('a bounded recovery decision is consumed into the next run and launcher prompt', () => {
+  const fixture = adaptiveArtifact();
+  try {
+    let result = runExecute([
+      'prepare',
+      '--artifacts', fixture.artifactRoot,
+      '--mode', 'direct',
+      '--selection-rationale', 'Exercise durable bounded recovery context.',
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    initialize(fixture);
+
+    const blockedRunId = 'run-needs-scope-decision';
+    result = runExecute([
+      'start',
+      '--artifacts', fixture.artifactRoot,
+      '--run-id', blockedRunId,
+      '--agent-tool', 'codex',
+      '--workspace', fixture.workspaceRoot,
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    result = runExecute([
+      'finish',
+      '--artifacts', fixture.artifactRoot,
+      '--run-id', blockedRunId,
+      '--status', 'blocked',
+      '--failure-class', 'scope_violation',
+      '--retryable', 'no',
+      '--needs-user-decision', 'true',
+      '--repro-step', 'The implementation changed an API outside the approved scope.',
+      '--localization', 'The public API change is outside the approved scope.',
+      '--guard', 'Keep the retry inside the approved API scope.',
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+
+    const decision = 'Revert the public API change and retry only the approved internal behavior.';
+    result = runTasks([
+      'todo',
+      '--artifacts', fixture.artifactRoot,
+      'task-001',
+      '--note', decision,
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+
+    const retryRunId = 'run-bounded-retry';
+    result = runExecute([
+      'start',
+      '--artifacts', fixture.artifactRoot,
+      '--run-id', retryRunId,
+      '--agent-tool', 'codex',
+      '--workspace', fixture.workspaceRoot,
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout, new RegExp(decision.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+
+    const run = JSON.parse(readFileSync(
+      runFilePath(path.join(fixture.artifactRoot, 'runs'), retryRunId),
+      'utf8',
+    ));
+    assert.ok(run.notes.includes(`TASK_RECOVERY_CONTEXT: ${decision}`));
+    const graph = JSON.parse(readFileSync(fixture.graphPath, 'utf8'));
+    assert.equal(graph.tasks[0].status, 'in_progress');
+    assert.equal(graph.tasks[0].blockNote, undefined);
+  } finally {
+    rmSync(fixture.workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test('official finish runs every configured check still missing for the current revision', () => {
+  const fixture = adaptiveArtifact();
+  try {
+    let result = runExecute([
+      'prepare',
+      '--artifacts', fixture.artifactRoot,
+      '--mode', 'direct',
+      '--selection-rationale', 'Exercise configured-check completion without optional placeholders.',
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    initialize(fixture);
+    const launcherDir = path.join(fixture.workspaceRoot, 'tools');
+    const testLauncher = path.join(launcherDir, 'configured-test');
+    mkdirSync(launcherDir, { recursive: true });
+    writeFileSync(testLauncher, '#!/bin/sh\nexit 0\n', 'utf8');
+    chmodSync(testLauncher, 0o755);
+    const configPath = path.join(fixture.workspaceRoot, '.plan2agent', 'project.config.json');
+    writeFileSync(configPath, `${JSON.stringify({
+      testCommand: './tools/configured-test',
+      lintCommand: `${JSON.stringify(process.execPath)} -e "process.exit(0)"`,
+    }, null, 2)}\n`, 'utf8');
+
+    const runId = 'run-configured-completion';
+    result = runExecute([
+      'start',
+      '--artifacts', fixture.artifactRoot,
+      '--run-id', runId,
+      '--agent-tool', 'codex',
+      '--workspace', fixture.workspaceRoot,
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    result = runRuns([
+      'verify',
+      '--artifacts', fixture.artifactRoot,
+      '--run-id', runId,
+      '--test',
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    let run = JSON.parse(readFileSync(
+      runFilePath(path.join(fixture.artifactRoot, 'runs'), runId),
+      'utf8',
+    ));
+    assert.equal(run.verification[0].originalCommand, './tools/configured-test');
+
+    result = runExecute(['finish', '--artifacts', fixture.artifactRoot, '--run-id', runId]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout, /Running configured verification required/);
+    run = JSON.parse(readFileSync(
+      runFilePath(path.join(fixture.artifactRoot, 'runs'), runId),
+      'utf8',
+    ));
+    assert.deepEqual(
+      run.verification.map((item) => item.type),
+      ['test', 'lint'],
+      JSON.stringify(run.verification, null, 2),
+    );
+    assert.equal(run.verification[0].originalCommand, './tools/configured-test');
+    assert.ok(run.verification.every((item) => item.status === 'passed'));
   } finally {
     rmSync(fixture.workspaceRoot, { recursive: true, force: true });
   }
@@ -305,7 +504,7 @@ test('planned execution verifies ordered checkpoints before finish', () => {
   }
 });
 
-test('planned checkpoint failure is immutable and cannot masquerade as a successful retry', () => {
+test('planned checkpoint failure is preserved while a successful same-run retry advances the milestone', () => {
   const fixture = adaptiveArtifact();
   try {
     let result = runExecute([
@@ -338,23 +537,33 @@ test('planned checkpoint failure is immutable and cannot masquerade as a success
     result = runRuns([
       'checkpoint', '--artifacts', fixture.artifactRoot, '--run-id', runId, '--milestone', 'milestone-contract',
     ]);
-    assert.notEqual(result.status, 0);
-    assert.match(`${result.stdout}\n${result.stderr}`, /immutable failed evidence/);
-    assert.match(`${result.stdout}\n${result.stderr}`, /start a new retry run/);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
 
     result = runExecute(['resume', '--artifacts', fixture.artifactRoot, '--run-id', runId]);
     assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    assert.match(result.stdout, /checkpointFailure: milestone-contract:failed/);
-    assert.doesNotMatch(result.stdout, /nextMilestone:/);
-    assert.doesNotMatch(result.stdout, /Manual launcher prompt/);
+    assert.doesNotMatch(result.stdout, /checkpointRetry:/);
+    assert.match(result.stdout, /nextMilestone: milestone-regression/);
+
+    result = runRuns([
+      'checkpoint', '--artifacts', fixture.artifactRoot, '--run-id', runId, '--milestone', 'milestone-regression',
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    result = runExecute(['finish', '--artifacts', fixture.artifactRoot, '--run-id', runId]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
 
     const run = JSON.parse(readFileSync(
       runFilePath(path.join(fixture.artifactRoot, 'runs'), runId),
       'utf8',
     ));
-    assert.equal(run.milestones[0].status, 'pending');
+    assert.equal(run.status, 'finished');
+    assert.deepEqual(run.milestones.map(({ id, status }) => ({ id, status })), [
+      { id: 'milestone-contract', status: 'verified' },
+      { id: 'milestone-regression', status: 'verified' },
+    ]);
     assert.deepEqual(run.verification.map(({ milestoneId, status }) => ({ milestoneId, status })), [
       { milestoneId: 'milestone-contract', status: 'failed' },
+      { milestoneId: 'milestone-contract', status: 'passed' },
+      { milestoneId: 'milestone-regression', status: 'passed' },
     ]);
   } finally {
     rmSync(fixture.workspaceRoot, { recursive: true, force: true });

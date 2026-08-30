@@ -13,7 +13,14 @@ import {
   validateTaskGraphData,
 } from './validate_artifacts.mjs';
 import { shellQuote } from './p2a_run_commands.mjs';
-import { runFilePath, runSidecarPath, runSidecarRef, taskContractSha256 } from './p2a_run_paths.mjs';
+import {
+  runFilePath,
+  runSidecarPath,
+  runSidecarRef,
+  taskContractSha256,
+  workspaceRevisionExcludedPathsForRun,
+  workspaceRevisionSha256,
+} from './p2a_run_paths.mjs';
 import {
   MONITOR_CONCERN_FIELDS,
   MONITOR_GATE_POLICY,
@@ -221,12 +228,6 @@ function writeSyntheticApprovedVisualBundle(gateBRoot, projectId, marker = 'Read
   };
 }
 
-const DISCOVERY_FIXTURE_ANSWERS = {
-  'CQ-1': 'Delivery status refreshes within five seconds and contract tests verify the result.',
-  'CQ-2': 'Include operator dashboard delivery status; CSV export remains out of scope.',
-  'CQ-3': 'Add operations users while preserving existing webhook integrations and signature compatibility.',
-};
-
 const DISCOVERY_FIXTURE_DECISION_ANSWER = 'Operations leads are the approved dashboard audience.';
 
 function confirmScopeIntake(intakePath, approvedArtifactRef, contentSuffix = '') {
@@ -234,7 +235,7 @@ function confirmScopeIntake(intakePath, approvedArtifactRef, contentSuffix = '')
   intake.clarifying_questions = (intake.clarifying_questions ?? []).map((question) => ({
     ...question,
     status: 'answered',
-    answer: `${DISCOVERY_FIXTURE_ANSWERS[question.id] ?? `Fixture answer for ${question.id}`}${contentSuffix}`,
+    answer: `Fixture answer for ${question.id}${contentSuffix}`,
   }));
   intake.needs_user_decision = (intake.needs_user_decision ?? []).map((decision) => ({
     ...decision,
@@ -4079,8 +4080,26 @@ function validateIterationCurrentFixtureCases() {
       ]);
       checks += 1;
       const executeFailedOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
-      if (result.status !== 1 || !executeFailedOutput.includes('- blockReason: verification_failed')) {
-        console.error(`p2a_execute failed-path finish fixture check failed: ${caseData.id}`);
+      if (result.status !== 1 || !executeFailedOutput.includes('run remains started')) {
+        console.error(`p2a_execute retryable failed-path fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+      result = runExecute([
+        'finish',
+        '--graph',
+        executeFailedGraphPath,
+        '--run-id',
+        'run-execute-fixture-failed',
+        '--status',
+        'failed',
+        '--failure-class',
+        'verification_failed',
+        ...fixtureFailureDetailArgs('execute failed verification'),
+      ]);
+      checks += 1;
+      if (result.status !== 1 || !`${result.stdout ?? ''}${result.stderr ?? ''}`.includes('Returning task task-001 to todo')) {
+        console.error(`p2a_execute explicit failed-path close fixture check failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: 1, checks };
       }
@@ -4186,7 +4205,7 @@ function validateIterationCurrentFixtureCases() {
         || !result.stdout.includes(`status: p2a `)
         || !result.stdout.includes(`p2a execute status --artifacts ${quotedArtifactRoot} --run-id ${fixtureRunId}`)
         || !result.stdout.includes(`finish: p2a `)
-        || !result.stdout.includes(`p2a execute finish --artifacts ${quotedArtifactRoot} --run-id ${fixtureRunId} --test --lint --typecheck`)
+        || !result.stdout.includes(`p2a execute finish --artifacts ${quotedArtifactRoot} --run-id ${fixtureRunId}`)
         || !result.stdout.includes(`review: p2a `)
         || !result.stdout.includes(`p2a proposals mine --artifacts ${quotedArtifactRoot} --run-id ${fixtureRunId}`)
       ) {
@@ -4504,7 +4523,10 @@ function validateIterationCurrentFixtureCases() {
       const finishedWithFailedVerificationOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
       if (
         result.status === 0
-        || !finishedWithFailedVerificationOutput.includes('finished run cannot include failed verification')
+        || !(
+          finishedWithFailedVerificationOutput.includes('finished run cannot include failed verification')
+          || finishedWithFailedVerificationOutput.includes('finished run requires at least one executed passed verification')
+        )
       ) {
         console.error(`p2a_runs allowed finished status with failed verification: ${caseData.id}`);
         writeResultOutput(result);
@@ -4544,7 +4566,7 @@ function validateIterationCurrentFixtureCases() {
       const finishedWithManualVerificationOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
       if (
         result.status === 0
-        || !finishedWithManualVerificationOutput.includes('Manual verification records are not sufficient')
+        || !finishedWithManualVerificationOutput.includes('Manual or stale verification records are not sufficient')
       ) {
         console.error(`p2a_runs allowed finished status with manual-only verification: ${caseData.id}`);
         writeResultOutput(result);
@@ -4571,7 +4593,10 @@ function validateIterationCurrentFixtureCases() {
       const finishedWithIncompleteVerificationOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
       if (
         result.status === 0
-        || !finishedWithIncompleteVerificationOutput.includes('finished run cannot include incomplete verification')
+        || !(
+          finishedWithIncompleteVerificationOutput.includes('finished run cannot include incomplete verification')
+          || finishedWithIncompleteVerificationOutput.includes('finished run requires at least one executed passed verification')
+        )
       ) {
         console.error(`p2a_runs allowed finished status with incomplete verification: ${caseData.id}`);
         writeResultOutput(result);
@@ -4819,6 +4844,25 @@ function validateIterationCurrentFixtureCases() {
           ...overrides,
         };
         delete run.failure;
+        const graphPath = path.isAbsolute(run.taskGraphRef) ? run.taskGraphRef : null;
+        if (graphPath && existsSync(graphPath)) {
+          const fixtureRoot = path.dirname(path.dirname(graphPath));
+          const fixtureRunsDir = path.join(fixtureRoot, 'runs');
+          const workspacePath = path.resolve(run.workspacePath);
+          const revision = workspaceRevisionSha256(
+            workspacePath,
+            workspaceRevisionExcludedPathsForRun(fixtureRunsDir, run, {
+              artifactRoot: fixtureRoot,
+              graphPath,
+              workspacePath,
+            }),
+          );
+          run.workspaceRevisionSha256 ??= revision;
+          run.verification = run.verification.map((item) => ({
+            ...item,
+            workspaceRevisionSha256: item.workspaceRevisionSha256 ?? revision,
+          }));
+        }
         return run;
       }
 
@@ -5008,7 +5052,10 @@ function validateIterationCurrentFixtureCases() {
       const incompleteDoneOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
       if (
         result.status === 0
-        || !incompleteDoneOutput.includes(`task-001 cannot be marked done because latest run ${doneGuardRunId} has incomplete verification`)
+        || !(
+          incompleteDoneOutput.includes(`task-001 cannot be marked done because latest run ${doneGuardRunId} has incomplete verification`)
+          || incompleteDoneOutput.includes(`task-001 cannot be marked done because latest run ${doneGuardRunId} has no executed passed verification evidence`)
+        )
       ) {
         console.error(`p2a_tasks allowed done with incomplete verification: ${caseData.id}`);
         writeResultOutput(result);
@@ -5435,8 +5482,6 @@ function validateIterationCurrentFixtureCases() {
       const draftIntakeViewPath = path.join(artifactRoot, 'iterations', 'iter-002', 'gate-a-intake', 'intake.md');
       const draftSpecPath = path.join(artifactRoot, 'iterations', 'iter-002', 'gate-b-spec', 'spec.json');
       const scopeDraft = JSON.parse(readFileSync(draftIntakePath, 'utf8'));
-      const baselineDeltaQuestion = scopeDraft.clarifying_questions
-        .find((item) => item.id === 'CQ-3');
       if (
         existsSync(draftSpecPath)
         || Object.hasOwn(scopeDraft, 'interview')
@@ -5444,7 +5489,8 @@ function validateIterationCurrentFixtureCases() {
         || scopeDraft.baseline_context.reused_answers.length !== 0
         || scopeDraft.baseline_context.reused_question_dispositions.length !== 0
         || scopeDraft.baseline_context.spec_ref !== 'iterations/iter-002/baseline/gate-b-spec/spec.json'
-        || !baselineDeltaQuestion?.question.includes('baseline')
+        || scopeDraft.clarifying_questions.length !== 0
+        || scopeDraft.status !== 'blocked_on_user'
         || existsSync(draftIntakeViewPath)
       ) {
         console.error(`iteration Gate A scope draft did not use the current-contract-only baseline context: ${caseData.id}`);
@@ -5502,6 +5548,17 @@ function validateIterationCurrentFixtureCases() {
       }
       const draftSpec = JSON.parse(readFileSync(draftSpecPath, 'utf8'));
       const draftIntake = JSON.parse(readFileSync(draftIntakePath, 'utf8'));
+      const baselineContract = JSON.parse(readFileSync(
+        path.join(
+          artifactRoot,
+          'iterations',
+          'iter-002',
+          'baseline',
+          'current-development-contract.json',
+        ),
+        'utf8',
+      ));
+      const baselineImplementation = baselineContract.iterationConstraints;
       if (
         !draftSpec.reference_reconnaissance
         || !draftSpec.reference_reconnaissance.candidates?.some((candidate) => candidate.candidate_id === 'REF-1')
@@ -5513,12 +5570,15 @@ function validateIterationCurrentFixtureCases() {
       }
       if (
         !draftSpec.product.target_users.some((item) => item.includes(DISCOVERY_FIXTURE_DECISION_ANSWER))
-        || !draftSpec.product.success_criteria.some((item) => item.includes(DISCOVERY_FIXTURE_ANSWERS['CQ-1']))
         || !draftSpec.product.success_criteria.some((item) => item.includes(DISCOVERY_FIXTURE_DECISION_ANSWER))
-        || !draftSpec.product.goals.some((item) => item.includes(DISCOVERY_FIXTURE_ANSWERS['CQ-2']))
-        || !draftSpec.product.external_integrations.some((item) => item.includes(DISCOVERY_FIXTURE_ANSWERS['CQ-3']))
-        || !draftSpec.implementation.verification.some((item) => item.includes(DISCOVERY_FIXTURE_ANSWERS['CQ-1']))
-        || !draftSpec.implementation.interfaces.some((item) => item.includes(DISCOVERY_FIXTURE_ANSWERS['CQ-3']))
+        || !draftSpec.product.goals.some((item) => item.includes(scopeDraft.idea))
+        || !draftSpec.product.core_flows.some((item) => item.includes(scopeDraft.idea))
+        || !draftSpec.product.screens_or_interfaces.some((item) => item.includes(scopeDraft.idea))
+        || !draftSpec.implementation.verification.some((item) => item.includes(scopeDraft.idea))
+        || draftSpec.product.external_integrations.length !== 0
+        || JSON.stringify(draftSpec.implementation.architecture) !== JSON.stringify(baselineImplementation.architecture)
+        || JSON.stringify(draftSpec.implementation.interfaces) !== JSON.stringify(baselineImplementation.interfaces)
+        || JSON.stringify(draftSpec.implementation.dependencies) !== JSON.stringify(baselineImplementation.dependencies)
       ) {
         console.error(`iteration Gate B draft dropped approved Gate A scope content: ${caseData.id}`);
         console.error(JSON.stringify({ product: draftSpec.product, implementation: draftSpec.implementation }, null, 2));
@@ -8415,6 +8475,26 @@ function validateIterationCurrentFixtureCases() {
         return { status: failureStatus(result), checks };
       }
 
+      for (const portableRunId of [unfinishedGraphRunId, legacyV1UnfinishedRunId]) {
+        result = runTargetRuns(iterationTargetRoot, [
+          'verify',
+          '--runs',
+          path.join(iterationTargetArtifactRoot, 'runs'),
+          '--run-id',
+          portableRunId,
+          '--workspace',
+          iterationTargetRoot,
+          '--verify-command',
+          'custom:node --version',
+        ]);
+        checks += 1;
+        if (result.status !== 0) {
+          console.error(`iteration handoff unfinished run could not record current target verification: ${caseData.id}`);
+          writeResultOutput(result);
+          return { status: failureStatus(result), checks };
+        }
+      }
+
       result = runTargetRuns(iterationTargetRoot, [
         'finish',
         '--runs',
@@ -9060,7 +9140,7 @@ function runNodeTestFile(testFile) {
 }
 
 function countNodeTestCases(stdout) {
-  const match = stdout.match(/^# tests (\d+)$/m);
+  const match = stdout.match(/^(?:#|ℹ) tests (\d+)$/m);
   return match ? Number(match[1]) : 0;
 }
 

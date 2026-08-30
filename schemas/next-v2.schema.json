@@ -61,6 +61,19 @@
           "properties": {
             "kind": { "const": "approval" },
             "display": { "type": "string", "minLength": 1 },
+            "argv": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "quotePlaceholder": { "const": "<user-utterance>" },
+            "decisionSummary": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 8,
+              "items": { "type": "string", "minLength": 1 },
+              "uniqueItems": true
+            },
             "options": {
               "type": "array",
               "minItems": 3,
@@ -202,7 +215,17 @@
               ],
               "items": false
             }
-          }
+          },
+          "allOf": [
+            {
+              "if": { "required": ["argv"] },
+              "then": { "required": ["quotePlaceholder", "decisionSummary"] }
+            },
+            {
+              "if": { "required": ["quotePlaceholder"] },
+              "then": { "required": ["argv"] }
+            }
+          ]
         }
       ]
     },
@@ -352,6 +375,8 @@
       "enum": [
         "uninitialized",
         "entry_invalid",
+        "entry_deferred",
+        "blocked_scope_replacement_ready",
         "gate_what",
         "entry_missing",
         "incomplete_iteration_layout",
@@ -366,6 +391,7 @@
         "gate_a_needs_approval",
         "invalid_gate_b",
         "started_run_contract_drift",
+        "gate_b_needs_decisions",
         "gate_b_needs_approval",
         "gate_b_approved_needs_spec_promotion",
         "gate_b_approved_needs_execution_prepare",
@@ -378,6 +404,7 @@
         "tasks_blocked",
         "final_visual_review_required",
         "final_acceptance_review_required",
+        "relevant_verification_required",
         "final_verification_required",
         "iteration_review_or_close_required",
         "flat_execution_complete",

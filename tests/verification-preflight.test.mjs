@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import {
+  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -18,6 +19,7 @@ import {
   EXECUTE_CLI,
   FIXTURE_ROOT,
   RUNS_CLI,
+  TASKS_CLI,
 } from './helpers/fixtures.mjs';
 
 const ALLOWED_TYPE_GUIDANCE = /Allowed types: test, lint, typecheck, custom\./;
@@ -180,6 +182,25 @@ test('p2a runs verify rejects malformed specs before changing run evidence', asy
   }
 });
 
+test('an unconfigured optional verification flag records no skipped evidence', () => {
+  const fixture = directRunFixture('unconfigured-optional');
+  try {
+    const before = readFileSync(fixture.runPath, 'utf8');
+    const result = runCli(RUNS_CLI, [
+      'verify',
+      '--runs', fixture.runsDir,
+      '--run-id', fixture.runId,
+      '--lint',
+    ], fixture.workspace);
+    assert.notEqual(result.status, 0);
+    assert.match(commandOutput(result), /lint verification was requested but no lint command is configured/);
+    assert.match(commandOutput(result), /no evidence was recorded/);
+    assert.equal(readFileSync(fixture.runPath, 'utf8'), before);
+  } finally {
+    rmSync(fixture.workspace, { recursive: true, force: true });
+  }
+});
+
 test('p2a runs verify preflights a mixed list before executing its first command', () => {
   const fixture = directRunFixture('mixed-list');
   const markerPath = path.join(fixture.workspace, 'first-command-ran');
@@ -313,19 +334,31 @@ test('valid custom build and configured test, lint, and typecheck flags remain s
   });
 });
 
-test('executed failed and unavailable supplemental evidence remains immutable', async (t) => {
+test('latest same-command attempt decides while prior failed and unavailable evidence is preserved', async (t) => {
   const cases = [
     {
       label: 'failed',
-      command: `custom:${JSON.stringify(process.execPath)} -e "process.exit(7)"`,
+      command(fixture) {
+        const marker = path.join(fixture.projectRoot, 'verification-ready');
+        const script = `process.exit(require('node:fs').existsSync(${JSON.stringify(marker)}) ? 0 : 7)`;
+        return `custom:${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}`;
+      },
+      recover(fixture) {
+        writeFileSync(path.join(fixture.projectRoot, 'verification-ready'), 'ready\n');
+      },
       expectedStatus: 'failed',
-      finishError: /finished run cannot include failed verification/,
     },
     {
       label: 'unavailable',
-      command: 'custom:p2a-definitely-missing-command-issue168',
+      command(fixture) {
+        return `custom:${JSON.stringify(path.join(fixture.projectRoot, 'verification-later'))}`;
+      },
+      recover(fixture) {
+        const executable = path.join(fixture.projectRoot, 'verification-later');
+        writeFileSync(executable, '#!/bin/sh\nexit 0\n');
+        chmodSync(executable, 0o755);
+      },
       expectedStatus: 'unavailable',
-      finishError: /finished run cannot include incomplete verification/,
     },
   ];
 
@@ -333,21 +366,23 @@ test('executed failed and unavailable supplemental evidence remains immutable', 
     await t.test(caseData.label, () => {
       const fixture = executeRunFixture();
       try {
+        const verificationCommand = caseData.command(fixture);
         let result = runCli(RUNS_CLI, [
           'verify',
           '--graph', fixture.graphPath,
           '--run-id', fixture.runId,
-          '--verify-command', caseData.command,
+          '--verify-command', verificationCommand,
         ], fixture.projectRoot);
         assert.notEqual(result.status, 0);
         const failedEvidence = JSON.parse(readFileSync(fixture.runPath, 'utf8')).verification[0];
         assert.equal(failedEvidence.status, caseData.expectedStatus);
 
+        caseData.recover(fixture);
         result = runCli(RUNS_CLI, [
           'verify',
           '--graph', fixture.graphPath,
           '--run-id', fixture.runId,
-          '--verify-command', `custom:${JSON.stringify(process.execPath)} -e "process.exit(0)"`,
+          '--verify-command', verificationCommand,
         ], fixture.projectRoot);
         assert.equal(result.status, 0, commandOutput(result));
 
@@ -357,15 +392,143 @@ test('executed failed and unavailable supplemental evidence remains immutable', 
           '--run-id', fixture.runId,
           '--status', 'finished',
         ], fixture.projectRoot);
-        assert.notEqual(result.status, 0);
-        assert.match(commandOutput(result), caseData.finishError);
+        assert.equal(result.status, 0, commandOutput(result));
         const run = JSON.parse(readFileSync(fixture.runPath, 'utf8'));
-        assert.equal(run.status, 'started');
+        assert.equal(run.status, 'finished');
         assert.deepEqual(run.verification[0], failedEvidence);
         assert.equal(run.verification[1]?.status, 'passed');
       } finally {
         rmSync(fixture.workspace, { recursive: true, force: true });
       }
     });
+  }
+});
+
+test('a different successful command does not supersede an unresolved failed attempt on the current revision', () => {
+  const fixture = executeRunFixture();
+  try {
+    let result = runCli(RUNS_CLI, [
+      'verify',
+      '--graph', fixture.graphPath,
+      '--run-id', fixture.runId,
+      '--verify-command', `custom:${JSON.stringify(process.execPath)} -e "process.exit(7)"`,
+    ], fixture.projectRoot);
+    assert.notEqual(result.status, 0);
+
+    result = runCli(RUNS_CLI, [
+      'verify',
+      '--graph', fixture.graphPath,
+      '--run-id', fixture.runId,
+      '--verify-command', `custom:${JSON.stringify(process.execPath)} -e "process.exit(0)"`,
+    ], fixture.projectRoot);
+    assert.equal(result.status, 0, commandOutput(result));
+
+    result = runCli(RUNS_CLI, [
+      'finish',
+      '--graph', fixture.graphPath,
+      '--run-id', fixture.runId,
+      '--status', 'finished',
+    ], fixture.projectRoot);
+    assert.notEqual(result.status, 0);
+    assert.match(commandOutput(result), /unresolved latest verification failure/);
+  } finally {
+    rmSync(fixture.workspace, { recursive: true, force: true });
+  }
+});
+
+test('low-level finish and task done prefer workspace config and enforce every configured current check', () => {
+  const fixture = executeRunFixture();
+  try {
+    const configPath = path.join(fixture.projectRoot, '.plan2agent', 'project.config.json');
+    mkdirSync(path.dirname(configPath), { recursive: true });
+    const passingCommand = `${JSON.stringify(process.execPath)} -e "process.exit(0)"`;
+    writeFileSync(configPath, `${JSON.stringify({
+      testCommand: passingCommand,
+      lintCommand: passingCommand,
+    }, null, 2)}\n`, 'utf8');
+    writeFileSync(path.join(fixture.projectRoot, 'project.config.json'), `${JSON.stringify({
+      testCommand: passingCommand,
+    }, null, 2)}\n`, 'utf8');
+
+    let result = runCli(RUNS_CLI, [
+      'verify',
+      '--graph', fixture.graphPath,
+      '--run-id', fixture.runId,
+      '--test',
+    ], fixture.projectRoot);
+    assert.equal(result.status, 0, commandOutput(result));
+    result = runCli(RUNS_CLI, [
+      'finish',
+      '--graph', fixture.graphPath,
+      '--run-id', fixture.runId,
+      '--status', 'finished',
+    ], fixture.projectRoot);
+    assert.notEqual(result.status, 0);
+    assert.match(commandOutput(result), /lint:.*missing required verification|missing required verification.*lint:/s);
+    assert.equal(JSON.parse(readFileSync(fixture.runPath, 'utf8')).status, 'started');
+
+    result = runCli(RUNS_CLI, [
+      'verify',
+      '--graph', fixture.graphPath,
+      '--run-id', fixture.runId,
+      '--lint',
+    ], fixture.projectRoot);
+    assert.equal(result.status, 0, commandOutput(result));
+    result = runCli(RUNS_CLI, [
+      'finish',
+      '--graph', fixture.graphPath,
+      '--run-id', fixture.runId,
+      '--status', 'finished',
+    ], fixture.projectRoot);
+    assert.equal(result.status, 0, commandOutput(result));
+
+    const finishedRun = JSON.parse(readFileSync(fixture.runPath, 'utf8'));
+    finishedRun.verification = finishedRun.verification.filter((item) => item.type !== 'lint');
+    writeFileSync(fixture.runPath, `${JSON.stringify(finishedRun, null, 2)}\n`, 'utf8');
+    result = runCli(TASKS_CLI, [
+      'done',
+      '--graph', fixture.graphPath,
+      'task-001',
+    ], fixture.projectRoot);
+    assert.notEqual(result.status, 0);
+    assert.match(commandOutput(result), /missing required verification.*lint:/s);
+  } finally {
+    rmSync(fixture.workspace, { recursive: true, force: true });
+  }
+});
+
+test('task done recomputes the current workspace revision instead of trusting the sealed run hash', () => {
+  const fixture = executeRunFixture();
+  try {
+    const configPath = path.join(fixture.projectRoot, '.plan2agent', 'project.config.json');
+    mkdirSync(path.dirname(configPath), { recursive: true });
+    writeFileSync(configPath, `${JSON.stringify({
+      testCommand: `${JSON.stringify(process.execPath)} -e "process.exit(0)"`,
+    }, null, 2)}\n`, 'utf8');
+    let result = runCli(RUNS_CLI, [
+      'verify',
+      '--graph', fixture.graphPath,
+      '--run-id', fixture.runId,
+      '--test',
+    ], fixture.projectRoot);
+    assert.equal(result.status, 0, commandOutput(result));
+    result = runCli(RUNS_CLI, [
+      'finish',
+      '--graph', fixture.graphPath,
+      '--run-id', fixture.runId,
+      '--status', 'finished',
+    ], fixture.projectRoot);
+    assert.equal(result.status, 0, commandOutput(result));
+
+    writeFileSync(path.join(fixture.projectRoot, 'changed-after-finish.js'), 'export const stale = true;\n', 'utf8');
+    result = runCli(TASKS_CLI, [
+      'done',
+      '--graph', fixture.graphPath,
+      'task-001',
+    ], fixture.projectRoot);
+    assert.notEqual(result.status, 0);
+    assert.match(commandOutput(result), /verification evidence is stale for the current workspace/);
+  } finally {
+    rmSync(fixture.workspace, { recursive: true, force: true });
   }
 });

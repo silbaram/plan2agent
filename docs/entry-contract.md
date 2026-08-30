@@ -1,20 +1,20 @@
 # Plan2Agent 진입 계약
 
-이 문서는 한 문장 명령 대신 사용자가 작성했거나 Feature Radar가 전달한 짧은 아이디어 문서를 Plan2Agent 기획 흐름의 주 입력으로 연결하는 계약을 정의한다. 진입 문서는 “무엇을 만들 것인가”를 전달하는 원문이며, Gate A-C 산출물이나 승인 기록을 대신하지 않는다.
+이 문서는 사용자의 한 문장 아이디어, 직접 작성한 문서, 또는 Feature Radar 문서를 Plan2Agent 기획 흐름의 주 입력으로 연결하는 계약을 정의한다. `p2a next --idea`는 대화의 아이디어를 durable provisional entry로 먼저 저장하며, 진입 자료 자체는 Gate A-C 산출물이나 승인 기록을 대신하지 않는다.
 
 문서 홈: [Plan2Agent Docs](README.md) · 게이트 규칙 정본: [`p2a-harness` skill](../.agents/skills/p2a-harness/SKILL.md)
 
 ## 1. 원칙
 
-- 사용자가 직접 쓴 한 문단 Markdown 또는 일반 텍스트만으로 시작할 수 있다.
+- 사용자가 직접 쓴 한 문단 Markdown/일반 텍스트 또는 `p2a next --idea "<아이디어>"`로 시작할 수 있다.
 - Feature Radar 사용은 선택 사항이다. Radar 없이도 같은 검증과 확인 흐름을 거친다.
 - 원문은 미리 정해진 템플릿, JSON, 요약문, 완성된 요구사항 목록일 필요가 없다.
 - 부족하지만 추론 가능한 내용은 확인 대화에서 보완한다. 원문을 자동으로 다시 쓰거나 원문보다 합성 요약을 우선하지 않는다.
-- 진입 문서는 Gate A 입력이다. 명시적 범위 확인, 신규 프로젝트의 Gate ② constitution 승인, Gate B 승인, 승인된 spec의 downstream 차단 규칙을 우회하지 않는다.
+- 진입 자료는 Gate A 입력이다. 명시적 범위 확인, 필요한 경우의 Gate ② constitution 승인, Gate B 승인, 승인된 spec의 downstream 차단 규칙을 우회하지 않는다.
 
 ## 2. 최소 문서 계약
 
-`p2a validate --entry <path>`는 다음을 오류로 검사한다.
+`--idea`는 정규화한 본문의 SHA-256으로 `.plan2agent/entries/idea-<digest>.md`를 원자적으로 만들고 같은 아이디어에는 같은 파일을 재사용한다. 같은 문구를 다시 명시하면 파일 경로는 유지하되 새 요청으로 갱신하므로, 이전 iteration에서 쓴 문구도 다음 iteration 아이디어로 다시 선택할 수 있다. 아직 시작하지 않은 요청이 여럿이면 가장 최근에 명시한 요청을 기본 재개하고, 나머지는 보존해 `--entry`로 다시 선택할 수 있다. 그 뒤 `p2a validate --entry <path>`와 동일하게 다음을 검사한다.
 
 1. 경로가 존재하는 일반 파일이어야 한다.
 2. 확장자는 Markdown 또는 텍스트여야 한다: 확장자 없음, `.md`, `.markdown`, `.txt`, `.text`.
@@ -123,20 +123,20 @@ manifest가 없거나 위 정보가 불완전하거나 `source_complete: false`�
 
 | Radar 모드 | p2a 진입 |
 | --- | --- |
-| idea research | Gate A 범위 확인 → Gate ② constitution 승인 → Gate B 명세 승인 → 실행 |
-| existing project | Gate A 범위 확인 → 기존 `constitution.json` 재사용(없으면 legacy `style.md` 호환) → Gate B 명세 승인 → 실행 |
+| idea research | Gate A 범위 확인 → 필요할 때만 Gate ② constitution 승인 → Gate B 명세 승인 → 실행 |
+| existing project | Gate A 범위 확인 → 기존 `constitution.json` 재사용 또는 repository convention을 advisory로 사용 → Gate B 명세 승인 → 실행 |
 
-`constitution.json`은 `.plan2agent/constitution.json`에 한 번 승인해 반복해서 사용한다. 현재 Gate A 변경이 아키텍처·기반 스택·프로젝트 금지 규칙·스타일 정책을 실질적으로 바꾸는 경우에만 Gate ②를 다시 연다.
+`constitution.json`이 있으면 `.plan2agent/constitution.json`의 승인을 반복해서 사용한다. 없으면 repository evidence의 일반 규칙을 advisory로 Gate B에 포함한다. 되돌리기 어려운 stack/architecture 선택 또는 hard prohibition이 필요할 때만 Gate ②를 새로 열거나 다시 연다.
 
 ## 5. CLI 상태 계약
 
 ### `p2a next`
 
-하네스는 설치되었지만 artifact root가 없고 `--entry`도 전달되지 않으면 먼저 진입 문서를 만들거나 선택하도록 안내한다.
+하네스는 설치되었지만 artifact root가 없고 진입 자료도 전달되지 않으면 아이디어를 직접 전달하거나 문서를 선택하도록 안내한다.
 
 - `state: entry_missing`
 - `command.kind: approval`
-- 다음 행동: Markdown 또는 text 문서를 만들거나 선택한 뒤 `p2a next --entry <path>` 실행
+- 다음 행동: `p2a next --idea "<무엇을 만들지>"` 또는 `p2a next --entry <path>` 실행
 
 선택된 진입 문서가 없거나 비어 있거나 지원하지 않는 형식이라 검증에 실패하고 재개할 canonical 상태도 없으면 다음 상태를 반환한다.
 
@@ -150,13 +150,14 @@ manifest가 없거나 위 정보가 불완전하거나 `source_complete: false`�
 - `command.kind: skill`
 - 다음 행동: `/p2a-harness --entry "<path>"`로 범위 확인
 
+이미 저장된 범위 문서에 답하지 않은 중요한 질문이 남아 있는 경우에도 `gate_what`으로 돌아가 질문부터 이어간다. 초안 개발 계획의 `open_decisions`가 남아 있으면 `gate_b_needs_decisions`와 `p2a-spec`으로 돌아가 결정을 반영한다. 두 경우 모두 미결 내용을 승인 요청으로 우회하지 않는다.
+
 기존 Gate 상태가 있으면 진입 문서 오류보다 canonical 재개 경로가 우선한다.
 
-Gate A가 승인되었지만 신규 프로젝트에 constitution이 없거나 draft이면 다음 상태를 반환한다.
+Gate A가 승인되고 material constitution draft가 존재하지만 아직 승인되지 않았으면 다음 상태를 반환한다.
 
 - `state: shape`
-- constitution이 없으면 `command.kind: skill`로 `p2a-harness` Gate ② 제안을 진행한다.
-- draft가 있으면 `command.kind: approval`로 검토 후 `p2a shape approve --quote "<사용자 발화>"`를 안내한다.
+- `command.kind: approval`로 검토 후 `p2a shape approve --quote "<사용자 발화>"`를 안내한다.
 
 승인된 constitution은 이후 반복 iteration에서 재사용한다. 기존 `style.md`만 가진 legacy 프로젝트는 migration 없이 기존 Gate B·실행 흐름을 계속할 수 있으며, 선택적으로 `p2a shape migrate-style`을 실행해 승인 전 draft를 만들 수 있다.
 
@@ -174,12 +175,12 @@ artifact root에 `decisions.jsonl`이 있으면 `p2a next`는 Gate ①·② 승�
 
 1. 하네스는 원문과 Radar manifest가 있으면 출처를 읽는다.
 2. 무엇을 만들지, 대상 사용자, 기대 결과, 포함/제외 범위, 하드 제약, 중요한 가정을 짧게 요약한다.
-3. 안전하게 추론할 수 없고 범위를 실질적으로 바꾸는 내용만 묻는다. 이 경로에는 고정 질문 수나 라운드 제한이 없으며, 확인 가능한 즉시 질문을 멈춘다.
+3. 안전하게 추론할 수 없고 범위를 실질적으로 바꾸는 내용만 묻는다. 이 경로에는 고정 질문 수나 라운드 제한이 없으며, 확인 가능한 즉시 질문을 멈춘다. 사용자에게는 질문 문장을 평이하게 제시하고 `CQ-n`/`ND-n` 식별자는 내부 정본 추적에만 사용한다.
 4. 수정된 범위를 다시 제시하고 사용자의 명시적 확인을 요청한다. 침묵, 원문 존재, “개발해” 같은 포괄 지시는 승인이 아니다.
 5. Radar 추천은 승격된 각 후보를 `selected`, `rejected`, `deferred` 중 하나로 처분하고 이유를 기록한다.
-6. 확인 후에만 `p2a decide --quote "<사용자 발화>" --entry <원본-entry> --artifacts <artifact-root>`를 실행한다. 이 명령은 원본 entry를 다시 검증하고 sibling reference bundle이 있으면 일치하는 snapshot을 요구한 뒤, 같은 `p2a.intake.v1` canonical intake를 `ready_for_spec`으로 바꾸고 Gate A 결정을 `decisions.jsonl`에 append하며 `approval_audit` 호환 사본도 함께 기록한다. 신규 프로젝트는 Gate ②를 승인하거나 기존 승인을 재사용한 뒤 Gate B 흐름을 계속한다.
+6. 확인 후에만 `p2a decide --quote "<사용자 발화>" --entry <원본-entry> --artifacts <artifact-root>`를 실행한다. 이 명령은 원본 entry를 다시 검증하고 sibling reference bundle이 있으면 일치하는 snapshot을 요구한 뒤, 같은 `p2a.intake.v1` canonical intake를 `ready_for_spec`으로 바꾸고 Gate A 결정을 `decisions.jsonl`에 append하며 `approval_audit` 호환 사본도 함께 기록한다. 기존 constitution을 재사용하고, material Gate ② 결정이 있을 때만 별도 승인한 뒤 Gate B로 간다.
 
-새 하네스는 `--entry`가 가리키는 문서에서 시작한다. 문서가 없으면 먼저 Markdown 또는 text entry를 작성해야 하며, 채팅 입력만으로 별도 기획 상태를 시작하지 않는다. Gate A 확인 전 Gate B를 만들 수 없고, Gate B 승인과 open decision 해소 전 Gate C로 진행할 수 없다.
+새 하네스는 `--entry` 문서 또는 `--idea`가 만든 provisional entry에서 시작한다. 채팅 자체는 정본이 아니며 실행 owner가 사용자 아이디어를 `--idea`로 snapshot한다. Gate A 확인 전 Gate B를 만들 수 없고, Gate B 승인과 open decision 해소 전 Gate C로 진행할 수 없다.
 
 ## 7. 호환성 경계
 
@@ -224,8 +225,7 @@ p2a doctor --json
 저장소 수준 회귀 검증은 다음 명령을 모두 통과해야 한다.
 
 ```bash
+npm run test:all
 node scripts/sync_cli_assets.mjs
 node scripts/check_cli_parity.mjs
-node scripts/run_fixtures.mjs
-node --test tests/
 ```

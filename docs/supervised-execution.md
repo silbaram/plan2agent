@@ -24,7 +24,7 @@ Plan2Agent는 승인된 Gate B에서 `executionEnvelope`를 파생해 실행 AI�
 | Hermes proposal loop | `p2a proposals mine/review/curate/draft-patch/approve-draft/digest` |
 | provider-native guide | Codex, Claude, Gemini용 role prompt와 capability evidence |
 
-이 실행 계층은 범용 background scheduler가 아니다. 승인된 envelope 안의 start/resume/검증/필수 review는 task별 추가 승인을 요구하지 않지만 iteration close는 별도 사용자 선택을 요구한다. 모든 task와 필수 review가 끝나면 `iteration_review_or_close_required`가 제품 review, P2A retrospective, close 옵션을 반환한다. Retrospective는 현재 iteration의 기본 process 신호와 설정된 성능 후보를 보고하고, 후보가 없으면 사용자 체감 P2A 마찰을 한 번만 묻는다. 별도 승인 뒤에는 반환된 경로에 최소 회고 보고서만 쓰며 proposal 저장은 다시 별도 승인이다. 회고를 건너뛰어도 close를 막지 않는다. Review finding은 반환된 remediation template으로 owning done task를 reopen하고 정상 run lifecycle로 수정하며, 깨끗한 리뷰나 회고 완료도 같은 선택 상태로 돌아온다. Close는 사용자가 close 옵션을 명시적으로 선택한 경우에만 실행한다. 마지막 maintenance task 완료는 같은 세 선택을 출력하지만 지속 상태를 추가하지 않는다. Codex workspace-write 또는 Claude scaffold/OS confinement 안에서 실행 AI가 같은 session의 구현 loop를 계속 소유하며, 외부 write·비용·credential·배포·불가역 동작만 별도 사용자 authorization을 요구한다.
+이 실행 계층은 범용 background scheduler가 아니다. 승인된 envelope 안의 start/resume/검증/필수 review는 task별 추가 승인을 요구하지 않지만 iteration close는 별도 사용자 선택을 요구한다. 모든 task와 필수 review가 끝나면 `iteration_review_or_close_required`가 제품 review, P2A retrospective, close 옵션을 반환한다. Retrospective는 현재 iteration의 기본 process 신호와 설정된 성능 후보를 보고하고, 후보가 없으면 사용자 체감 P2A 마찰을 한 번만 묻는다. 별도 승인 뒤에는 반환된 경로에 최소 회고 보고서만 쓰며 proposal 저장은 다시 별도 승인이다. 회고를 건너뛰어도 close를 막지 않는다. Review finding은 반환된 remediation template으로 owning done task를 reopen하고 정상 run lifecycle로 수정한다. 깨끗한 리뷰는 같은 메뉴를 다시 표시하지 않고 종료할지 한 번 묻고, 회고 완료나 건너뛰기는 close 선택을 계속 열어 둔다. Close는 사용자가 close 옵션을 명시적으로 선택한 경우에만 실행한다. 마지막 maintenance task 완료는 같은 세 선택을 출력하지만 지속 상태를 추가하지 않는다. Codex workspace-write 또는 Claude scaffold/OS confinement 안에서 실행 AI가 같은 session의 구현 loop를 계속 소유하며, 외부 write·비용·credential·배포·불가역 동작만 별도 사용자 authorization을 요구한다.
 
 Direct와 일반 단일-owner Planned 실행은 현재 foreground owner가 현재 workspace에서 직접 수행하고 `runTracking.defaultIsolation`을 따른다. 기본 격리는 `none`이며, 별도 implementer·worktree·병렬 owner는 Orchestrated/batch, 명시 정책, 동시 write owner 또는 구체적인 격리·rollback 위험이 있을 때만 사용한다.
 
@@ -156,7 +156,7 @@ p2a execute start \
 
 4. 사람이 foreground agent 세션에서 prompt를 실행하고 결과를 확인한다.
 
-   Planned run은 각 결과 뒤 선언된 checkpoint를 순서대로 실행한다. `p2a execute resume`은 다음 pending checkpoint를 출력한다. 단, checkpoint가 `failed` 또는 `unavailable` evidence를 남기면 같은 run에서 해당 milestone을 다시 실행하지 않는다. 그 run을 failed/blocked로 닫고 새 retry run을 시작하며, resume도 다음 checkpoint 대신 이 복구 요구사항을 출력한다.
+   Planned run은 각 결과 뒤 선언된 checkpoint를 순서대로 실행한다. `p2a execute resume`은 다음 pending checkpoint를 출력한다. Checkpoint가 `failed` 또는 `unavailable`이면 attempt를 append-only evidence로 보존하고, 문제를 고친 뒤 같은 started run에서 같은 milestone을 다시 실행한다. 현재 revision에서 선언된 각 command의 최신 attempt가 모두 통과해야 milestone이 verified가 된다.
 
    Start가 기록한 task contract와 Gate B execution envelope는 run이 열린 동안에도 고정된다. `resume`, `verify`, `checkpoint`는 새 실행 증거를 만들기 전에 현재 Gate B/Gate C 원본을 다시 검증하며, command verification은 열린 run에서만 실행한다. 원본이 바뀌거나 사라졌다면 실행을 계속하지 않으며, `p2a next`는 실패할 resume 대신 `started_run_contract_drift`를 반환한다. 변경이 실수라면 기록된 원본을 복원하고, 의도된 계약 변경이라면 기존 run을 structured failed/blocked evidence로 닫은 뒤 변경 계약을 승인하고 새 run을 시작한다.
 
@@ -172,7 +172,7 @@ p2a runs checkpoint --artifacts .plan2agent/artifacts/<project> \
 
    비UI iteration은 기본 `reviewPasses.acceptance: opt_in`에서 독립 acceptance run을 자동으로 만들지 않는다. 사용자가 요청해 `p2a execute accept --artifacts <root> --agent-tool <reviewer>`를 시작했거나 정책이 `on`이면 baseline에 이미 있던 동작을 제외한 현재 반복의 Gate B `product.core_flows`와 `product.success_criteria`를 계약으로 고정한 `final_acceptance_review` run을 canonical workspace, isolation 없음, 변경 파일 없음으로 연다. Owner가 각 동작을 `p2a runs verify --verify-command 'custom:<command>'`로 실제 실행하고, read-only `p2a-acceptance-reviewer`가 run verification과 일치하는 `command`·`source: command|config`·정수 `exitCode`·`stdoutTail`을 `.acceptance-review.json`에 기록한다. exit 0이어도 출력이 비어 있거나 의미 없는 결과면 `block`이다. 일단 시작한 review는 모든 기준이 실제 동작으로 확인된 `confirm_behavior`로 끝나야 하며 exact sidecar hash와 canonical workspace revision을 봉인한다. 이후 workspace 변경은 새 acceptance review를 요구한다.
 
-   모든 task가 done이지만 visual/acceptance final run이 필요하지 않거나 그 run에 full 검증이 없으면 `p2a next`는 `p2a execute verify-final --artifacts <root>`을 안내한다. 이 canonical no-change run에서 configured full test/lint/typecheck를 한 번 실행하고 finish한다. `related` 검증은 구현 중 빠른 피드백에만 쓰며 close-ready를 충족하지 않는다. Full evidence는 run과 각 verification item에 기록된 같은 `workspaceRevisionSha256`에서만 재사용되고 이후 source 변경 시 stale 처리된다.
+   모든 task가 done이면 `p2a next`와 close-ready validator가 같은 verification profile을 사용한다. Docs/metadata는 현재 문서 revision의 관련 실행 증거를 사용한다. 단일 canonical isolated-code task는 현재 `productRevisionSha256`과 맞는 implementation full evidence를 재사용한다. 유효한 product full 뒤 문서만 바뀌면 `p2a execute verify-final --scope relevant --artifacts <root>`로 현재 workspace의 related evidence만 추가하고 제품 full은 유지한다. 다중 product task, worktree 통합, high-risk 경로 또는 검증 후 제품 코드 변경은 `p2a execute verify-final --artifacts <root>`의 canonical no-change full run을 요구한다.
 
 6. 검증과 finish:
 

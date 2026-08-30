@@ -8,8 +8,8 @@
 
 [English](README.md) | [한국어](README.ko-KR.md)
 
-짧은 제품 문서를 사용자가 확인한 제품 이해, 승인된 명세, 의존성 기반 task,
-검증된 AI 코딩 실행으로 바꿉니다.
+원하는 결과를 자연어로 설명하면 중요한 결정만 확인하고, 기획·개발·복구·검증의 다음
+행동을 안내하는 개발 비서로 사용합니다.
 
 ## 30초 만에 설치하기
 
@@ -27,38 +27,34 @@ p2a next
 
 ## 5분 안에 첫 계획 만들기
 
-초기화한 뒤 한 문단 정도의 Markdown 또는 text 진입 문서를 작성합니다. 완성된
-요구사항 문서일 필요는 없지만, 새 하네스는 채팅 문장만으로 시작하지 않습니다.
-`p2a next --entry <path>` 또는 같은 경로를 받은 기획 하네스로 시작합니다.
+초기화한 뒤 `p2a next --idea "<무엇을 만들지>"`로 한 문장 아이디어를 전달하거나
+`p2a next --entry <path>`로 짧은 Markdown/text 문서를 선택합니다. `--idea`는 요청을 안정적인
+로컬 파일로 저장하므로 채팅만 요구사항 정본으로 남지 않습니다.
 
 | Agent | 예시 |
 | --- | --- |
-| Codex | `Use the $p2a-harness skill with --entry docs/idea.md.` |
-| Claude Code | `/p2a-harness --entry docs/idea.md` |
-| Gemini CLI | `/p2a:harness --entry docs/idea.md` |
+| Codex | `p2a next --idea "릴리즈 상태 추가"` 후 `$p2a-harness` 사용 |
+| Claude Code | `p2a next --idea "릴리즈 상태 추가"` 후 `/p2a-harness` |
+| Gemini CLI | `p2a next --entry docs/idea.md` 후 `/p2a:harness` |
 
-하네스는 문서 전체에서 대상 사용자, 기대 결과, 포함·제외 범위, 제약과 가정을 짧게
-정리합니다. 범위를 실질적으로 바꾸면서 안전하게 추론할 수 없는 내용만 물으며 고정
-질문 수나 대화 turn 제한은 없습니다. 사용자가 해석된 범위를 명시적으로 확인해야
-Gate A 승인 기록이 만들어집니다.
-
-전체 workflow는 불명확한 요구사항을 곧바로 코드로 바꾸지 않고 명시적인 검토 Gate마다
-멈춥니다.
+P2A는 먼저 이해한 목표, 최소 변경 범위, 유지할 동작을 짧게 설명합니다. 제품 결과를
+실질적으로 바꾸면서 안전하게 추론할 수 없는 내용만 묻고, 범위와 구현 계획을 각각 한 번
+확인한 뒤 개발을 이어갑니다.
 
 ```text
-짧은 Markdown 또는 text 진입 문서
-  -> Gate A: 문서 범위 확인과 사용자의 명시적 승인
-  -> Gate ②: 프로젝트 constitution 승인
-  -> Gate B: 제품 명세와 구현 계획
-  -> Gate C: 실행 준비 검증(Direct, Planned 또는 의존성 기반 Orchestrated)
-  -> 감독형 구현과 검증
-  -> 평가와 개선 proposal
+자연어 요청
+  -> 이해 요약과 꼭 필요한 질문
+  -> 개발 범위 확인
+  -> 구현 계획 확인
+  -> 구현, 자동 복구, 변경 위험에 맞는 검증
+  -> 종료 권장 또는 선택적 코드 리뷰·회고
 ```
 
-Gate A 이해 확인, Gate ② constitution, Gate B 명세 승인은 각각 명시적 결정입니다.
-Gate ① 범위·명세 승인은 `p2a decide --quote "<사용자 발화>"`, Gate ② 승인은
-`p2a shape approve --quote "<사용자 발화>"`로 기록합니다. 두 명령은 기존 JSON
-`approval_audit` 사본과 함께 append-only `decisions.jsonl` 원장을 갱신합니다.
+내부적으로 범위와 구현 계획의 승인은 서로 다른 안전 경계로 유지되며 호환 이름은 Gate A와
+Gate B입니다. 기존 constitution은 재사용하고, hard prohibition 또는 되돌리기 어려운
+architecture/stack 결정이 있을 때만 조건부 Gate ②를 엽니다. 그 외 repository convention은
+advisory로 사용합니다. 기본 안내에는 Gate·상태 ID·hash·artifact 경로를 노출하지 않으며
+`p2a next --details` 또는 JSON에서만 확인합니다.
 
 각 Gate는 검토 가능한 파일을 `.plan2agent/artifacts/<project_id>/` 아래에 기록합니다.
 활성 Gate의 결정을 승인하고 안내된 행동을 완료한 다음 다시 실행합니다.
@@ -94,7 +90,7 @@ system을 대체하지 않습니다.
 ```text
 .plan2agent/
   project.config.json
-  constitution.json
+  constitution.json                 # 조건부 프로젝트 원칙 계약
   artifacts/<project_id>/
     decisions.jsonl
     gate-a-intake/
@@ -128,19 +124,18 @@ run을 정리합니다. proposal로 아직 mining하지 않은 실패·차단 ru
 
 ### 1. 승인 Gate를 거쳐 계획하기
 
-기획 하네스는 진입 문서를 구조화된 intake, 제품·구현 명세, 검증된 실행 준비 상태로
-바꿉니다. Gate A에서 문서의 범위를 간결하게 요약하고 사용자의 명시적인 확인을
-요구합니다. 확인되면 같은 세션에서 Gate ② constitution을 확립하거나 재사용한 뒤
-Gate B로 이어집니다. 불확실한 내용을 임의의 요구사항으로 만들지 않고 가정이나 사용자
-결정으로 기록합니다.
+기획 하네스는 아이디어나 진입 문서를 구조화된 intake, 제품·구현 명세, 검증된 실행 준비
+상태로 바꿉니다. Gate A에서 범위를 간결하게 요약하고 사용자의 명시적인 확인을
+요구합니다. 기존 constitution을 재사용하고 material project-shape 결정이 있을 때만
+Gate ②를 연 뒤 Gate B로 이어집니다.
 
 ### 2. 승인된 목표 실행하기
 
 Gate B 승인 후 `p2a next`로 승인된 계약이 허용한 다음 행동을 시작합니다. 새 프로젝트는
 `adaptive`가 기본이며, execution mode가 없는 기존 config는 호환을 위해 `orchestrated`로 해석합니다.
 `adaptive`, `direct`, `planned`, `orchestrated` 정책은 mode 재승인 없이 사용할 수 있습니다. Planned는 2~5개의
-순서·명령 검증된 재개 checkpoint를 기록하고, 새 run은 Gate B에서 파생한 목표·source hash·범위·
-보존 조건·비목표·acceptance·verification·권한 경계를 execution envelope로 고정합니다.
+순서·명령 검증된 재개 checkpoint를 기록하고, 새 run은 승인된 계획에서 파생한 목표·source hash·범위·
+현재 iteration의 architecture/interface/dependency 제약·보존 조건·비목표·acceptance·verification·권한 경계를 execution envelope로 고정합니다.
 
 준비된 work item을 직접 제어하려면 다음 명령을 사용합니다.
 
@@ -150,12 +145,13 @@ p2a execute start \
   --task <task-id>
 ```
 
-구현 중에는 프로젝트가 구조화된 `relatedVerification` 명령과
-`p2a runs verify --related`를 설정해 변경 파일만 빠르게 검사할 수 있습니다. 이 결과는
-피드백용이며 iteration close 권한이 되지 않습니다. 모든 task가 끝나면 `p2a next`가 필요한
-최종 review를 먼저 안내하고, 유효한 full 증거가 아직 없을 때만 canonical workspace에서
-`p2a execute verify-final`을 안내합니다. 전체 test, lint, typecheck 증거는 정확한 workspace
-revision에 묶이므로 이후 source가 바뀌면 새 최종 검증이 필요합니다.
+플래그 없이 finish하면 문서·메타데이터 작업은 관련 검사만, 코드 작업은 프로젝트에 실제
+설정된 test/lint/typecheck를 모두 실행합니다. 실패
+attempt는 보존하지만 같은 started run에서 수정·재검증할 수 있습니다. 모든 task가 끝나면
+docs/metadata는 프로젝트별 명령 또는 기본 파일 무결성 관련 검사, 단일 isolated code는 현재 product revision의 implementation full
+증거를 재사용합니다. 다중 task/worktree 통합, high-risk 경로 또는 검증 후 제품 코드 변경일
+때만 canonical `p2a execute verify-final`을 요구합니다. 유효한 제품 검증 뒤 문서만 바뀌면
+제품 검증은 유지하고 `p2a execute verify-final --scope relevant`로 문서 관련 검사만 추가합니다.
 
 시작, 재개, 완료, 재시도, 제한된 batch 절차는 [개발 실행 레퍼런스](docs/supervised-execution.md)를 참고하세요.
 
@@ -207,7 +203,7 @@ Plan2Agent는 하나의 `p2a` entrypoint를 설치합니다.
 | 명령 | 용도 |
 | --- | --- |
 | `p2a init` | 프로젝트 상태와 provider asset을 초기화합니다. |
-| `p2a next` | 상태에 맞는 다음 행동 하나와 그 이유를 반환합니다. |
+| `p2a next` | 현재 상황을 쉽게 설명하고 다음 행동 하나를 권장합니다. 내부 명령과 상태는 `--details`로 확인합니다. |
 | `p2a decide` | Gate ① 승인·철회와 범위 추가·제거를 결정 원장에 기록합니다. |
 | `p2a decisions` | 결정 이력을 조회하고 `--why`로 파일의 근거 결정을 추적합니다. |
 | `p2a shape` | Gate ② constitution 상태, migration, 승인·철회를 관리합니다. |
@@ -285,18 +281,20 @@ session에서 실행되며 Plan2Agent는 provider API를 직접 호출하지 않
 
 ## Plan2Agent 개발하기
 
-저장소를 clone하고 Node.js 22 이상에서 다음 명령을 실행합니다.
+저장소를 clone하고 Node.js 22 이상을 사용합니다. 개발 중에는 핵심 test와 provider parity를
+확인합니다.
 
 ```bash
 npm test
-npm run test:full
-npm run test:package
-node scripts/sync_cli_assets.mjs
 node scripts/check_cli_parity.mjs
-node scripts/run_fixtures.mjs
 ```
 
-`npm run test:full`은 completed/resumable handoff portability 행렬을 포함한 장기 fixture gate다. 저장소 개발과 디버깅에서는 동일한 fixture runner를 직접 실행할 수 있다.
+PR이나 release 전에는 `npm run test:all`을 실행합니다. 이 명령은 핵심 test, 장기 fixture gate,
+package/upgrade smoke를 각각 한 번씩 실행합니다. Fixture와 lifecycle 검증은
+`npm run test:full`이 담당합니다. `node scripts/run_fixtures.mjs`는 같은 runner를 직접
+디버깅할 때만 사용하는 대체 명령이므로 한 검증 과정에서 둘을 함께 실행하지 않습니다.
+Canonical provider asset을 변경했을 때만 `node scripts/sync_cli_assets.mjs`를 실행하고 parity로
+확인합니다.
 
 runtime은 Node.js ESM이며 Node.js 표준 라이브러리를 사용합니다. 저장소 구조는 다음과
 같습니다.

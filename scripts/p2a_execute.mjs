@@ -30,6 +30,7 @@ import {
   expectedVisualReviewContract,
   VISUAL_REVIEW_SIDECAR_SUFFIX,
 } from './p2a_visual_review_gate.mjs';
+import { iterationVerificationStatus } from './p2a_final_verification_gate.mjs';
 import {
   assertRunMonitorGateBinding,
   monitorGateSidecarPath,
@@ -57,8 +58,16 @@ import {
   runSidecarPath,
   runMatchesSourceContext,
   taskGraphRefMatchesGraph,
+  workspaceRevisionExcludedPathsForRun,
+  workspaceRevisionSha256,
 } from './p2a_run_paths.mjs';
-import { pruneIndexedRunEvidence } from './p2a_runs.mjs';
+import {
+  collectGitChangedFiles,
+  finalRunRelatedChangedFiles,
+  loadRunsForArtifactRoot,
+  normalizeChangedFiles,
+  pruneIndexedRunEvidence,
+} from './p2a_runs.mjs';
 import { minedProposalRunIds } from './p2a_proposal_mining.mjs';
 import {
   assertNoUninitializedScaffoldArtifactRoots,
@@ -72,7 +81,9 @@ import { commandLine as sharedCommandLine, printRunCommandFooter } from './p2a_r
 import {
   allocateRunId,
   previewRunId,
+  projectConfigCandidatePaths,
   releaseRunIdReservation,
+  relatedVerificationCommands,
   resolveRunPersistence,
 } from './p2a_project_config.mjs';
 import {
@@ -89,6 +100,20 @@ import {
   uniqueStrings,
 } from './p2a_cli_helpers.mjs';
 import { parseVerifyCommand } from './p2a_verification.mjs';
+import {
+  configuredRelatedVerificationObligations,
+  configuredVerificationObligations,
+  evaluateVerificationObligations,
+  executedPassedVerificationItems,
+  latestVerificationAttempts,
+  latestMilestoneAttempts,
+  verificationAttemptKey,
+} from './p2a_verification_evidence.mjs';
+import {
+  classifyVerificationProfile,
+  productRevisionExcludedPaths,
+} from './p2a_verification_profile.mjs';
+import { fullSpecTaskRefs } from './p2a_spec_model.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.projectRoot;
@@ -104,7 +129,6 @@ const FINAL_EVIDENCE_RUN_KINDS = new Set([
   'final_visual_review',
   'final_acceptance_review',
 ]);
-const DEFAULT_PROJECT_CONFIG = path.join('.plan2agent', 'project.config.json');
 const EXECUTION_RESULT_SCHEMA = JSON.parse(readFileSync(
   new URL('../schemas/execution-result.schema.json', import.meta.url),
   'utf8',
@@ -168,6 +192,7 @@ function usage() {
     '  --base-ref <ref>     Git base ref for --create-isolation. Default: HEAD.',
     '  --create-isolation   Ask p2a_runs.mjs to create the branch/worktree before run start.',
     '  --require-monitor       Require the run\'s co-located .monitor-verdict.json before a finished run can close.',
+    '  --scope full|relevant   verify-final only; default full. Relevant runs only the outstanding non-product checks.',
     '',
     'Finish/verification options:',
     '  --test, --lint, --typecheck',
@@ -190,14 +215,14 @@ function usage() {
     '  --implementation-interruption <text>  Repeatable.',
     '  --user-correction <text> Repeatable.',
     '  --gate-return valid|invalid:<text>  Repeatable.',
-    '  --repro-step <text>     Required with localization and guard when finishing failed/blocked. Repeatable.',
+    '  --repro-step <text>     Required when no command/error reproduction was collected. Repeatable.',
     '  --repro-command <cmd>   Append a command that reproduces the observed issue. Repeatable.',
     '  --repro-note <text>     Append reproduction context. Repeatable.',
-    '  --localization <text>   Required with reproduction and guard when finishing failed/blocked. Repeatable.',
+    '  --localization <text>   Required for product/code failures, not environment/dependency/flake classes. Repeatable.',
     '  --localized-file <path> Append a file implicated by localization. Repeatable.',
     '  --fix-summary <text>    Append a concise summary of the fix. Repeatable.',
     '  --fix-file <path>       Append a file intentionally changed by the fix. Repeatable.',
-    '  --guard <text>          Required with reproduction and localization when finishing failed/blocked. Repeatable.',
+    '  --guard <text>          Required retry or regression guard for failed/blocked runs. Repeatable.',
     '  --guard-note <text>     Append guard context. Repeatable.',
     '  --no-task-transition    Finish the run without marking the task done/blocked.',
     '  --json                  start/resume/review/accept: emit one machine-readable result document.',
@@ -223,6 +248,7 @@ function parseArgs(argv) {
     agentTool: 'codex',
     runId: null,
     runReservationToken: null,
+    verificationScope: null,
     workspace: null,
     workspaceRef: null,
     isolation: null,
@@ -282,6 +308,12 @@ function parseArgs(argv) {
     else if (arg === '--agent-tool') args.agentTool = requiredValue(argv, ++index, '--agent-tool');
     else if (arg === '--run-id') args.runId = requiredValue(argv, ++index, '--run-id');
     else if (arg === '--run-reservation-token') args.runReservationToken = requiredValue(argv, ++index, '--run-reservation-token');
+    else if (arg === '--scope') {
+      args.verificationScope = requiredValue(argv, ++index, '--scope');
+      if (!['full', 'relevant'].includes(args.verificationScope)) {
+        throw new Error('--scope must be full or relevant');
+      }
+    }
     else if (arg === '--workspace') args.workspace = requiredValue(argv, ++index, '--workspace');
     else if (arg === '--workspace-ref') args.workspaceRef = requiredValue(argv, ++index, '--workspace-ref');
     else if (arg === '--isolation') {
@@ -399,6 +431,9 @@ function parseArgs(argv) {
   if (args.runReservationToken && (!['start', 'verify-final', 'review', 'accept'].includes(args.command) || !args.runId)) {
     throw new Error('--run-reservation-token requires start, verify-final, review, or accept with --run-id');
   }
+  if (args.verificationScope && args.command !== 'verify-final') {
+    throw new Error('--scope is only supported with verify-final');
+  }
   if (args.command === 'status' && !args.taskId && !args.runId && !args.approval) throw new Error('--task, --approval, or --run-id is required for status');
   if (['plan', 'start'].includes(args.command) && !IMPLEMENTER_AGENT_TOOLS.has(args.agentTool)) {
     throw new Error('--agent-tool for implementation must be one of codex, claude, or manual; Gemini is read-only and may only be used as a reviewer/monitor');
@@ -440,14 +475,13 @@ function warnGraphMode() {
 }
 
 function loadProjectConfig(source, workspacePath) {
-  const candidates = [
-    path.join(workspacePath, DEFAULT_PROJECT_CONFIG),
-    path.join(ROOT, DEFAULT_PROJECT_CONFIG),
-    path.join(process.cwd(), DEFAULT_PROJECT_CONFIG),
-  ];
-  if (source.artifactRoot) candidates.push(path.join(source.artifactRoot, 'project.config.json'));
-  if (source.graphPath) candidates.push(path.join(path.dirname(source.graphPath), '..', 'project.config.json'));
-  for (const candidate of uniqueStrings(candidates)) {
+  const candidates = projectConfigCandidatePaths({
+    workspacePath,
+    projectRoot: ROOT,
+    artifactRoot: source.artifactRoot,
+    graphPath: source.graphPath,
+  });
+  for (const candidate of candidates) {
     try {
       if (existsSync(candidate) && lstatSync(candidate).isFile()) return loadJson(candidate);
     } catch {
@@ -484,12 +518,69 @@ function pruneCompletedMaintenanceRunHistory(source, currentTask, config, { quie
   return cleanup;
 }
 
+const VERIFICATION_PROFILE_RISK = Object.freeze({
+  docs_metadata: 0,
+  isolated_code: 1,
+  high_risk_integration: 2,
+});
+
+function runVerificationRisk(run) {
+  const profile = classifyVerificationProfile([run]);
+  return VERIFICATION_PROFILE_RISK[profile.id] ?? VERIFICATION_PROFILE_RISK.high_risk_integration;
+}
+
+function finalVerificationScope(run) {
+  if (run.verificationScope === 'full' || run.verificationScope === 'relevant') {
+    return run.verificationScope;
+  }
+  const scopes = new Set((run.verification ?? []).map((item) => item.scope));
+  return scopes.has('related') && !scopes.has('full') ? 'relevant' : 'full';
+}
+
+export function supersededRunEvidenceAnchorIds(run, runs) {
+  const relatedRuns = (Array.isArray(runs) ? runs : []).filter((candidate) => (
+    candidate.runId !== run.runId
+    && candidate.taskId === run.taskId
+    && candidate.iterationId === run.iterationId
+    && (candidate.runKind ?? null) === (run.runKind ?? null)
+  ));
+  if (run.runKind === 'final_verification' && finalVerificationScope(run) === 'relevant') {
+    const priorFull = [...relatedRuns].reverse()
+      .find((candidate) => (
+        candidate.status !== 'started'
+        && finalVerificationScope(candidate) === 'full'
+      ));
+    return priorFull ? [priorFull.runId] : [];
+  }
+  const candidates = relatedRuns.filter((candidate) => candidate.status !== 'started');
+  if (run.runKind) return [];
+
+  const currentRisk = runVerificationRisk(run);
+  let anchor = null;
+  let anchorRisk = currentRisk;
+  for (const candidate of candidates) {
+    const candidateRisk = runVerificationRisk(candidate);
+    if (candidateRisk >= anchorRisk && candidateRisk > currentRisk) {
+      anchor = candidate;
+      anchorRisk = candidateRisk;
+    }
+  }
+  return anchor ? [anchor.runId] : [];
+}
+
+function verificationAnchorRunIds(source, run) {
+  return supersededRunEvidenceAnchorIds(
+    run,
+    loadRunsForArtifactRoot(source.artifactRoot, { iterationId: run.iterationId }),
+  );
+}
+
 function pruneSupersededRunHistory(source, run, { quiet = false } = {}) {
   if (run.status !== 'finished' || !source.artifactRoot) return null;
   try {
     const config = loadProjectConfig(source, run.workspacePath ?? process.cwd());
     if (resolveRunPersistence(config) !== 'active_only') return null;
-    const keepRunIds = [run.runId];
+    const keepRunIds = [run.runId, ...verificationAnchorRunIds(source, run)];
     const proposals = config?.proposals;
     let retainedUnminedRunIds = [];
     if (proposals?.enabled === true) {
@@ -714,6 +805,31 @@ function currentSourceGraph(source) {
   return { ...source, graph };
 }
 
+function currentStartSource(args, initialSource) {
+  if (!args.artifacts) return currentSourceGraph(initialSource);
+  let source;
+  try {
+    source = resolveSource(args);
+  } catch (error) {
+    throw new Error(
+      `execution source changed while run start was waiting for the task graph lock: ${error.message}`,
+    );
+  }
+  const bindingChanged = (
+    source.sourceLayout !== initialSource.sourceLayout
+    || source.projectId !== initialSource.projectId
+    || source.iterationId !== initialSource.iterationId
+    || path.resolve(source.graphPath) !== path.resolve(initialSource.graphPath)
+    || source.taskGraphRef !== initialSource.taskGraphRef
+  );
+  if (bindingChanged) {
+    throw new Error(
+      'active iteration or task graph changed while run start was waiting for the task graph lock; retry from the current Plan2Agent state',
+    );
+  }
+  return source;
+}
+
 function maintenanceRetrospectiveReportPath(source, taskId) {
   const workspaceRoot = canonicalWorkspacePathForArtifactRoot(source.artifactRoot);
   return path.join(
@@ -739,6 +855,21 @@ function printMaintenanceCompletionChoices(source, run) {
   } catch (error) {
     console.error(`warning: maintenance completion choices were not rendered: ${error.message}`);
   }
+}
+
+const TASK_RECOVERY_CONTEXT_PREFIX = 'TASK_RECOVERY_CONTEXT: ';
+
+function taskRecoveryContext(task) {
+  return typeof task?.blockNote === 'string' && task.blockNote.trim()
+    ? task.blockNote.trim()
+    : null;
+}
+
+function runRecoveryContext(run) {
+  const note = (run?.notes ?? []).find((item) => (
+    typeof item === 'string' && item.startsWith(TASK_RECOVERY_CONTEXT_PREFIX)
+  ));
+  return note ? note.slice(TASK_RECOVERY_CONTEXT_PREFIX.length) : null;
 }
 
 function claimTaskForRunStart(source, task) {
@@ -799,13 +930,14 @@ function hasStartedRunForTask(source, taskId) {
   }
 }
 
-function rollbackTaskRunStartClaim(source, taskId) {
+function rollbackTaskRunStartClaim(source, taskId, recoveryContext = null) {
   const current = currentSourceGraph(source);
   const task = requireTask(current, taskId);
   if (task.status !== 'in_progress' || hasStartedRunForTask(current, taskId)) return false;
   task.status = 'todo';
   delete task.blockReason;
-  delete task.blockNote;
+  if (recoveryContext) task.blockNote = recoveryContext;
+  else delete task.blockNote;
   atomicWriteJson(current.graphPath, current.graph);
   return true;
 }
@@ -1001,6 +1133,10 @@ function finishTaskArgs(source, taskId, status) {
   return [transition, ...source.sourceArgs, taskId];
 }
 
+function retryTaskArgs(source, taskId) {
+  return ['todo', ...source.sourceArgs, taskId];
+}
+
 function reopenTaskAfterFinalReviewArgs(source, run) {
   const failureClass = run.failure?.class ?? run.status;
   const reviewLabel = run.runKind === 'final_acceptance_review'
@@ -1017,21 +1153,44 @@ function reopenTaskAfterFinalReviewArgs(source, run) {
 }
 
 function isEnvironmentOnlyFinalReviewFailure(source, run) {
+  const currentAttempts = currentVerificationAttemptsForExecuteRun(source, run);
   return (
     run.status !== 'finished'
     && run.failure?.class === 'environment_failure'
     && FINAL_EVIDENCE_RUN_KINDS.has(run.runKind)
-    && !run.verification.some((item) => item.status === 'failed')
+    && !currentAttempts.some((item) => item.status === 'failed')
     && !blockingFinalReviewEvidence(source, run)
   );
 }
 
-function hasOnlyUnavailableFinalEvidence(run) {
+function hasOnlyUnavailableFinalEvidence(run, currentAttempts) {
   return (
     FINAL_EVIDENCE_RUN_KINDS.has(run.runKind)
-    && run.verification.some((item) => item.status === 'unavailable')
-    && !run.verification.some((item) => item.status === 'failed')
+    && currentAttempts.some((item) => item.status === 'unavailable')
+    && !currentAttempts.some((item) => item.status === 'failed')
   );
+}
+
+function addFailedFinalVerificationDetails(args, failed) {
+  if (!args.reproductionSteps.length && !args.reproductionCommands.length && !args.reproductionNotes.length) {
+    args.reproductionCommands = uniqueStrings(
+      failed.map((item) => item.originalCommand ?? item.command),
+    );
+    if (!args.reproductionCommands.length) {
+      args.reproductionNotes.push('The final verification command returned a failing result.');
+    }
+  }
+  if (!args.localizationFindings.length && !args.localizedFiles.length) {
+    const reasons = uniqueStrings(failed.map((item) => (
+      item.failureReason ?? item.stderrTail ?? `${item.type} verification failed`
+    )));
+    args.localizationFindings.push(
+      reasons.length ? reasons.join(' | ') : 'Final product verification failed.',
+    );
+  }
+  if (!args.guardChecks.length && !args.guardNotes.length) {
+    args.guardChecks.push('Correct the product failure and pass final verification before closing the iteration.');
+  }
 }
 
 function blockingFinalReviewEvidence(source, run) {
@@ -1071,8 +1230,7 @@ function blockingFinalReviewEvidence(source, run) {
   }
 }
 
-function addUnavailableEnvironmentFailureDetails(args, run) {
-  const unavailable = run.verification.filter((item) => item.status === 'unavailable');
+function addUnavailableEnvironmentFailureDetails(args, unavailable) {
   if (!args.reproductionSteps.length && !args.reproductionCommands.length && !args.reproductionNotes.length) {
     args.reproductionCommands = uniqueStrings(unavailable.map((item) => item.command));
   }
@@ -1170,6 +1328,9 @@ function startRunArgs(args, task, runId, defaults, approval = null) {
     defaults.isolation,
   ];
   if (args.runKind) runArgs.push('--run-kind', args.runKind);
+  if (args.runKind === 'final_verification' && args.verificationScope) {
+    runArgs.push('--verification-scope', args.verificationScope);
+  }
   if (args.workspaceRef) runArgs.push('--workspace-ref', args.workspaceRef);
   if (args.runReservationToken) runArgs.push('--run-reservation-token', args.runReservationToken);
   if (defaults.branch) runArgs.push('--branch', defaults.branch);
@@ -1217,8 +1378,8 @@ function finishRunArgs(args, finalStatus, approval = null) {
   return runArgs;
 }
 
-function verifyRunArgs(args) {
-  const runArgs = ['verify', ...sourceRunArgs(args), '--run-id', args.runId, ...args.verifyOptions];
+function verifyRunArgs(args, verifyOptions = args.verifyOptions) {
+  const runArgs = ['verify', ...sourceRunArgs(args), '--run-id', args.runId, ...verifyOptions];
   if (args.collectGit) runArgs.push('--collect-git');
   for (const changedFile of args.changedFiles) runArgs.push('--changed-file', changedFile);
   if (args.saveConfig) runArgs.push('--save-config');
@@ -1377,7 +1538,7 @@ function printExecutionPlan(args, source, task, runId = null, defaults = null, a
   const startArgs = executeStartArgs(args, task, runId, defaults);
   console.log(`- ${commandLine('p2a_execute.mjs', startArgs)}`);
   if (runId) {
-    console.log(`- ${commandLine('p2a_execute.mjs', ['finish', ...sourceRunArgs(args), ...(args.approval ? ['--approval', args.approval] : []), '--run-id', runId, '--test', '--lint', '--typecheck'])}`);
+    console.log(`- ${commandLine('p2a_execute.mjs', ['finish', ...sourceRunArgs(args), ...(args.approval ? ['--approval', args.approval] : []), '--run-id', runId])}`);
   }
   console.log('');
   console.log('[세부 계약]');
@@ -1412,6 +1573,7 @@ function printExecutionPlan(args, source, task, runId = null, defaults = null, a
 }
 
 function printLauncherPrompt(source, task, runId, approvalLink = null, options = {}) {
+  const recoveryContext = options.recoveryContext ?? runRecoveryContext(options.run);
   console.log('');
   console.log('Manual launcher prompt');
   console.log('');
@@ -1432,6 +1594,9 @@ function printLauncherPrompt(source, task, runId, approvalLink = null, options =
   console.log('- Do not edit Plan2Agent task graph, run logs, or planning artifacts directly.');
   console.log('- The owner will run p2a execute finish or p2a runs verify/finish after implementation.');
   console.log('- Report changed files, verification commands, results, and blockers.');
+  if (recoveryContext) {
+    console.log(`- Apply the recorded recovery context before retrying: ${recoveryContext}`);
+  }
   console.log('');
   const promptResult = runScript('p2a_tasks.mjs', promptArgs(source, task.id));
   printChildResult(promptResult, { suppressStdout: options.suppressPrompt === true });
@@ -1455,8 +1620,14 @@ function printFinalVisualReviewInstructions(args, source, task, runId, workspace
 }
 
 function printFinalVerificationInstructions(source, task, run, workspacePath) {
+  const profile = verificationProfileForExecuteRun(source, run);
+  const config = loadProjectConfig(source, workspacePath);
+  const relevantOnly = run.verificationScope === 'relevant'
+    || (run.verificationScope === undefined && profile.id === 'docs_metadata');
   console.log('');
-  console.log('Plan2Agent final full verification');
+  console.log(relevantOnly
+    ? 'Plan2Agent final relevant verification'
+    : 'Plan2Agent final full verification');
   console.log(`- iteration: ${source.iterationId}`);
   console.log(`- remediation owner: ${task.id} - ${humanTaskOutcome(task)}`);
   console.log(`- runId: ${run.runId}`);
@@ -1465,7 +1636,15 @@ function printFinalVerificationInstructions(source, task, run, workspacePath) {
   console.log('- changedFiles: 0');
   console.log('');
   console.log('Next:');
-  console.log(`1. Run every configured full verification command once: ${commandLine('p2a_runs.mjs', ['verify', ...source.sourceArgs, '--run-id', run.runId])}`);
+  if (relevantOnly) {
+    const verificationArgs = ['verify', ...source.sourceArgs, '--run-id', run.runId, '--related'];
+    const checkLabel = relatedVerificationCommands(config).length
+      ? 'the configured related check'
+      : 'the built-in file-integrity check';
+    console.log(`1. Run ${checkLabel} for the current docs/metadata revision: ${commandLine('p2a_runs.mjs', verificationArgs)}`);
+  } else {
+    console.log(`1. Run every configured full verification command once: ${commandLine('p2a_runs.mjs', ['verify', ...source.sourceArgs, '--run-id', run.runId])}`);
+  }
   console.log(`2. Finish the evidence run: ${commandLine('p2a_execute.mjs', ['finish', ...source.sourceArgs, '--run-id', run.runId])}`);
   console.log('   A product verification failure reopens implementation. Unavailable commands are recorded as environment_failure so only final verification is retried.');
 }
@@ -1506,6 +1685,123 @@ function printFinalAcceptanceReviewInstructions(source, task, run, workspacePath
 
 function verifyRequested(args) {
   return args.verifyOptions.length > 0;
+}
+
+function runCurrentWorkspaceRevision(source, run, workspaceOverride = null) {
+  const workspacePath = path.resolve(workspaceOverride ?? run.workspacePath);
+  return workspaceRevisionSha256(
+    workspacePath,
+    workspaceRevisionExcludedPathsForRun(source.runsDir, run, {
+      artifactRoot: source.artifactRoot,
+      graphPath: source.graphPath,
+      workspacePath,
+    }),
+  );
+}
+
+function runCurrentProductRevision(source, run, workspaceOverride = null) {
+  const workspacePath = path.resolve(workspaceOverride ?? run.workspacePath);
+  return workspaceRevisionSha256(
+    workspacePath,
+    [
+      ...workspaceRevisionExcludedPathsForRun(source.runsDir, run, {
+        artifactRoot: source.artifactRoot,
+        graphPath: source.graphPath,
+        workspacePath,
+      }),
+      ...productRevisionExcludedPaths(workspacePath),
+    ],
+  );
+}
+
+function verificationProfileForExecuteRun(source, run, changedFiles = run.changedFiles) {
+  const prospectiveRun = { ...run, status: 'finished', changedFiles };
+  if (!run.runKind || !source?.artifactRoot || source.sourceLayout !== 'iteration') {
+    return classifyVerificationProfile([prospectiveRun]);
+  }
+  const currentRuns = loadRunsForArtifactRoot(source.artifactRoot, {
+    iterationId: run.iterationId,
+  }).filter((candidate) => candidate.runId !== run.runId);
+  currentRuns.push(prospectiveRun);
+  return classifyVerificationProfile(currentRuns);
+}
+
+function currentVerificationAttemptsForExecuteRun(source, run, workspaceOverride = null) {
+  const workspacePath = path.resolve(workspaceOverride ?? run.workspacePath);
+  const profile = verificationProfileForExecuteRun(source, run);
+  const revisions = {
+    workspaceRevisionSha256: runCurrentWorkspaceRevision(source, run, workspacePath),
+    ...(profile.id !== 'docs_metadata'
+      ? { productRevisionSha256: runCurrentProductRevision(source, run, workspacePath) }
+      : {}),
+  };
+  return latestVerificationAttempts(run.verification, revisions);
+}
+
+function automaticVerificationOptions(source, run, args) {
+  if (run.milestones?.some((milestone) => milestone.status === 'pending')) return null;
+  const workspacePath = path.resolve(args.workspace ?? run.workspacePath);
+  const changedFiles = normalizeChangedFiles(workspacePath, [
+    ...run.changedFiles,
+    ...args.changedFiles,
+    ...(args.collectGit ? collectGitChangedFiles(workspacePath) : []),
+  ]);
+  const profile = verificationProfileForExecuteRun(source, run, changedFiles);
+  const relevantOnly = (
+    !run.runKind && profile.id === 'docs_metadata'
+  ) || (
+    run.runKind === 'final_verification'
+    && (
+      run.verificationScope === 'relevant'
+      || (run.verificationScope === undefined && profile.id === 'docs_metadata')
+    )
+  );
+  const relevantChangedFiles = run.runKind && relevantOnly
+    ? finalRunRelatedChangedFiles(source, run, workspacePath)
+    : changedFiles;
+  const revision = runCurrentWorkspaceRevision(source, run, workspacePath);
+  const revisions = relevantOnly
+    ? { workspaceRevisionSha256: revision }
+    : {
+        workspaceRevisionSha256: revision,
+        ...(profile.id !== 'docs_metadata'
+          ? { productRevisionSha256: runCurrentProductRevision(source, run, workspacePath) }
+          : {}),
+      };
+  const passed = executedPassedVerificationItems(run.verification, revisions);
+  const config = loadProjectConfig(source, workspacePath);
+  if (relevantOnly) {
+    const relatedConfigured = configuredRelatedVerificationObligations(
+      relatedVerificationCommands(config),
+      relevantChangedFiles,
+    );
+    const relatedEvaluation = evaluateVerificationObligations(
+      run.verification,
+      relatedConfigured,
+      revisions,
+    );
+    if (
+      relatedEvaluation.missing.length
+      || !passed.some((item) => item.scope === 'related')
+    ) {
+      return relevantChangedFiles.length ? ['--related'] : null;
+    }
+    return null;
+  }
+  const configured = configuredVerificationObligations(config);
+  const evaluation = evaluateVerificationObligations(
+    run.verification,
+    configured,
+    revisions,
+  );
+  const missingKeys = new Set(evaluation.missing.map((item) => item.key));
+  const missingConfigured = configured.filter((item) => missingKeys.has(verificationAttemptKey(item)));
+  if (missingConfigured.length) {
+    return missingConfigured.map((item) => `--${item.type}`);
+  }
+  if (evaluation.missing.length) return null;
+  if (!configured.length) return null;
+  return null;
 }
 
 function finishStatusFromRun(run) {
@@ -1559,6 +1855,27 @@ function transitionTaskAfterFinishedRun(args, source, run, successStatus = 0) {
     );
     printChildResult(reopenResult);
     if (childProcessFailed(reopenResult)) return childProcessExitStatus(reopenResult);
+    return successStatus;
+  }
+  const retryableWithoutDecision = (
+    (run.status === 'failed' || run.status === 'blocked')
+    && run.failure
+    && run.failure.retryable !== 'no'
+    && run.failure.needsUserDecision === false
+  );
+  if (retryableWithoutDecision) {
+    if (task.status === 'todo') {
+      console.log(`Task transition already applied: ${task.id} is ready for retry`);
+      return successStatus;
+    }
+    if (task.status !== 'in_progress' && task.status !== 'blocked') {
+      console.error(`retry transition skipped: ${task.id} must be in_progress or blocked; current status is ${task.status}`);
+      return 1;
+    }
+    console.log(`Returning task ${task.id} to todo for a retry that needs no user decision...`);
+    const taskResult = runScript('p2a_tasks.mjs', retryTaskArgs(source, task.id));
+    printChildResult(taskResult);
+    if (childProcessFailed(taskResult)) return childProcessExitStatus(taskResult);
     return successStatus;
   }
   if (task.status === expectedTaskStatus) {
@@ -1703,6 +2020,20 @@ function runPrepare(args) {
       ...spec.product.core_flows,
       ...spec.product.success_criteria,
     ]);
+    const sourceSpecRefs = lockedState.currentSpec?.pending_iteration?.replacement?.kind
+      === 'blocked_scope_replan'
+      ? fullSpecTaskRefs(spec)
+      : [
+          'product.goals',
+          'product.must_preserve',
+          'product.non_goals',
+          'product.core_flows',
+          'product.success_criteria',
+          'implementation.architecture',
+          'implementation.interfaces',
+          'implementation.dependencies',
+          'implementation.verification',
+        ];
     const taskTitle = `Deliver approved ${lockedState.activeIteration} objective`;
     const task = {
       id: 'task-001',
@@ -1715,14 +2046,10 @@ function runPrepare(args) {
       targetArea: 'approved iteration objective',
       workKind: visualReview ? 'mixed' : 'non_ui',
       suggestedAgentPrompt: 'Deliver the approved Gate B objective inside the bound execution envelope and verify it to close-ready.',
-      sourceSpecRefs: [
-        'product.goals',
-        'product.must_preserve',
-        'product.non_goals',
-        'product.core_flows',
-        'product.success_criteria',
-        'implementation.verification',
-      ],
+      // A replacement owns every field because unfinished baseline work must
+      // not be treated as already delivered. Normal direct/planned tasks keep
+      // their compact prompt-oriented references for backward compatibility.
+      sourceSpecRefs,
       ...(visualReview ? {
         visualImpact: {
           screenStates: structuredClone(visualReview.screenStates),
@@ -1790,9 +2117,16 @@ function runPlan(args) {
 function runStart(args) {
   const initialSource = resolveSource(args);
   return withRunStoreLocks([path.dirname(initialSource.graphPath)], () => {
-    const source = currentSourceGraph(initialSource);
+    const source = currentStartSource(args, initialSource);
     const approvalLink = resolveApprovalSelection(args, source);
     const task = selectReadyTask(source, approvalLink.taskId);
+    const recoveryContext = taskRecoveryContext(task);
+    if (recoveryContext) {
+      args.notes = uniqueStrings([
+        ...args.notes,
+        `${TASK_RECOVERY_CONTEXT_PREFIX}${recoveryContext}`,
+      ]);
+    }
     const identity = resolveStartIdentity(args, source, task, { reserve: true });
     const { runId, defaults } = identity;
     args.runReservationToken = identity.reservationToken;
@@ -1809,7 +2143,7 @@ function runStart(args) {
     const runResult = runScript('p2a_runs.mjs', startRunArgs(args, task, runId, defaults, approvalLink.approval));
     printChildResult(runResult, { suppressStdout: args.json });
     if (childProcessFailed(runResult)) {
-      if (rollbackTaskRunStartClaim(source, task.id)) {
+      if (rollbackTaskRunStartClaim(source, task.id, recoveryContext)) {
         console.error(`Task transition rolled back: ${task.id} returned to todo because run ${runId} did not start.`);
       } else {
         console.error(`warning: task ${task.id} remains in_progress because started-run evidence could not be ruled out.`);
@@ -1830,7 +2164,10 @@ function runStart(args) {
 
     const startedRun = readRun(source.runsDir, runId);
     assertRunExecutionContractCurrent(startedRun, source, 'launcher prompt');
-    printLauncherPrompt(source, task, runId, approvalLink, { suppressPrompt: args.json });
+    printLauncherPrompt(source, task, runId, approvalLink, {
+      suppressPrompt: args.json,
+      run: startedRun,
+    });
     printRunCommandFooter(P2A_PATHS, {
       sourceArgs: source.sourceArgs,
       runId,
@@ -1863,9 +2200,28 @@ function runVerifyFinal(args) {
     args.workspace = workspacePath;
     args.isolation = 'none';
     args.runKind = 'final_verification';
+    args.verificationScope ??= 'full';
+    if (args.verificationScope === 'relevant') {
+      const verificationStatus = iterationVerificationStatus({
+        runsDir: source.runsDir,
+        runs: loadRunsForArtifactRoot(source.artifactRoot, {
+          iterationId: source.iterationId,
+        }),
+        artifactRoot: source.artifactRoot,
+        graphPath: source.graphPath,
+        activeIteration: source.iterationId,
+      });
+      if (!verificationStatus.needed || verificationStatus.scope !== 'relevant') {
+        throw new Error(
+          verificationStatus.needed
+            ? 'related verification cannot replace the currently required full product verification'
+            : 'related verification is not currently required for this workspace revision',
+        );
+      }
+    }
     args.notes = uniqueStrings([
       ...args.notes,
-      `FINAL_VERIFICATION: iteration=${source.iterationId}; canonical workspace=${workspacePath}`,
+      `FINAL_VERIFICATION: iteration=${source.iterationId}; scope=${args.verificationScope}; canonical workspace=${workspacePath}`,
     ]);
     const identity = resolveStartIdentity(args, source, task, { reserve: true });
     const { runId, defaults } = identity;
@@ -1883,6 +2239,7 @@ function runVerifyFinal(args) {
         '--agent-tool', args.agentTool,
         '--run-id', runId,
         '--workspace', workspacePath,
+        ...(args.verificationScope === 'relevant' ? ['--scope', 'relevant'] : []),
         ...(identity.reservationToken ? ['--run-reservation-token', identity.reservationToken] : []),
       ]));
       return childProcessExitStatus(runResult);
@@ -2038,24 +2395,23 @@ function runResume(args) {
   console.log(`- executionMode: ${run.mode ?? 'orchestrated'}`);
   console.log(`- agentTool: ${run.agentTool}`);
   console.log(`- workspaceRef: ${run.workspaceRef}`);
-  const failedCheckpoint = run.verification.find((item) => (
-    item.milestoneId
-    && (item.status === 'failed' || item.status === 'unavailable')
-  ));
-  const nextMilestone = failedCheckpoint
-    ? null
-    : run.milestones?.find((milestone) => milestone.status === 'pending');
-  if (failedCheckpoint) {
-    console.log(`- checkpointFailure: ${failedCheckpoint.milestoneId}:${failedCheckpoint.status}`);
-    console.log('- resumeNote: checkpoint failure evidence is immutable; finish this run as failed or blocked, then start a new retry run.');
-  } else if (nextMilestone) {
+  const nextMilestone = run.milestones?.find((milestone) => milestone.status === 'pending');
+  const latestCheckpointProblems = nextMilestone
+    ? latestMilestoneAttempts(run.verification, nextMilestone.id)
+      .filter((item) => item.status === 'failed' || item.status === 'unavailable')
+    : [];
+  if (latestCheckpointProblems.length) {
+    console.log(`- checkpointRetry: ${nextMilestone.id}:${latestCheckpointProblems.map((item) => item.status).join(',')}`);
+    console.log('- resumeNote: previous evidence is preserved; correct the problem and rerun this checkpoint in the same run.');
+  }
+  if (nextMilestone) {
     console.log(`- nextMilestone: ${nextMilestone.id} - ${nextMilestone.outcome}`);
     console.log(`- checkpoint: ${commandLine('p2a_runs.mjs', ['checkpoint', ...source.sourceArgs, '--run-id', run.runId, '--milestone', nextMilestone.id])}`);
   }
   if (run.status !== 'started') {
     console.log('- resumeNote: run is already closed; use status/review commands for follow-up evidence.');
   }
-  if (run.status === 'started' && !failedCheckpoint) {
+  if (run.status === 'started') {
     if (run.runKind === 'final_verification') {
       printFinalVerificationInstructions(source, task, run, run.workspacePath);
     } else if (run.runKind === 'final_visual_review') {
@@ -2063,7 +2419,10 @@ function runResume(args) {
     } else if (run.runKind === 'final_acceptance_review') {
       printFinalAcceptanceReviewInstructions(source, task, run, run.workspacePath);
     } else {
-      printLauncherPrompt(source, task, run.runId, approvalLink, { suppressPrompt: args.json });
+      printLauncherPrompt(source, task, run.runId, approvalLink, {
+        suppressPrompt: args.json,
+        run,
+      });
     }
   }
   printRunCommandFooter(P2A_PATHS, {
@@ -2160,11 +2519,23 @@ function runFinish(args) {
     }
     console.log('- finishNote: runtime is closed but run is still started; continuing run closeout without appending runtime events.');
   }
+  const completionRequested = args.status === null || args.status === 'finished';
+  const automaticVerifyOptions = (
+    completionRequested
+    && !verifyRequested(args)
+  ) ? automaticVerificationOptions(source, existingRun, args) : null;
+  const automaticVerification = automaticVerifyOptions !== null;
+  const shouldVerify = verifyRequested(args) || automaticVerification;
   let verificationFailed = false;
   let verificationSpawnError = null;
-  if (verifyRequested(args)) {
-    console.log('Running verification...');
-    const verifyArgs = verifyRunArgs(args);
+  if (shouldVerify) {
+    console.log(automaticVerification
+      ? 'Running configured verification required for the current workspace revision...'
+      : 'Running verification...');
+    const verifyArgs = verifyRunArgs(
+      args,
+      automaticVerification ? automaticVerifyOptions : args.verifyOptions,
+    );
     const verifyResult = runScript('p2a_runs.mjs', verifyArgs);
     printChildResult(verifyResult);
     verificationFailed = childProcessFailed(verifyResult);
@@ -2179,18 +2550,40 @@ function runFinish(args) {
     }
   }
 
-  const evidenceRun = verifyRequested(args)
+  const evidenceRun = shouldVerify
     ? readRun(source.runsDir, args.runId)
     : existingRun;
-  const unavailableFinalEvidence = hasOnlyUnavailableFinalEvidence(evidenceRun);
+  const currentFinalAttempts = FINAL_EVIDENCE_RUN_KINDS.has(evidenceRun.runKind)
+    ? currentVerificationAttemptsForExecuteRun(source, evidenceRun, args.workspace)
+    : [];
+  const failedFinalAttempts = currentFinalAttempts.filter((item) => item.status === 'failed');
+  const unavailableFinalAttempts = currentFinalAttempts.filter((item) => item.status === 'unavailable');
+  const failedFinalEvidence = failedFinalAttempts.length > 0;
+  const unavailableFinalEvidence = hasOnlyUnavailableFinalEvidence(
+    evidenceRun,
+    currentFinalAttempts,
+  );
   const unavailableChildProcessEvidence = (
     Boolean(verificationSpawnError)
     && FINAL_EVIDENCE_RUN_KINDS.has(evidenceRun.runKind)
-    && !evidenceRun.verification.some((item) => item.status === 'failed')
+    && !failedFinalEvidence
   );
+  const effectiveVerificationFailure = verificationFailed || failedFinalEvidence;
   const blockingReview = (unavailableFinalEvidence || unavailableChildProcessEvidence)
     ? blockingFinalReviewEvidence(source, evidenceRun)
     : null;
+  if (
+    verificationFailed
+    && !args.status
+    && !blockingReview
+    && !failedFinalEvidence
+    && !unavailableFinalEvidence
+    && !unavailableChildProcessEvidence
+  ) {
+    console.error('Verification did not pass. The run remains started so the problem can be corrected and the same verification can be retried.');
+    console.error(`Retry finish: ${commandLine('p2a_execute.mjs', ['finish', ...source.sourceArgs, '--run-id', args.runId])}`);
+    return childProcessExitStatus({ status: 1, error: verificationSpawnError });
+  }
   const unavailableEnvironmentFailure = (
     (!args.status || args.status === 'failed')
     && (!args.failureClass || args.failureClass === 'environment_failure')
@@ -2205,8 +2598,8 @@ function runFinish(args) {
   const environmentFailure = unavailableEnvironmentFailure || childProcessEnvironmentFailure;
   const requestedBeforeMonitor = blockingReview
     ? 'failed'
-    : (args.status ?? ((verificationFailed || environmentFailure) ? 'failed' : null));
-  if (!verificationFailed && (!requestedBeforeMonitor || requestedBeforeMonitor === 'finished')) {
+    : (args.status ?? ((effectiveVerificationFailure || environmentFailure) ? 'failed' : null));
+  if (!effectiveVerificationFailure && (!requestedBeforeMonitor || requestedBeforeMonitor === 'finished')) {
     const monitorResult = applyMonitorGate(args, source, evidenceRun);
     if (monitorResult) {
       if (monitorResult.accepted) {
@@ -2221,7 +2614,7 @@ function runFinish(args) {
     ? (args.status === 'blocked' ? 'blocked' : 'failed')
     : childProcessEnvironmentFailure
       ? 'failed'
-      : (args.status ?? ((verificationFailed || environmentFailure) ? 'failed' : null));
+      : (args.status ?? ((effectiveVerificationFailure || environmentFailure) ? 'failed' : null));
   const finalFailureClass = blockingReview
     ? 'implementation_incomplete'
     : requestedStatus === 'failed' && !args.failureClass
@@ -2232,8 +2625,13 @@ function runFinish(args) {
     addBlockingReviewFailureDetails(args, blockingReview);
     console.log(`Blocking final ${blockingReview.label} review evidence overrides the unavailable environment evidence.`);
   }
+  if (finalFailureClass === 'verification_failed' && failedFinalEvidence) {
+    addFailedFinalVerificationDetails(args, failedFinalAttempts);
+  }
   if (environmentFailure && finalFailureClass === 'environment_failure') {
-    if (unavailableEnvironmentFailure) addUnavailableEnvironmentFailureDetails(args, evidenceRun);
+    if (unavailableEnvironmentFailure) {
+      addUnavailableEnvironmentFailureDetails(args, unavailableFinalAttempts);
+    }
     console.log('Unavailable final evidence execution was classified as environment_failure; implementation remains complete.');
   }
 

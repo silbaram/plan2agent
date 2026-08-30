@@ -8,8 +8,8 @@
 
 [English](README.md) | [한국어](README.ko-KR.md)
 
-Turn a concise product document into a confirmed product understanding, approved specs,
-dependency-aware tasks, and verified AI coding runs.
+Use Plan2Agent as a development assistant: describe the result you want, confirm the few decisions
+that change that result, and let it guide planning, implementation, recovery, and verification.
 
 ## Install in 30 seconds
 
@@ -27,35 +27,33 @@ you finish a planning, approval, or development step.
 
 ## Your first plan in 5 minutes
 
-After initialization, write a concise Markdown or text entry document. It can be one paragraph and
-does not need to be a complete requirements document. Then run `p2a next --entry <path>` or give that
-path to the planning harness.
+After initialization, either pass a one-sentence idea with `p2a next --idea "<what to build>"` or use
+a concise Markdown/text document with `p2a next --entry <path>`. The CLI stores the request locally,
+so chat is never the only copy of the requirement.
 
 | Agent | Example |
 | --- | --- |
-| Codex | `Use the $p2a-harness skill with --entry docs/idea.md.` |
-| Claude Code | `/p2a-harness --entry docs/idea.md` |
-| Gemini CLI | `/p2a:harness --entry docs/idea.md` |
+| Codex | `Run p2a next --idea "Add release status", then use $p2a-harness.` |
+| Claude Code | `p2a next --idea "Add release status"`, then `/p2a-harness` |
+| Gemini CLI | `p2a next --entry docs/idea.md`, then `/p2a:harness` |
 
-The harness confirms the intended scope, records the confirmed decisions, and turns them into
-canonical product, implementation, and task artifacts instead of leaving decisions only in chat.
+Plan2Agent first explains what it understood, asks only about choices that would materially change
+the product, and confirms the scope and implementation plan before coding.
 
 ```text
-Concise Markdown or text entry document
-  -> Gate A: confirmed understanding and explicit user approval
-  -> Gate ②: approved persistent architecture, stack, prohibitions, and style
-  -> Gate B: product spec and implementation plan
-     -> conditional visual experience: structured screens + approved offline HTML prototype
-  -> Gate C: execution readiness (Direct, Planned, or dependency-aware Orchestrated)
-  -> supervised implementation and verification
-  -> evaluation and improvement proposals
+Natural-language request
+  -> short understanding summary and only necessary questions
+  -> scope confirmation
+  -> implementation-plan confirmation
+  -> implementation, automatic recovery, and risk-based verification
+  -> recommended close, with optional code review or retrospective
 ```
 
-Gate A confirmation, Gate ② project-shape approval, and Gate B approval are separate decisions.
-`p2a decide --quote "<exact user utterance>"` records Gate ① scope/spec approvals, while
-`p2a shape approve --quote "<exact user utterance>"` records the Gate ② approval. Both append to
-the chained `decisions.jsonl` ledger and keep existing artifact approval audits as readable copies. Later iterations
-reuse that constitution unless their approved scope materially changes the architecture.
+Internally, scope and implementation-plan confirmation remain separate safety boundaries. Their
+compatibility names are Gate A and Gate B. An existing constitution is reused; the optional Gate ②
+appears only for a hard prohibition or consequential, difficult-to-reverse architecture/stack choice.
+Ordinary repository conventions remain advisory. Gate names, state ids, hashes, and artifact paths
+stay out of normal assistant messages and remain available through `p2a next --details` or JSON.
 
 The harness writes canonical files under `.plan2agent/artifacts/<project_id>/`. Complete the
 suggested action and run:
@@ -75,7 +73,7 @@ layer around those tools.
 
 | Need | Plan2Agent approach |
 | --- | --- |
-| Clear decisions before code | Gate A scope, Gate ② project shape, and Gate B spec approval preserve decisions, constraints, assumptions, and approval state. |
+| Clear decisions before code | Gate A scope and Gate B spec approval preserve product decisions; Gate ② is added only for material project-shape commitments. |
 | Traceable implementation work | Specs map to a Direct run, Planned checkpoints, or dependency-aware Orchestrated tasks. |
 | Reviewable agent execution | Foreground-supervised runs preserve mode, rationale, changed files, and verification evidence. |
 | Portable project state | Local JSON artifacts remain canonical across Codex, Claude Code, and Gemini CLI. |
@@ -91,7 +89,7 @@ Planning and execution state stays local to the project:
 ```text
 .plan2agent/
   project.config.json
-  constitution.json
+  constitution.json                 # conditional project-shape contract
   artifacts/<project_id>/
     decisions.jsonl
     gate-a-intake/
@@ -125,15 +123,17 @@ Optional `runTracking.retrospectiveSignals` thresholds let `p2a next --json --co
 surface bounded current-iteration performance and process candidates before close. Safe process
 signals are detected by default; projects can set `enabled: false` to disable them, while performance
 budgets remain opt-in. At closeout, product review, P2A retrospective, and close are separate choices;
-when no automatic signal exists, retrospective asks once about user-observed P2A friction. Proposal
+when evidence is current and no signal exists, close is recommended. A clean review asks once to close
+instead of repeating the menu. Proposal
 writes remain separately approved and skipping retrospective never blocks close. Continuing the
 retrospective writes one short `docs/retrospective/<project>-<iteration>.md` report only after
 approval. The final maintenance task prints the same review/retrospective/finish choice without
 adding a persistent maintenance close state.
 New iterations materialize `current-development-contract.json` from the approved current state. It
-contains only the objective, scope, architecture and code rules, preservation constraints,
+contains only the objective, scope, durable project rules, current-iteration architecture/interface/
+dependency constraints, preservation constraints,
 acceptance, verification, authority, and current task bindings required for implementation. `p2a
-next` and the normal run lifecycle validate that contract, the current task graph, constitution, and
+next` and the normal run lifecycle validate that contract, the current task graph, any constitution, and
 active run without traversing archived iteration documents. Existing iterative projects can run
 `p2a iteration migrate-current-contract --artifacts <artifact-root>` once.
 
@@ -147,12 +147,12 @@ Existing inline records remain readable and `p2a runs migrate-schema` converts t
 
 The planning harness turns an idea into structured intake, product and implementation specs, and
 validated execution readiness. Gate A presents a compact understanding summary and requires explicit
-confirmation. The same session establishes or reuses Gate ② before continuing to Gate B. It records
-uncertainty as an assumption or user decision rather than inventing a requirement.
+confirmation. The same session reuses any constitution and opens Gate ② only for a material durable
+project-shape decision before continuing to Gate B. It records uncertainty rather than inventing it.
 
 ### 2. Execute the approved objective
 
-After Gate B approval, use `p2a next` to start the next action authorized by the current development contract. New projects default to `adaptive`, while existing configs without an execution mode continue to resolve as `orchestrated`; explicit `adaptive`, `direct`, `planned`, and `orchestrated` policies remain supported without another mode approval. Planned mode records 2–5 ordered, command-verified resume checkpoints. New runs bind an execution envelope containing objective, current-contract hash, scope, architecture and code rules, preservation conditions, non-goals, acceptance, verification, and authority boundaries.
+After Gate B approval, use `p2a next` to start the next action authorized by the current development contract. New projects default to `adaptive`, while existing configs without an execution mode continue to resolve as `orchestrated`; explicit `adaptive`, `direct`, `planned`, and `orchestrated` policies remain supported without another mode approval. Planned mode records 2–5 ordered, command-verified resume checkpoints. New runs bind an execution envelope containing objective, current-contract hash, scope, durable project rules, current-iteration architecture/interface/dependency constraints, preservation conditions, non-goals, acceptance, verification, and authority boundaries.
 
 For direct control of a prepared work item:
 
@@ -163,11 +163,17 @@ p2a execute start \
 ```
 
 During implementation, projects may opt into fast changed-file checks with structured
-`relatedVerification` commands and `p2a runs verify --related`. These checks are feedback only and
-never authorize iteration close. After every task is done, `p2a next` guides any required final review
-and then starts `p2a execute verify-final` only when no final run already holds valid full evidence.
-Full test, lint, or typecheck evidence is bound to the exact workspace revision; a later source change
-makes it stale and requires one new final verification.
+`relatedVerification` commands and `p2a runs verify --related`. With no flags, finish selects a related
+check for docs/metadata work and every configured test, lint, and typecheck for code work. Failed attempts stay in the
+run, while a corrected retry of the same check at the current revision controls completion.
+
+After every task is done, one shared risk profile selects close evidence. Documentation and metadata
+need a current related check; configured project commands take precedence, with a packaged file-integrity
+check as the default. A canonical isolated-code implementation can reuse its current
+product-revision full verification. Multi-task/worktree integration, high-risk paths, or product code
+changed after verification require `p2a execute verify-final`. If documentation changes after a valid
+product pass, P2A keeps that pass and runs only `p2a execute verify-final --scope relevant`; a later
+product-file change requires full verification again.
 
 See the [Execution Reference](docs/supervised-execution.md) for start, resume, finish, retry, and bounded batch procedures.
 
@@ -221,7 +227,7 @@ Plan2Agent installs one `p2a` entrypoint:
 | Command | Purpose |
 | --- | --- |
 | `p2a init` | Initialize project state and provider assets. |
-| `p2a next` | Return one state-based next action and its reason. |
+| `p2a next` | Explain the current situation and recommend one next action; use `--details` for the internal command and state. |
 | `p2a decide` | Record Gate ① approvals, revocations, and scope changes in the decision ledger. |
 | `p2a decisions` | List decision history and trace a file to governing decisions with `--why`. |
 | `p2a shape` | Inspect, migrate, approve, and revoke the persistent project constitution. |
@@ -298,18 +304,19 @@ services.
 
 ## Developing Plan2Agent
 
-Clone the repository, use Node.js 22 or newer, and run:
+Clone the repository and use Node.js 22 or newer. During development, run the core suite and the
+provider parity check:
 
 ```bash
 npm test
-npm run test:full
-npm run test:package
-node scripts/sync_cli_assets.mjs
 node scripts/check_cli_parity.mjs
-node scripts/run_fixtures.mjs
 ```
 
-`npm run test:full` is the named long-running fixture gate, including the completed/resumable handoff portability matrix. The direct fixture command remains available for repository development and debugging.
+Before a PR or release, run `npm run test:all`. It runs the core suite, the long-running fixture gate,
+and the package/upgrade smoke tests once each. `npm run test:full` owns fixture and lifecycle coverage;
+`node scripts/run_fixtures.mjs` is its direct debugging equivalent, so do not run both in the same
+verification pass. Run `node scripts/sync_cli_assets.mjs` only when canonical provider assets changed,
+then confirm them with the parity check.
 
 The runtime is Node.js ESM and uses the Node.js standard library. Repository structure:
 
