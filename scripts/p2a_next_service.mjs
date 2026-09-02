@@ -2525,7 +2525,7 @@ export const NEXT_DECISION_RULES = [
       && context.fullVerificationNeeded
     ),
     reason: () => (
-      'The completed iteration needs one full verification pass bound to the current canonical workspace revision before close.'
+      'The completed iteration needs one configured full verification pass bound to the current canonical workspace revision before close.'
     ),
     command: (context) => [
       'execute',

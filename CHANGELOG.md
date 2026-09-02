@@ -12,6 +12,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 - Add simple GitHub issue preview and explicit publication commands for four-section P2A retrospective Markdown, with a github.com-pinned target, secret/path rejection, and marker-based duplicate detection.
 
+### Changed
+
+- Reuse current-revision configured full verification from eligible canonical implementation runs instead of always repeating it in a final verification run.
+- Distinguish configured full verification from Gate and repository supplemental checks in CLI output and documentation.
+
+### Fixed
+
+- Classify sandbox child-process denial as an environment failure and provide one-step final-evidence retry without deleting immutable failure history.
+- Validate retrospective run-index aggregates and provide an atomic `p2a runs rebuild-index` recovery command.
+
 ## [0.5.19] - 2026-08-28
 
 ### Changed

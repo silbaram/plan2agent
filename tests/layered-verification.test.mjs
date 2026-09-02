@@ -22,7 +22,7 @@ import {
   workspaceRevisionSha256,
   runFilePath,
 } from '../scripts/p2a_run_paths.mjs';
-import { runExecute, runIteration } from './helpers/fixtures.mjs';
+import { runExecute, runIteration, runRuns } from './helpers/fixtures.mjs';
 
 function git(workspace, args) {
   const result = spawnSync('git', args, { cwd: workspace, encoding: 'utf8' });
@@ -195,7 +195,7 @@ test('execute finish collects Git changes before related argv execution and seal
   }
 });
 
-test('close-ready full evidence is canonical, final-run-only, and revision bound', () => {
+test('close-ready configured full evidence safely reuses canonical implementation runs and remains revision bound', () => {
   const workspace = mkdtempSync(path.join(tmpdir(), 'p2a-final-verification-'));
   try {
     const artifactRoot = path.join(workspace, '.plan2agent', 'artifacts', 'sample');
@@ -237,6 +237,7 @@ test('close-ready full evidence is canonical, final-run-only, and revision bound
     run.workspaceRevisionSha256 = revision;
     run.verification.push({
       type: 'test',
+      command: 'npm test',
       status: 'passed',
       exitCode: 0,
       source: 'config',
@@ -252,7 +253,47 @@ test('close-ready full evidence is canonical, final-run-only, and revision bound
       activeIteration: 'v1',
     });
     assert.equal(ready.run.runId, run.runId);
+    assert.equal(ready.evidenceSource, 'final_run');
     assert.equal(ready.verification.length, 1);
+
+    writeFileSync(graphPath, `${JSON.stringify({
+      tasks: [{ id: 'task-001', status: 'done' }],
+    })}\n`, 'utf8');
+    writeFileSync(path.join(artifactRoot, 'project.config.json'), `${JSON.stringify({
+      testCommand: 'npm test',
+    })}\n`, 'utf8');
+    const implementationRun = structuredClone(run);
+    implementationRun.runId = 'run-implementation-current-revision';
+    implementationRun.taskId = 'task-001';
+    delete implementationRun.runKind;
+    delete implementationRun.workspaceRevisionSha256;
+    implementationRun.changedFiles = ['product.js'];
+    const reused = assertFinalFullVerificationReady({
+      runsDir,
+      runs: [implementationRun],
+      artifactRoot,
+      graphPath,
+      activeIteration: 'v1',
+    });
+    assert.equal(reused.run.runId, implementationRun.runId);
+    assert.equal(reused.evidenceSource, 'implementation_run_reuse');
+
+    writeFileSync(path.join(artifactRoot, 'project.config.json'), `${JSON.stringify({
+      testCommand: 'npm run test:all',
+    })}\n`, 'utf8');
+    assert.throws(
+      () => assertFinalFullVerificationReady({
+        runsDir,
+        runs: [implementationRun],
+        artifactRoot,
+        graphPath,
+        activeIteration: 'v1',
+      }),
+      /no eligible canonical run contains passed configured full verification/,
+    );
+    writeFileSync(path.join(artifactRoot, 'project.config.json'), `${JSON.stringify({
+      testCommand: 'npm test',
+    })}\n`, 'utf8');
 
     let revisionRuns = 0;
     const retainedRuns = Array.from({ length: 20 }, (_, index) => ({
@@ -289,8 +330,37 @@ test('close-ready full evidence is canonical, final-run-only, and revision bound
         graphPath,
         activeIteration: 'v1',
       }),
-      /no finished canonical final run contains passed full/,
+      /no eligible canonical run contains passed configured full verification/,
     );
+
+    for (const finalStatus of ['failed', 'blocked']) {
+      const lifecycleFailedFinal = structuredClone(run);
+      lifecycleFailedFinal.runId = `run-final-lifecycle-${finalStatus}`;
+      lifecycleFailedFinal.status = finalStatus;
+      lifecycleFailedFinal.updatedAt = '2026-08-26T00:03:00.000Z';
+      lifecycleFailedFinal.finishedAt = '2026-08-26T00:03:00.000Z';
+      lifecycleFailedFinal.verification = [{
+        type: 'custom',
+        command: 'Plan2Agent lifecycle child-process preflight',
+        status: 'unavailable',
+        exitCode: null,
+        source: 'command',
+        scope: 'full',
+        failureReason: 'environment_spawn_denied',
+        workspaceRevisionSha256: revision,
+      }];
+      assert.throws(
+        () => assertFinalFullVerificationReady({
+          runsDir,
+          runs: [run, lifecycleFailedFinal],
+          artifactRoot,
+          graphPath,
+          activeIteration: 'v1',
+        }),
+        /no eligible canonical run contains passed configured full verification/,
+        `${finalStatus} final lifecycle attempt must block older final success`,
+      );
+    }
 
     const relatedOnly = structuredClone(run);
     relatedOnly.verification[0].scope = 'related';
@@ -302,7 +372,7 @@ test('close-ready full evidence is canonical, final-run-only, and revision bound
         graphPath,
         activeIteration: 'v1',
       }),
-      /no finished canonical final run contains passed full/,
+      /no eligible canonical run contains passed configured full verification/,
     );
 
     writeFileSync(path.join(workspace, 'product.js'), 'export const value = 2;\n', 'utf8');
@@ -316,6 +386,255 @@ test('close-ready full evidence is canonical, final-run-only, and revision bound
       }),
       /stale/,
     );
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('final verification requires every current configured full command before finish and close-ready', () => {
+  const workspace = mkdtempSync(path.join(tmpdir(), 'p2a-final-configured-profile-'));
+  try {
+    const artifactRoot = path.join(workspace, '.plan2agent', 'artifacts', 'webhook-api-service');
+    mkdirSync(path.dirname(artifactRoot), { recursive: true });
+    cpSync(path.resolve('fixtures/_e2e/webhook-api-service'), artifactRoot, { recursive: true });
+    const initialized = runIteration([
+      'init',
+      '--artifacts', artifactRoot,
+      '--iteration-id', 'v1-configured-profile',
+    ]);
+    assert.equal(initialized.status, 0, `${initialized.stdout}${initialized.stderr}`);
+
+    const graphPath = path.join(
+      artifactRoot,
+      'iterations',
+      'v1-configured-profile',
+      'gate-c-task-graph',
+      'task-graph.json',
+    );
+    const graph = JSON.parse(readFileSync(graphPath, 'utf8'));
+    graph.tasks = graph.tasks.map((task) => ({ ...task, status: 'done' }));
+    writeFileSync(graphPath, `${JSON.stringify(graph, null, 2)}\n`, 'utf8');
+
+    const testCommand = `${process.execPath} --eval "process.exit(0)"`;
+    const lintCommand = `${process.execPath} --eval "void 0"`;
+    writeFileSync(path.join(artifactRoot, 'project.config.json'), `${JSON.stringify({
+      testCommand,
+      lintCommand,
+    }, null, 2)}\n`, 'utf8');
+
+    const runId = 'run-final-configured-profile';
+    let result = runExecute([
+      'verify-final',
+      '--artifacts', artifactRoot,
+      '--task', graph.tasks[0].id,
+      '--run-id', runId,
+      '--agent-tool', 'manual',
+      '--workspace', workspace,
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    result = runRuns([
+      'verify',
+      '--artifacts', artifactRoot,
+      '--run-id', runId,
+      '--test-command', testCommand,
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+
+    result = runExecute(['finish', '--artifacts', artifactRoot, '--run-id', runId]);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /missing current configured full verification: lint:/);
+
+    result = runRuns([
+      'verify',
+      '--artifacts', artifactRoot,
+      '--run-id', runId,
+      '--lint-command', lintCommand,
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    result = runExecute(['finish', '--artifacts', artifactRoot, '--run-id', runId]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+
+    const run = JSON.parse(readFileSync(runFilePath(path.join(artifactRoot, 'runs'), runId), 'utf8'));
+    const ready = assertFinalFullVerificationReady({
+      runsDir: path.join(artifactRoot, 'runs'),
+      runs: [run],
+      artifactRoot,
+      graphPath,
+      activeIteration: 'v1-configured-profile',
+    });
+    assert.equal(ready.run.runId, runId);
+    assert.deepEqual(ready.verification.map((item) => item.type).sort(), ['lint', 'test']);
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('newer partial configured failures block implementation evidence reuse until a complete profile passes', () => {
+  const workspace = mkdtempSync(path.join(tmpdir(), 'p2a-final-verification-chronology-'));
+  try {
+    const artifactRoot = path.join(workspace, '.plan2agent', 'artifacts', 'sample');
+    const graphPath = path.join(
+      artifactRoot,
+      'iterations',
+      'v1',
+      'gate-c-task-graph',
+      'task-graph.json',
+    );
+    const runsDir = path.join(artifactRoot, 'runs');
+    mkdirSync(path.dirname(graphPath), { recursive: true });
+    mkdirSync(runsDir, { recursive: true });
+    writeFileSync(graphPath, `${JSON.stringify({
+      tasks: [{ id: 'task-001', status: 'done' }],
+    })}\n`, 'utf8');
+    writeFileSync(path.join(artifactRoot, 'project.config.json'), `${JSON.stringify({
+      testCommand: 'npm test',
+      lintCommand: 'npm run lint',
+    })}\n`, 'utf8');
+    writeFileSync(path.join(workspace, 'product.js'), 'export const value = 1;\n', 'utf8');
+
+    const baseRun = {
+      taskId: 'task-001',
+      iterationId: 'v1',
+      sourceLayout: 'iteration',
+      taskGraphRef: 'iterations/v1/gate-c-task-graph/task-graph.json',
+      status: 'finished',
+      workspacePath: workspace,
+      isolation: { mode: 'none' },
+      changedFiles: ['product.js'],
+      startedAt: '2026-08-26T00:00:00.000Z',
+      updatedAt: '2026-08-26T00:01:00.000Z',
+      finishedAt: '2026-08-26T00:01:00.000Z',
+      verification: [],
+    };
+    const revision = workspaceRevisionSha256(
+      workspace,
+      workspaceRevisionExcludedPathsForRun(runsDir, baseRun, {
+        artifactRoot,
+        graphPath,
+        workspacePath: workspace,
+      }),
+    );
+    const verification = (type, command, status, finishedAt) => ({
+      type,
+      command,
+      status,
+      exitCode: status === 'passed' ? 0 : (status === 'failed' ? 1 : null),
+      source: 'config',
+      scope: 'full',
+      startedAt: finishedAt,
+      finishedAt,
+      workspaceRevisionSha256: revision,
+    });
+    const completeRun = (runId, minute) => ({
+      ...structuredClone(baseRun),
+      runId,
+      updatedAt: `2026-08-26T00:0${minute}:00.000Z`,
+      finishedAt: `2026-08-26T00:0${minute}:00.000Z`,
+      verification: [
+        verification('test', 'npm test', 'passed', `2026-08-26T00:0${minute}:00.000Z`),
+        verification('lint', 'npm run lint', 'passed', `2026-08-26T00:0${minute}:01.000Z`),
+      ],
+    });
+    const olderComplete = completeRun('run-implementation-complete-older', 1);
+    const newerPartialPass = {
+      ...structuredClone(baseRun),
+      runId: 'run-implementation-partial-pass',
+      updatedAt: '2026-08-26T00:02:00.000Z',
+      finishedAt: '2026-08-26T00:02:00.000Z',
+      verification: [
+        verification('test', 'npm test', 'passed', '2026-08-26T00:02:00.000Z'),
+      ],
+    };
+    const partialPassReady = assertFinalFullVerificationReady({
+      runsDir,
+      runs: [olderComplete, newerPartialPass],
+      artifactRoot,
+      graphPath,
+      activeIteration: 'v1',
+    });
+    assert.equal(partialPassReady.run.runId, olderComplete.runId);
+
+    const interleavedComplete = completeRun('run-implementation-interleaved-complete', 4);
+    interleavedComplete.verification = [
+      verification('test', 'npm test', 'passed', '2026-08-26T00:02:00.000Z'),
+      verification('lint', 'npm run lint', 'passed', '2026-08-26T00:04:00.000Z'),
+    ];
+    const interleavedFailure = {
+      ...structuredClone(baseRun),
+      runId: 'run-implementation-interleaved-failure',
+      status: 'failed',
+      updatedAt: '2026-08-26T00:03:00.000Z',
+      finishedAt: '2026-08-26T00:03:00.000Z',
+      verification: [
+        verification('test', 'npm test', 'failed', '2026-08-26T00:03:00.000Z'),
+      ],
+    };
+    assert.throws(
+      () => assertFinalFullVerificationReady({
+        runsDir,
+        runs: [interleavedComplete, interleavedFailure],
+        artifactRoot,
+        graphPath,
+        activeIteration: 'v1',
+      }),
+      /no eligible canonical run contains passed configured full verification/,
+      'a later profile command must not hide a failure after an earlier required pass',
+    );
+
+    for (const blockerStatus of ['failed', 'unavailable']) {
+      const blocker = {
+        ...structuredClone(baseRun),
+        runId: `run-implementation-partial-${blockerStatus}`,
+        status: 'failed',
+        updatedAt: '2026-08-26T00:03:00.000Z',
+        finishedAt: '2026-08-26T00:03:00.000Z',
+        verification: [
+          verification('test', 'npm test', blockerStatus, '2026-08-26T00:03:00.000Z'),
+        ],
+      };
+      assert.throws(
+        () => assertFinalFullVerificationReady({
+          runsDir,
+          runs: [olderComplete, newerPartialPass, blocker],
+          artifactRoot,
+          graphPath,
+          activeIteration: 'v1',
+        }),
+        /no eligible canonical run contains passed configured full verification/,
+        `${blockerStatus} partial configured evidence must block older complete success`,
+      );
+
+      const partialPassAfterBlocker = {
+        ...structuredClone(newerPartialPass),
+        runId: `run-implementation-partial-pass-after-${blockerStatus}`,
+        updatedAt: '2026-08-26T00:04:00.000Z',
+        finishedAt: '2026-08-26T00:04:00.000Z',
+        verification: [
+          verification('test', 'npm test', 'passed', '2026-08-26T00:04:00.000Z'),
+        ],
+      };
+      assert.throws(
+        () => assertFinalFullVerificationReady({
+          runsDir,
+          runs: [olderComplete, blocker, partialPassAfterBlocker],
+          artifactRoot,
+          graphPath,
+          activeIteration: 'v1',
+        }),
+        /no eligible canonical run contains passed configured full verification/,
+        `partial pass must not clear a newer ${blockerStatus} blocker`,
+      );
+
+      const recovered = completeRun(`run-implementation-complete-after-${blockerStatus}`, 5);
+      const recoveredReady = assertFinalFullVerificationReady({
+        runsDir,
+        runs: [olderComplete, blocker, partialPassAfterBlocker, recovered],
+        artifactRoot,
+        graphPath,
+        activeIteration: 'v1',
+      });
+      assert.equal(recoveredReady.run.runId, recovered.runId);
+    }
   } finally {
     rmSync(workspace, { recursive: true, force: true });
   }

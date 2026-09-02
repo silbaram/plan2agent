@@ -4209,7 +4209,11 @@ function validateIterationCurrentFixtureCases() {
         `"${process.execPath}" -e "process.exit(0)"`,
       ]);
       checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('test:full: passed') || !result.stdout.includes('typecheck:full: passed')) {
+      if (
+        result.status !== 0
+        || !result.stdout.includes('test:configured-full: passed')
+        || !result.stdout.includes('typecheck:configured-full: passed')
+      ) {
         console.error(`p2a_runs verify fixture check failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
@@ -4295,7 +4299,7 @@ function validateIterationCurrentFixtureCases() {
         `"${process.execPath}" -e "process.exit(0)"`,
       ]);
       checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('test:full: passed')) {
+      if (result.status !== 0 || !result.stdout.includes('test:configured-full: passed')) {
         console.error(`p2a_runs collect-git fixture verify failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
@@ -4941,7 +4945,7 @@ function validateIterationCurrentFixtureCases() {
       const timeoutVerification = timeoutRun.verification.at(-1);
       if (
         result.status === 0
-        || !result.stdout.includes('- test:full: failed')
+        || !result.stdout.includes('- test:configured-full: failed')
         || timeoutVerification?.status !== 'failed'
         || !timeoutVerification?.stderrTail?.includes('verification command timed out after 50ms')
       ) {
@@ -5140,7 +5144,7 @@ function validateIterationCurrentFixtureCases() {
         `"${process.execPath}" -e "process.exit(0)"`,
       ]);
       checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('test:full: passed')) {
+      if (result.status !== 0 || !result.stdout.includes('test:configured-full: passed')) {
         console.error(`p2a_runs finished failure flag fixture verify failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
@@ -5274,7 +5278,7 @@ function validateIterationCurrentFixtureCases() {
         '--test-command', `"${process.execPath}" -e "process.exit(0)"`,
       ]);
       checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('test:full: passed')) {
+      if (result.status !== 0 || !result.stdout.includes('test:configured-full: passed')) {
         console.error(`p2a final verification fixture command failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
@@ -5886,7 +5890,7 @@ function validateIterationCurrentFixtureCases() {
         '--test-command', `"${process.execPath}" -e "process.exit(0)"`,
       ]);
       checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('test:full: passed')) {
+      if (result.status !== 0 || !result.stdout.includes('test:configured-full: passed')) {
         console.error(`p2a iter-002 final verification command failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
@@ -8910,7 +8914,7 @@ function validateIterationCurrentFixtureCases() {
         '--test-command', `"${process.execPath}" -e "process.exit(0)"`,
       ]);
       checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('test:full: passed')) {
+      if (result.status !== 0 || !result.stdout.includes('test:configured-full: passed')) {
         console.error(`p2a iter-003 final verification command failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };

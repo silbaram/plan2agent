@@ -141,7 +141,7 @@ import {
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.projectRoot;
 const PROJECT_RUNS_DIR = path.join(ROOT, DEFAULT_RUNS_DIR);
-const COMMANDS = new Set(['start', 'record', 'verify', 'checkpoint', 'finish', 'list', 'show', 'revision', 'validate', 'gc', 'migrate-layout', 'migrate-schema']);
+const COMMANDS = new Set(['start', 'record', 'verify', 'checkpoint', 'finish', 'list', 'show', 'revision', 'validate', 'gc', 'rebuild-index', 'migrate-layout', 'migrate-schema']);
 const RUN_STATUSES = new Set(['started', 'finished', 'failed', 'blocked']);
 const RUN_KINDS = new Set(['final_verification', 'final_visual_review', 'final_acceptance_review']);
 const VISUAL_FEEDBACK_VERDICTS = new Set(['note', 'concern']);
@@ -171,6 +171,7 @@ function usage() {
     '  p2a runs show --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>)',
     '  p2a runs revision --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>)',
     '  p2a runs validate (--artifacts <dir>|--runs <dir>|--graph <path>) [--run-id <run-id>]',
+    '  p2a runs rebuild-index (--artifacts <dir>|--runs <dir>|--graph <path>) [--dry-run] --yes',
     '  p2a runs gc (--artifacts <dir>|--runs <dir>|--graph <path>) [--dry-run] [--iteration <id>] [--keep-final] [--force]',
     '  p2a runs migrate-layout (--artifacts <dir>|--runs <dir>|--graph <path>) [--dry-run] --yes',
     '  p2a runs migrate-schema (--artifacts <dir>|--runs <dir>|--graph <path>) [--run-id <run-id>] [--dry-run] --yes',
@@ -237,8 +238,8 @@ function usage() {
     '  --iteration <id>        Limit gc to one iteration.',
     '  --keep-final            Keep the latest closed run for each task and run kind during gc.',
     '  --force                 Allow gc when runTracking.persistence is persistent.',
-    '  --dry-run               Preview gc, layout migration, or schema migration without writing files.',
-    '  --yes                   Confirm the selected layout or schema migration.',
+    '  --dry-run               Preview gc, index rebuild, layout migration, or schema migration without writing files.',
+    '  --yes                   Confirm the selected index rebuild, layout migration, or schema migration.',
     '  --help, -h              Show this help.',
   ].join('\n');
 }
@@ -496,12 +497,12 @@ function parseArgs(argv) {
   if (args.runReservationToken && (args.command !== 'start' || !args.runId)) {
     throw new Error('--run-reservation-token requires start with --run-id');
   }
-  const migrationCommands = new Set(['migrate-layout', 'migrate-schema']);
+  const migrationCommands = new Set(['rebuild-index', 'migrate-layout', 'migrate-schema']);
   if (args.dryRun && !migrationCommands.has(args.command) && args.command !== 'gc') {
-    throw new Error('--dry-run is only supported with gc, migrate-layout, or migrate-schema');
+    throw new Error('--dry-run is only supported with gc, rebuild-index, migrate-layout, or migrate-schema');
   }
   if (args.yes && !migrationCommands.has(args.command)) {
-    throw new Error('--yes is only supported with migrate-layout or migrate-schema');
+    throw new Error('--yes is only supported with rebuild-index, migrate-layout, or migrate-schema');
   }
   if (migrationCommands.has(args.command) && !args.dryRun && !args.yes) {
     throw new Error(`${args.command} requires --yes, or use --dry-run to preview`);
@@ -969,6 +970,7 @@ const RETROSPECTIVE_SUMMARY_REASONS = new Set(['superseded', 'completed_maintena
 function emptyRetrospectiveSummary(iterationId) {
   return {
     iterationId,
+    scope: 'pruned_run_history',
     runCount: 0,
     reasonCounts: { superseded: 0, completed_maintenance: 0 },
     statusCounts: { finished: 0, failed: 0, blocked: 0 },
@@ -1039,6 +1041,7 @@ function summarizePrunedRuns(index, runsDir, selected, reason) {
       iterations.push(summary);
       byIteration.set(entry.iterationId, summary);
     }
+    summary.scope ??= 'pruned_run_history';
     let run = null;
     try {
       const runRef = indexedRunRef(runsDir, entry.runId, index);
@@ -1939,7 +1942,7 @@ export function normalizeRelatedChangedFiles(workspacePath, changedFiles) {
   );
   if (!normalized.length) {
     throw new Error(
-      'related verification requires at least one changed file from --changed-file, the existing run, or --collect-git; run full verification instead',
+      'related verification requires at least one changed file from --changed-file, the existing run, or --collect-git; run configured full verification instead',
     );
   }
   return normalized;
@@ -2110,6 +2113,13 @@ export function classifyVerificationSpawnResult(result, options = {}) {
     const errorCode = typeof result.error.code === 'string' && result.error.code.trim()
       ? result.error.code.trim().toUpperCase()
       : 'UNKNOWN';
+    if (errorCode === 'EPERM' || errorCode === 'EACCES') {
+      return {
+        status: 'unavailable',
+        reason: 'environment_spawn_denied',
+        hint: `child-process execution was denied by the environment (${errorCode})`,
+      };
+    }
     return {
       status: 'unavailable',
       reason: 'spawn_error',
@@ -2147,7 +2157,7 @@ export function verificationSpecs(args, config, changedFiles = []) {
     const configured = relatedVerificationCommands(config);
     if (!configured.length) {
       throw new Error(
-        'related verification is not configured; add structured relatedVerification argv commands to .plan2agent/project.config.json or run full verification',
+        'related verification is not configured; add structured relatedVerification argv commands to .plan2agent/project.config.json or run configured full verification',
       );
     }
     return configured.map((request) => {
@@ -2193,6 +2203,16 @@ export function verificationSpecs(args, config, changedFiles = []) {
     }
     return { ...request, command, scope: 'full' };
   });
+}
+
+export function verificationEvidenceClass(item) {
+  if (item?.scope === 'related') return 'related';
+  if (item?.type === 'custom') return 'gate-supplemental';
+  if (
+    item?.scope === 'full'
+    && (item?.source === 'config' || item?.source === 'command')
+  ) return 'configured-full';
+  return item?.scope ?? 'legacy';
 }
 
 function verificationTimeoutMs(config) {
@@ -2281,6 +2301,87 @@ export function runVerificationCommand(spec, workspacePath, timeoutMs, options =
   };
 }
 
+const VERIFICATION_PREFLIGHT_TIMEOUT_MS = 10000;
+
+/**
+ * Probe child-process availability once before a verification batch. This is
+ * deliberately independent of the product command so sandbox denial cannot be
+ * misreported as a product failure or repeated once per configured command.
+ */
+export function runVerificationEnvironmentPreflight(workspacePath, options = {}) {
+  const spawn = options.spawnSync ?? spawnSync;
+  const startedAt = new Date();
+  const result = spawn(
+    process.execPath,
+    ['--eval', 'process.exit(0)'],
+    {
+      cwd: workspacePath,
+      shell: false,
+      maxBuffer: 1024 * 1024,
+      timeout: options.timeoutMs ?? VERIFICATION_PREFLIGHT_TIMEOUT_MS,
+    },
+  );
+  const finishedAt = new Date();
+  const code = typeof result?.error?.code === 'string'
+    ? result.error.code.trim().toUpperCase()
+    : null;
+  if (!result?.error && result?.status === 0) return null;
+  const permissionDenied = code === 'EPERM' || code === 'EACCES';
+  const reason = permissionDenied
+    ? 'environment_spawn_denied'
+    : 'environment_preflight_failed';
+  const detail = code ?? (result?.signal ? `signal ${result.signal}` : `exit ${result?.status ?? 'unknown'}`);
+  return {
+    reason,
+    hint: permissionDenied
+      ? `child-process preflight was denied by the environment (${detail})`
+      : `child-process preflight could not complete (${detail})`,
+    startedAt: startedAt.toISOString(),
+    finishedAt: finishedAt.toISOString(),
+    durationMs: Math.max(0, finishedAt.getTime() - startedAt.getTime()),
+    stderrTail: tail([
+      decodeVerificationOutput(result?.stderr),
+      result?.error?.message,
+    ].filter(Boolean).join('\n')),
+  };
+}
+
+function unavailableResultFromEnvironmentPreflight(spec, preflight) {
+  return {
+    type: spec.type,
+    command: spec.command,
+    status: 'unavailable',
+    exitCode: null,
+    durationMs: null,
+    startedAt: null,
+    finishedAt: null,
+    stdoutTail: '',
+    stderrTail: preflight.stderrTail,
+    source: spec.source,
+    scope: spec.scope ?? 'full',
+    ...(Array.isArray(spec.argv) ? { argv: [...spec.argv] } : {}),
+    ...(spec.selectedFileCount !== undefined ? { selectedFileCount: spec.selectedFileCount } : {}),
+    failureReason: preflight.reason,
+    failureHint: preflight.hint,
+  };
+}
+
+export function runVerificationCommands(specs, workspacePath, timeoutMs, options = {}) {
+  const executableSpecs = specs.filter((spec) => spec.status !== 'skipped');
+  if (!executableSpecs.length) {
+    return specs.map((spec) => runVerificationCommand(spec, workspacePath, timeoutMs, options));
+  }
+  const preflight = runVerificationEnvironmentPreflight(workspacePath, options);
+  if (preflight) {
+    return specs.map((spec) => (
+      spec.status === 'skipped'
+        ? runVerificationCommand(spec, workspacePath, timeoutMs, options)
+        : unavailableResultFromEnvironmentPreflight(spec, preflight)
+    ));
+  }
+  return specs.map((spec) => runVerificationCommand(spec, workspacePath, timeoutMs, options));
+}
+
 function collectGitChangedFiles(workspacePath) {
   const result = gitCommandResult(['status', '--porcelain=v1', '-z', '--untracked-files=all'], workspacePath);
   if (result.status !== 0) {
@@ -2349,6 +2450,29 @@ function executedFullVerificationItems(run, revision = null) {
     && item.scope === 'full'
     && (!revision || item.workspaceRevisionSha256 === revision)
   ));
+}
+
+function verificationCommandIdentity(item) {
+  return typeof item?.originalCommand === 'string' && item.originalCommand.trim()
+    ? item.originalCommand.trim()
+    : (typeof item?.command === 'string' ? item.command.trim() : '');
+}
+
+function configuredFullVerificationProfile(config) {
+  return ['test', 'lint', 'typecheck'].flatMap((type) => {
+    const command = configuredCommand(config, type);
+    return typeof command === 'string' && command.trim()
+      ? [{ type, command: command.trim() }]
+      : [];
+  });
+}
+
+function missingConfiguredFullVerification(run, revision, config) {
+  const passed = executedFullVerificationItems(run, revision);
+  return configuredFullVerificationProfile(config).filter((configured) => !passed.some((item) => (
+    item.type === configured.type
+    && verificationCommandIdentity(item) === configured.command
+  )));
 }
 
 function structuredDetailHasValue(detail, fields) {
@@ -2728,7 +2852,7 @@ function verifyRun(args) {
   const specs = verificationSpecs(args, config, relatedChangedFiles);
   const timeoutMs = verificationTimeoutMs(config);
   const revision = verificationWorkspaceRevision(runsDir, run, source, workspacePath);
-  const executedResults = specs.map((spec) => runVerificationCommand(spec, workspacePath, timeoutMs));
+  const executedResults = runVerificationCommands(specs, workspacePath, timeoutMs);
   const results = attachVerificationRevision(executedResults, revision);
   run.verification.push(...results);
   run.updatedAt = new Date().toISOString();
@@ -2738,7 +2862,7 @@ function verifyRun(args) {
     console.log(`- projectConfig: saved ${saved.source} ${saved.keys.join(',')} to ${displayPath(saved.path)}`);
   }
   for (const result of results) {
-    console.log(`- ${result.type}:${result.scope}: ${result.status} (${result.command})`);
+    console.log(`- ${result.type}:${verificationEvidenceClass(result)}: ${result.status} (${result.command})`);
     if (result.normalizedCommand) console.log(`  normalized: ${result.originalCommand} -> ${result.normalizedCommand}`);
     if (result.status === 'skipped' && result.source === 'config') {
       console.log(`  hint: pass --${result.type}-command <cmd> --save-config to store a project-specific command`);
@@ -2747,7 +2871,56 @@ function verifyRun(args) {
       console.log(`  hint: verification command was not started; check the command, launcher path, current directory, and environment. ${result.failureHint ?? ''}`.trim());
     }
   }
+  const unavailableEvidence = results.some((result) => result.status === 'unavailable')
+    && !results.some((result) => result.status === 'failed');
+  const recoverySourceArgs = sourceRunArgs(args);
+  if (
+    unavailableEvidence
+    && RUN_KINDS.has(run.runKind)
+    && recoverySourceArgs
+    && !finalReviewSidecarMayBlock(runsDir, run)
+  ) {
+    console.log(`- recovery: ${sharedCommandLine(P2A_PATHS, 'p2a_execute.mjs', [
+      'retry',
+      ...recoverySourceArgs,
+      '--run-id', run.runId,
+    ])}`);
+  }
   return results.some((result) => result.status === 'failed' || result.status === 'unavailable') ? 1 : 0;
+}
+
+export function appendEnvironmentFailureEvidence(runsDir, runId, options = {}) {
+  const { run, expectedRun } = readRunForUpdate(runsDir, runId);
+  if (run.status !== 'started') return run;
+  const command = options.command ?? 'Plan2Agent child-process preflight';
+  const reason = options.reason ?? 'environment_spawn_denied';
+  const existing = run.verification.find((item) => (
+    item.status === 'unavailable'
+    && item.command === command
+    && item.failureReason === reason
+  ));
+  if (existing) return run;
+  const workspacePath = path.resolve(run.workspacePath);
+  const revision = verificationWorkspaceRevision(runsDir, run, null, workspacePath);
+  run.verification.push({
+    type: 'custom',
+    command,
+    status: 'unavailable',
+    exitCode: null,
+    durationMs: null,
+    startedAt: null,
+    finishedAt: null,
+    stdoutTail: '',
+    stderrTail: options.hint ?? 'Plan2Agent could not start a required child process.',
+    source: 'command',
+    scope: 'full',
+    failureReason: reason,
+    failureHint: options.hint ?? 'Retry after child-process execution is available.',
+    workspaceRevisionSha256: revision,
+  });
+  run.updatedAt = new Date().toISOString();
+  writeRun(runsDir, run, { expectedRun });
+  return run;
 }
 
 function checkpointRun(args) {
@@ -2787,10 +2960,16 @@ function checkpointRun(args) {
   const config = loadProjectConfigWithPath(runsDir, run, workspacePath).config;
   const timeoutMs = verificationTimeoutMs(config);
   const revision = verificationWorkspaceRevision(runsDir, run, source, workspacePath);
-  const executedResults = milestone.verification.map((command) => ({
-    ...runVerificationCommand({ type: 'custom', command, source: 'command', scope: 'full' }, workspacePath, timeoutMs),
-    milestoneId: milestone.id,
-  }));
+  const executedResults = runVerificationCommands(
+    milestone.verification.map((command) => ({
+      type: 'custom',
+      command,
+      source: 'command',
+      scope: 'full',
+    })),
+    workspacePath,
+    timeoutMs,
+  ).map((result) => ({ ...result, milestoneId: milestone.id }));
   const results = attachVerificationRevision(executedResults, revision);
   run.verification.push(...results);
   const passed = results.every((result) => result.status === 'passed');
@@ -2805,7 +2984,9 @@ function checkpointRun(args) {
   writeRun(runsDir, run, { expectedRun });
   console.log(`Plan2Agent checkpoint ${passed ? 'verified' : 'failed'}: ${milestone.id}`);
   console.log(`- outcome: ${milestone.outcome}`);
-  for (const result of results) console.log(`- ${result.status}: ${result.command}`);
+  for (const result of results) {
+    console.log(`- ${verificationEvidenceClass(result)}:${result.status}: ${result.command}`);
+  }
   const next = run.milestones.find((candidate) => candidate.status === 'pending');
   if (passed && next) {
     console.log(`- next: ${sharedCommandLine(P2A_PATHS, 'p2a_runs.mjs', ['checkpoint', ...(runLifecycleSourceArgs(args) ?? ['--runs', runsDir]), '--run-id', run.runId, '--milestone', next.id])}`);
@@ -2901,8 +3082,21 @@ function finishRun(args) {
       && executedFullVerificationItems(run, workspaceRevision).length === 0
     ) {
       throw new Error(
-        `final verification run ${run.runId} requires at least one passed full test/lint/typecheck command bound to the current workspace revision`,
+        `final verification run ${run.runId} requires at least one passed configured full test/lint/typecheck command bound to the current workspace revision`,
       );
+    }
+    if (run.runKind === 'final_verification') {
+      const config = loadProjectConfigWithPath(runsDir, run, workspacePath).config;
+      const missingConfigured = missingConfiguredFullVerification(
+        run,
+        workspaceRevision,
+        config,
+      );
+      if (missingConfigured.length) {
+        throw new Error(
+          `final verification run ${run.runId} is missing current configured full verification: ${missingConfigured.map(({ type, command }) => `${type}:${command}`).join(', ')}`,
+        );
+      }
     }
     const visualReviewEvidence = readRequiredVisualReviewEvidence(
       runsDir,
@@ -2957,11 +3151,32 @@ function finishRun(args) {
   return run.status === 'failed' ? 1 : 0;
 }
 
+function finalReviewSidecarMayBlock(runsDir, run) {
+  let suffix = null;
+  let confirmingVerdict = null;
+  if (run.runKind === 'final_acceptance_review') {
+    suffix = '.acceptance-review.json';
+    confirmingVerdict = 'confirm_behavior';
+  } else if (run.runKind === 'final_visual_review') {
+    suffix = '.visual-review.json';
+    confirmingVerdict = 'confirm_ui';
+  } else {
+    return false;
+  }
+  const sidecarPath = runSidecarPath(runsDir, run.runId, suffix);
+  if (!existsSync(sidecarPath)) return false;
+  try {
+    return loadJson(sidecarPath).verdict !== confirmingVerdict;
+  } catch {
+    return true;
+  }
+}
+
 function verificationSummary(run) {
   if (!run.verification.length) return '-';
   const counts = new Map();
   for (const item of run.verification) {
-    const key = `${item.scope ?? 'legacy'}:${item.status}`;
+    const key = `${verificationEvidenceClass(item)}:${item.status}`;
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
   return [...counts.entries()]
@@ -3602,6 +3817,115 @@ function validateRuns(args) {
   return 0;
 }
 
+function runRecordRefsForIndexRebuild(runsDir) {
+  const refs = [];
+  for (const entry of readdirSync(runsDir, { withFileTypes: true })) {
+    const entryPath = path.join(runsDir, entry.name);
+    if (entry.isFile() && isRunRecordFile(entryPath)) {
+      refs.push(entry.name);
+      continue;
+    }
+    if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+    for (const child of readdirSync(entryPath, { withFileTypes: true })) {
+      const childPath = path.join(entryPath, child.name);
+      if (child.isFile() && isRunRecordFile(childPath)) {
+        refs.push(`${entry.name}/${child.name}`);
+      }
+    }
+  }
+  return refs.sort();
+}
+
+function preservedRetrospectiveForIndexRebuild(rawIndex, projectId) {
+  if (!rawIndex?.retrospective) return { retrospective: null, dropped: false };
+  try {
+    validateRunIndexData({
+      ...emptyIndex(projectId),
+      retrospective: rawIndex.retrospective,
+    });
+    return { retrospective: structuredClone(rawIndex.retrospective), dropped: false };
+  } catch {
+    return { retrospective: null, dropped: true };
+  }
+}
+
+function rebuildRunIndex(args) {
+  const runsDir = resolveRunsDir(args);
+  assertDirectory(runsDir, 'runs directory');
+  return withRunStoreLocks([runsDir], () => {
+    assertNoPendingRunMigration(runsDir);
+    recoverPendingRunWrite(runsDir);
+    const currentIndexPath = indexPath(runsDir);
+    const previousIndexText = existsSync(currentIndexPath)
+      ? readFileSync(currentIndexPath, 'utf8')
+      : null;
+    let rawIndex = null;
+    if (previousIndexText !== null) {
+      try {
+        rawIndex = JSON.parse(previousIndexText);
+      } catch {
+        // Canonical run files remain sufficient to rebuild the live projection.
+      }
+    }
+
+    const records = runRecordRefsForIndexRebuild(runsDir).map((runRef) => {
+      const runPath = path.join(runsDir, runRef);
+      const run = loadJson(runPath);
+      validateRunData(run);
+      if (path.basename(runRef) !== `${run.runId}.json`) {
+        throw new Error(`run record filename does not match runId ${run.runId}: ${runRef}`);
+      }
+      if (runRef !== legacyRunRef(run.runId) && runRef !== canonicalRunRef(run)) {
+        throw new Error(`run ${run.runId} is stored at unsupported ref ${runRef}`);
+      }
+      resolveRunExecutionEnvelope(run, runsDir);
+      return { run, runRef };
+    });
+    records.sort((left, right) => (
+      Date.parse(left.run.startedAt) - Date.parse(right.run.startedAt)
+      || left.run.runId.localeCompare(right.run.runId)
+    ));
+    const runIds = records.map(({ run }) => run.runId);
+    if (runIds.length !== new Set(runIds).size) {
+      throw new Error('cannot rebuild run-index: canonical run files contain duplicate runId values');
+    }
+    const projectIds = [...new Set(records.map(({ run }) => run.projectId))];
+    if (projectIds.length > 1) {
+      throw new Error(`cannot rebuild run-index across multiple project ids: ${projectIds.join(', ')}`);
+    }
+    const projectId = projectIds[0]
+      ?? (typeof rawIndex?.projectId === 'string' && rawIndex.projectId.trim()
+        ? rawIndex.projectId
+        : path.basename(path.dirname(runsDir)));
+    const retrospective = preservedRetrospectiveForIndexRebuild(rawIndex, projectId);
+    const rebuilt = emptyIndex(projectId);
+    rebuilt.runs = records.map(({ run, runRef }) => runIndexEntry(run, runRef));
+    rebuilt.tasks = rebuildTaskRunIndex(rebuilt.runs);
+    if (retrospective.retrospective) rebuilt.retrospective = retrospective.retrospective;
+    validateRunIndexData(rebuilt);
+
+    console.log('Plan2Agent run-index rebuild');
+    console.log(`- runs: ${displayPath(runsDir)}`);
+    console.log(`- canonical run records: ${records.length}`);
+    console.log(`- retrospective: ${retrospective.dropped ? 'invalid summary will be dropped' : (retrospective.retrospective ? 'preserved' : 'none')}`);
+    if (args.dryRun) {
+      console.log('- result: dry-run; no files changed');
+      return 0;
+    }
+
+    atomicWriteJson(currentIndexPath, rebuilt);
+    try {
+      validateRunsDir(runsDir);
+    } catch (error) {
+      if (previousIndexText === null) unlinkSync(currentIndexPath);
+      else atomicWriteText(currentIndexPath, previousIndexText);
+      throw new Error(`rebuilt run-index failed canonical validation and was rolled back: ${error.message}`);
+    }
+    console.log(`- result: rebuilt and validated ${rebuilt.runs.length} run(s)`);
+    return 0;
+  });
+}
+
 export function main(argv = process.argv.slice(2)) {
   try {
     const args = parseArgs(argv);
@@ -3619,6 +3943,7 @@ export function main(argv = process.argv.slice(2)) {
     if (args.command === 'revision') return showWorkspaceRevision(args);
     if (args.command === 'validate') return validateRuns(args);
     if (args.command === 'gc') return gcRunEvidence(args);
+    if (args.command === 'rebuild-index') return rebuildRunIndex(args);
     if (args.command === 'migrate-layout') return migrateRunLayout(args);
     if (args.command === 'migrate-schema') return migrateRunSchema(args);
     throw new Error(`unknown command: ${args.command}`);

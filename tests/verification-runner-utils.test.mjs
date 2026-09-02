@@ -5,14 +5,19 @@ import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  appendEnvironmentFailureEvidence,
   classifyVerificationSpawnResult,
   decodeVerificationOutput,
   normalizeProjectLocalLauncherCommand,
   runVerificationCommand,
+  runVerificationCommands,
+  runVerificationEnvironmentPreflight,
+  verificationEvidenceClass,
 } from '../scripts/p2a_runs.mjs';
 import {
   childProcessExitStatus,
   childProcessFailed,
+  preflightLifecycleChildProcess,
 } from '../scripts/p2a_execute.mjs';
 import { RUNS_CLI } from './helpers/fixtures.mjs';
 
@@ -35,6 +40,21 @@ test('execute lifecycle treats a child spawn error as failure even with status z
   assert.equal(childProcessExitStatus(result), 1);
 });
 
+test('execute lifecycle preflight exposes a stable environment failure reason', () => {
+  const failure = preflightLifecycleChildProcess({
+    spawnSync: () => ({
+      error: { code: 'EPERM', message: 'spawnSync node EPERM' },
+      status: null,
+      stdout: '',
+      stderr: '',
+    }),
+  });
+  assert.deepEqual(failure, {
+    reason: 'environment_spawn_denied',
+    hint: 'child-process execution was denied by the environment (EPERM)',
+  });
+});
+
 test('classifies a spawn error as unavailable even when status is zero', () => {
   assert.deepEqual(classifyVerificationSpawnResult({
     error: { code: 'EPERM', message: 'spawnSync /bin/sh EPERM' },
@@ -42,8 +62,8 @@ test('classifies a spawn error as unavailable even when status is zero', () => {
     stderr: '',
   }), {
     status: 'unavailable',
-    reason: 'spawn_error',
-    hint: 'verification command could not be started reliably (EPERM)',
+    reason: 'environment_spawn_denied',
+    hint: 'child-process execution was denied by the environment (EPERM)',
   });
 });
 
@@ -64,8 +84,126 @@ test('runtime verification never records a spawn error as passed or exit zero', 
 
   assert.equal(result.status, 'unavailable');
   assert.equal(result.exitCode, null);
-  assert.equal(result.failureReason, 'spawn_error');
+  assert.equal(result.failureReason, 'environment_spawn_denied');
   assert.match(result.stderrTail, /spawnSync \/bin\/sh EPERM/);
+});
+
+test('bounded environment preflight classifies EPERM before product commands run', () => {
+  let spawnCount = 0;
+  const preflight = runVerificationEnvironmentPreflight(process.cwd(), {
+    spawnSync: () => {
+      spawnCount += 1;
+      return {
+        error: { code: 'EPERM', message: 'spawnSync node EPERM' },
+        status: null,
+        stdout: '',
+        stderr: '',
+      };
+    },
+  });
+  assert.equal(spawnCount, 1);
+  assert.equal(preflight.reason, 'environment_spawn_denied');
+
+  spawnCount = 0;
+  const results = runVerificationCommands([
+    { type: 'test', command: 'npm test', source: 'config', scope: 'full' },
+    { type: 'lint', command: 'npm run lint', source: 'config', scope: 'full' },
+  ], process.cwd(), 10000, {
+    spawnSync: () => {
+      spawnCount += 1;
+      return {
+        error: { code: 'EPERM', message: 'spawnSync node EPERM' },
+        status: null,
+        stdout: '',
+        stderr: '',
+      };
+    },
+  });
+  assert.equal(spawnCount, 1, 'one preflight replaces repeated denied product spawns');
+  assert.deepEqual(results.map((result) => result.failureReason), [
+    'environment_spawn_denied',
+    'environment_spawn_denied',
+  ]);
+});
+
+test('lifecycle preflight evidence is structured, revision-bound, and idempotent', () => {
+  const workspace = mkdtempSync(path.join(os.tmpdir(), 'p2a-lifecycle-preflight-evidence-'));
+  const runsDir = path.join(workspace, 'runs');
+  mkdirSync(runsDir);
+  const now = '2026-09-02T00:00:00.000Z';
+  const run = {
+    schema_version: 'p2a.run.v1',
+    runId: 'run-lifecycle-preflight',
+    projectId: 'verification-fixture',
+    taskId: 'task-001',
+    taskTitle: 'Record lifecycle environment evidence',
+    iterationId: null,
+    sourceLayout: 'graph',
+    taskGraphRef: 'task-graph.json',
+    sourceSpecRef: 'spec.json',
+    agentTool: 'codex',
+    workspaceRef: workspace,
+    workspacePath: workspace,
+    isolation: {
+      mode: 'none',
+      branch: null,
+      worktree: null,
+      baseRef: null,
+      created: false,
+      createCommand: null,
+      createExitCode: null,
+      createOutputTail: null,
+    },
+    status: 'started',
+    startedAt: now,
+    updatedAt: now,
+    finishedAt: null,
+    changedFiles: [],
+    verification: [],
+    notes: [],
+  };
+  const runPath = path.join(runsDir, `${run.runId}.json`);
+  writeFileSync(runPath, `${JSON.stringify(run, null, 2)}\n`, 'utf8');
+  writeFileSync(path.join(runsDir, 'run-index.json'), `${JSON.stringify({
+    schema_version: 'p2a.run_index.v1',
+    projectId: run.projectId,
+    runs: [{
+      runId: run.runId,
+      taskId: run.taskId,
+      iterationId: run.iterationId,
+      status: run.status,
+      agentTool: run.agentTool,
+      workspaceRef: run.workspaceRef,
+      taskGraphRef: run.taskGraphRef,
+      runRef: `${run.runId}.json`,
+      startedAt: run.startedAt,
+      finishedAt: run.finishedAt,
+    }],
+    tasks: [{ taskId: run.taskId, runIds: [run.runId], latestRunId: run.runId }],
+  }, null, 2)}\n`, 'utf8');
+
+  try {
+    const options = {
+      command: 'Plan2Agent lifecycle child-process preflight',
+      reason: 'environment_spawn_denied',
+      hint: 'child-process execution was denied by the environment (EPERM)',
+    };
+    appendEnvironmentFailureEvidence(runsDir, run.runId, options);
+    appendEnvironmentFailureEvidence(runsDir, run.runId, options);
+    const recorded = JSON.parse(readFileSync(runPath, 'utf8'));
+    assert.equal(recorded.verification.length, 1);
+    assert.equal(recorded.verification[0].status, 'unavailable');
+    assert.equal(recorded.verification[0].failureReason, 'environment_spawn_denied');
+    assert.match(recorded.verification[0].workspaceRevisionSha256, /^[a-f0-9]{64}$/);
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('verification terminology separates configured full and Gate supplemental evidence', () => {
+  assert.equal(verificationEvidenceClass({ type: 'test', source: 'config', scope: 'full' }), 'configured-full');
+  assert.equal(verificationEvidenceClass({ type: 'custom', source: 'command', scope: 'full' }), 'gate-supplemental');
+  assert.equal(verificationEvidenceClass({ type: 'test', source: 'config', scope: 'related' }), 'related');
 });
 
 test('classifies Windows cmd not-found exit code and English stderr as unavailable', () => {
@@ -177,7 +315,7 @@ test('p2a_runs verify returns failure and records unavailable for a command-subs
     const run = JSON.parse(readFileSync(runPath, 'utf8'));
 
     assert.equal(result.status, 1);
-    assert.match(result.stdout, /custom:full: unavailable/);
+    assert.match(result.stdout, /custom:gate-supplemental: unavailable/);
     assert.equal(run.verification.length, 1);
     assert.equal(run.verification[0].status, 'unavailable');
     assert.equal(run.verification[0].exitCode, 0);
