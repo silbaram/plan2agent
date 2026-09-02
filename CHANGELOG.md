@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.5.20] - 2026-09-02
+
 ### Added
 
 - Add simple GitHub issue preview and explicit publication commands for four-section P2A retrospective Markdown, with a github.com-pinned target, secret/path rejection, and marker-based duplicate detection.
@@ -318,7 +320,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Add package-runtime project initialization, managed provider assets, artifact validation, handoff, supervised execution, evaluation, and proposal workflows.
 - Ship canonical and generated integrations for Codex, Claude Code, and Gemini CLI.
 
-[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.5.19...HEAD
+[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.5.20...HEAD
+[0.5.20]: https://github.com/silbaram/plan2agent/compare/v0.5.19...v0.5.20
 [0.5.19]: https://github.com/silbaram/plan2agent/compare/v0.5.18...v0.5.19
 [0.5.18]: https://github.com/silbaram/plan2agent/compare/v0.5.17...v0.5.18
 [0.5.17]: https://github.com/silbaram/plan2agent/compare/v0.5.16...v0.5.17
