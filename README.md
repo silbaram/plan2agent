@@ -130,6 +130,9 @@ writes remain separately approved and skipping retrospective never blocks close.
 retrospective writes one short `docs/retrospective/<project>-<iteration>.md` report only after
 approval. The final maintenance task prints the same review/retrospective/finish choice without
 adding a persistent maintenance close state.
+That four-section report can be rendered with `p2a proposals issue-preview` and, only after an
+explicit `--yes` confirmation, published to the public P2A GitHub repository with
+`publish-issue`. Previewing never calls GitHub, and publication does not approve implementation.
 New iterations materialize `current-development-contract.json` from the approved current state. It
 contains only the objective, scope, architecture and code rules, preservation constraints,
 acceptance, verification, authority, and current task bindings required for implementation. `p2a
@@ -236,7 +239,7 @@ Plan2Agent installs one `p2a` entrypoint:
 | `p2a runs` | Record, verify, finish, and inspect run evidence. |
 | `p2a execute` | Supervise implementation and canonical final verification, visual, and acceptance runs through verified finish. |
 | `p2a eval` | Grade, compare, analyze, generate, and summarize execution evidence. |
-| `p2a proposals` | Mine, review, curate, approve, and summarize improvement proposals. |
+| `p2a proposals` | Mine and review proposals, or preview and explicitly publish a retrospective GitHub issue. |
 | `p2a buildlore` | Project, check, search, and retrieve optional BuildLore knowledge. |
 
 Run `p2a --help` for the top-level command surface and use the

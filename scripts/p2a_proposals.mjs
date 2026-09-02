@@ -58,9 +58,25 @@ import {
   resolveIterationState,
   validateMaintenanceTaskGraphProject,
 } from './p2a_iteration_state.mjs';
+import {
+  createGithubIssuePreview,
+  publishGithubIssue,
+} from './p2a_github_issues.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
-const COMMANDS = new Set(['mine', 'list', 'show', 'validate', 'digest', 'review', 'curate', 'draft-patch', 'approve-draft']);
+const COMMANDS = new Set([
+  'mine',
+  'list',
+  'show',
+  'validate',
+  'digest',
+  'review',
+  'curate',
+  'draft-patch',
+  'approve-draft',
+  'issue-preview',
+  'publish-issue',
+]);
 const PROJECT_RUNS_DIR = path.join(P2A_PATHS.projectRoot, DEFAULT_RUNS_DIR);
 const DEFAULT_PROPOSALS_DIR = path.join(P2A_PATHS.projectRoot, '.plan2agent', 'proposals');
 const DEFAULT_P2A_TOOLKIT_REPO = 'https://github.com/silbaram/plan2agent';
@@ -78,6 +94,8 @@ function usage() {
     '  p2a proposals curate --review <path> [--proposals <dir>] [--output <path>] [--dry-run] [--overwrite] [--json]',
     '  p2a proposals draft-patch --curation <path> [--candidate-id <id>] [--proposals <dir>] [--output <path>] [--dry-run] [--overwrite] [--json]',
     '  p2a proposals approve-draft --draft <path> --artifacts <iterative-project-dir> --approved-by <name> [--approval-note <text>] [--proposals <dir>] [--output <path>] [--dry-run] [--overwrite] [--json]',
+    '  p2a proposals issue-preview --retrospective <relative/path.md> [--title <text>] [--target-area <text>] [--json]',
+    '  p2a proposals publish-issue --retrospective <relative/path.md> --yes [--title <text>] [--target-area <text>] [--json]',
     '',
     'Commands:',
     '  mine       Read run logs and monitor gate sidecars, then write proposed skill-proposal JSON files.',
@@ -89,6 +107,8 @@ function usage() {
     '  curate     Turn a proposal review into approval-ready improvement candidates.',
     '  draft-patch Create a non-applying patch draft for one curation candidate.',
     '  approve-draft Record human approval and append a maintenance task without applying files.',
+    '  issue-preview Build and inspect a public GitHub issue draft from a retrospective report.',
+    '  publish-issue Publish the retrospective after explicit --yes confirmation.',
     '',
     'Source options:',
     '  --artifacts <dir>   Iterative artifact root; reads runs/ and writes proposals/ under that root by default.',
@@ -101,18 +121,21 @@ function usage() {
     '  --candidate-id <id> Candidate id for draft-patch. Required when curation has multiple candidates.',
     '  --approved-by <name> Human approver recorded for approve-draft.',
     '  --approval-note <text> Optional approval note recorded for approve-draft.',
+    '  --retrospective <path> Retrospective Markdown below docs/retrospective/.',
+    '  --title <text>     Optional exact public issue title override.',
     '  --allow-local-upstream-task Allow approve-draft to append a local maintenance task for non-project targets.',
     '  --output <path>     Review/curation/patch-draft/approval output path.',
     '  --iteration <id>    Limit mine to runs from one iteration.',
     '  --run-id <run-id>   Limit mine to one run.',
     '  --target <kind>     Proposal target for mine: project, p2a_toolkit, or companion_project. Default: project.',
     `  --target-repo <url> Upstream repository for companion_project proposals. p2a_toolkit always uses ${DEFAULT_P2A_TOOLKIT_REPO}.`,
-    '  --target-area <area> Upstream area/component for target proposals.',
+    '  --target-area <area> Upstream proposal area, or retrospective issue title area.',
     '  --upstream-reason <text> Why this project proposal should be handled upstream.',
+    '  --yes               Confirm the external GitHub issue publication.',
     '',
     '  --dry-run           Print candidates without writing files.',
     '  --overwrite         Replace an existing proposal file with the same proposalId.',
-    '  --json              Machine-readable output for mine/list/digest/review/curate/draft-patch/approve-draft.',
+    '  --json              Machine-readable output, including issue-preview and publish-issue.',
     '  --help, -h          Show this help.',
   ].join('\n');
 }
@@ -133,9 +156,11 @@ function parseArgs(argv) {
     review: null,
     curation: null,
     draft: null,
+    retrospective: null,
     candidateId: null,
     approvedBy: null,
     approvalNote: null,
+    title: null,
     output: null,
     iterationId: null,
     runId: null,
@@ -146,6 +171,7 @@ function parseArgs(argv) {
     allowLocalUpstreamTask: false,
     dryRun: false,
     overwrite: false,
+    yes: false,
     json: false,
     help: false,
   };
@@ -162,9 +188,11 @@ function parseArgs(argv) {
     else if (arg === '--review') args.review = requiredValue(argv, ++index, '--review');
     else if (arg === '--curation') args.curation = requiredValue(argv, ++index, '--curation');
     else if (arg === '--draft') args.draft = requiredValue(argv, ++index, '--draft');
+    else if (arg === '--retrospective') args.retrospective = requiredValue(argv, ++index, '--retrospective');
     else if (arg === '--candidate-id') args.candidateId = requiredValue(argv, ++index, '--candidate-id');
     else if (arg === '--approved-by') args.approvedBy = requiredValue(argv, ++index, '--approved-by');
     else if (arg === '--approval-note') args.approvalNote = requiredValue(argv, ++index, '--approval-note');
+    else if (arg === '--title') args.title = requiredValue(argv, ++index, '--title');
     else if (arg === '--output') args.output = requiredValue(argv, ++index, '--output');
     else if (arg === '--iteration') args.iterationId = requiredValue(argv, ++index, '--iteration');
     else if (arg === '--run-id') args.runId = requiredValue(argv, ++index, '--run-id');
@@ -175,6 +203,7 @@ function parseArgs(argv) {
     else if (arg === '--allow-local-upstream-task') args.allowLocalUpstreamTask = true;
     else if (arg === '--dry-run') args.dryRun = true;
     else if (arg === '--overwrite') args.overwrite = true;
+    else if (arg === '--yes') args.yes = true;
     else if (arg === '--json') args.json = true;
     else if (arg.startsWith('--')) throw new Error(`unknown option: ${arg}`);
     else throw new Error(`unexpected argument: ${arg}`);
@@ -209,10 +238,24 @@ function parseArgs(argv) {
   if (args.command === 'approve-draft' && !args.draft) throw new Error('approve-draft requires --draft');
   if (args.command === 'approve-draft' && !args.artifacts) throw new Error('approve-draft requires --artifacts');
   if (args.command === 'approve-draft' && !args.approvedBy) throw new Error('approve-draft requires --approved-by');
+  if (['issue-preview', 'publish-issue'].includes(args.command) && !args.retrospective) {
+    throw new Error(`${args.command} requires --retrospective`);
+  }
+  if (args.command === 'publish-issue' && !args.yes) throw new Error('publish-issue requires --yes');
   if (args.draft && args.command !== 'approve-draft') throw new Error('--draft is only supported by approve-draft');
   if (args.approvedBy && args.command !== 'approve-draft') throw new Error('--approved-by is only supported by approve-draft');
   if (args.approvalNote && args.command !== 'approve-draft') throw new Error('--approval-note is only supported by approve-draft');
   if (args.allowLocalUpstreamTask && args.command !== 'approve-draft') throw new Error('--allow-local-upstream-task is only supported by approve-draft');
+  if (args.retrospective && !['issue-preview', 'publish-issue'].includes(args.command)) {
+    throw new Error('--retrospective is only supported by issue-preview or publish-issue');
+  }
+  if (args.title && !['issue-preview', 'publish-issue'].includes(args.command)) {
+    throw new Error('--title is only supported by issue-preview or publish-issue');
+  }
+  if (args.yes && args.command !== 'publish-issue') throw new Error('--yes is only supported by publish-issue');
+  if (['issue-preview', 'publish-issue'].includes(args.command) && (args.dryRun || args.overwrite)) {
+    throw new Error('--dry-run and --overwrite are not supported by GitHub issue commands');
+  }
   if (args.graph) assertNotUninitializedScaffoldGraph(args.graph);
   if (args.output && !['review', 'curate', 'draft-patch', 'approve-draft'].includes(args.command)) {
     throw new Error('--output is only supported by review, curate, draft-patch, or approve-draft');
@@ -222,22 +265,27 @@ function parseArgs(argv) {
     assertSafeIterationId(args.iterationId);
     if (args.command !== 'mine') throw new Error('--iteration is only supported by mine');
   }
-  if ((args.target || args.targetRepo || args.targetArea || args.upstreamReason) && args.command !== 'mine') {
-    throw new Error('--target, --target-repo, --target-area, and --upstream-reason are only supported by mine');
+  if ((args.target || args.targetRepo || args.upstreamReason) && args.command !== 'mine') {
+    throw new Error('--target, --target-repo, and --upstream-reason are only supported by mine');
   }
-  if (args.targetRepo && !args.target) args.target = 'companion_project';
-  const target = args.target ?? 'project';
-  if (target === 'project' && (args.targetRepo || args.targetArea || args.upstreamReason)) {
-    throw new Error('--target-repo, --target-area, and --upstream-reason require --target p2a_toolkit or --target companion_project');
+  if (args.targetArea && !['mine', 'issue-preview', 'publish-issue'].includes(args.command)) {
+    throw new Error('--target-area is only supported by mine, issue-preview, or publish-issue');
   }
-  if (target === 'p2a_toolkit' && args.targetRepo) {
-    throw new Error(`--target-repo cannot override --target p2a_toolkit; use companion_project for non-default repositories. p2a_toolkit uses ${DEFAULT_P2A_TOOLKIT_REPO}`);
-  }
-  if (target !== 'project' && !args.upstreamReason) {
-    throw new Error('--upstream-reason is required when --target is p2a_toolkit or companion_project');
-  }
-  if (target === 'companion_project' && !args.targetRepo) {
-    throw new Error('--target-repo is required when --target is companion_project');
+  if (args.command === 'mine') {
+    if (args.targetRepo && !args.target) args.target = 'companion_project';
+    const target = args.target ?? 'project';
+    if (target === 'project' && (args.targetRepo || args.targetArea || args.upstreamReason)) {
+      throw new Error('--target-repo, --target-area, and --upstream-reason require --target p2a_toolkit or --target companion_project');
+    }
+    if (target === 'p2a_toolkit' && args.targetRepo) {
+      throw new Error(`--target-repo cannot override --target p2a_toolkit; use companion_project for non-default repositories. p2a_toolkit uses ${DEFAULT_P2A_TOOLKIT_REPO}`);
+    }
+    if (target !== 'project' && !args.upstreamReason) {
+      throw new Error('--upstream-reason is required when --target is p2a_toolkit or companion_project');
+    }
+    if (target === 'companion_project' && !args.targetRepo) {
+      throw new Error('--target-repo is required when --target is companion_project');
+    }
   }
   return args;
 }
@@ -1952,6 +2000,45 @@ function runDigest(args) {
   return 0;
 }
 
+function runIssuePreview(args) {
+  const workspaceRoot = P2A_PATHS.projectRoot;
+  const issue = createGithubIssuePreview(args.retrospective, {
+    workspaceRoot,
+    title: args.title,
+    targetArea: args.targetArea ?? 'Process',
+  });
+  if (args.json) {
+    console.log(JSON.stringify(issue, null, 2));
+    return 0;
+  }
+  console.log('Plan2Agent GitHub issue preview');
+  console.log(`- target: ${issue.targetRepo}`);
+  console.log(`- source: ${issue.source}`);
+  console.log('');
+  console.log(issue.title);
+  console.log('');
+  process.stdout.write(issue.body);
+  return 0;
+}
+
+function runPublishIssue(args) {
+  const workspaceRoot = P2A_PATHS.projectRoot;
+  const issue = createGithubIssuePreview(args.retrospective, {
+    workspaceRoot,
+    title: args.title,
+    targetArea: args.targetArea ?? 'Process',
+  });
+  const result = publishGithubIssue(issue, { workspaceRoot, yes: args.yes });
+  if (args.json) {
+    console.log(JSON.stringify(result, null, 2));
+  } else {
+    console.log('Plan2Agent GitHub issue publication');
+    console.log(`- action: ${result.action}`);
+    console.log(`- issue: ${result.issue.url}`);
+  }
+  return 0;
+}
+
 export function main(argv = process.argv.slice(2)) {
   try {
     const args = parseArgs(argv);
@@ -1968,6 +2055,8 @@ export function main(argv = process.argv.slice(2)) {
     if (args.command === 'curate') return runCurate(args);
     if (args.command === 'draft-patch') return runDraftPatch(args);
     if (args.command === 'approve-draft') return runApproveDraft(args);
+    if (args.command === 'issue-preview') return runIssuePreview(args);
+    if (args.command === 'publish-issue') return runPublishIssue(args);
     throw new Error(`unknown command: ${args.command}`);
   } catch (error) {
     const prefix = error instanceof ValidationError ? 'p2a proposal validation failed' : 'p2a proposal command failed';

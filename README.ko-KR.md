@@ -124,6 +124,10 @@ run을 정리합니다. proposal로 아직 mining하지 않은 실패·차단 ru
 그 참조와 검증용 SHA-256만 가집니다. 기존 인라인 run도 계속 읽을 수 있으며
 `p2a runs migrate-schema`로 참조형으로 전환할 수 있습니다.
 
+네 섹션으로 작성한 짧은 P2A 회고는 `p2a proposals issue-preview`로 공개 이슈 내용을 먼저
+검토하고, 명시적인 `--yes` 확인 뒤에만 `publish-issue`로 P2A GitHub 저장소에 등록할 수 있습니다.
+preview는 GitHub를 호출하지 않으며 이슈 발행은 구현 승인을 뜻하지 않습니다.
+
 ## 핵심 workflow
 
 ### 1. 승인 Gate를 거쳐 계획하기
@@ -222,7 +226,7 @@ Plan2Agent는 하나의 `p2a` entrypoint를 설치합니다.
 | `p2a runs` | run evidence를 기록, 검증, 완료, 조회합니다. |
 | `p2a execute` | 구현과 canonical 최종 verification·visual·acceptance run을 검증된 완료까지 감독합니다. |
 | `p2a eval` | 실행 증거를 grade, compare, analyze, generate, summarize합니다. |
-| `p2a proposals` | 개선 proposal을 mine, review, curate, approve, summarize합니다. |
+| `p2a proposals` | 개선 proposal을 검토하거나 회고 GitHub 이슈를 preview하고 명시적으로 발행합니다. |
 | `p2a buildlore` | 선택적 BuildLore 지식을 projection, 검사, 검색, 조회합니다. |
 
 최상위 명령은 `p2a --help`로 확인할 수 있습니다. 자세한 option과 예시는

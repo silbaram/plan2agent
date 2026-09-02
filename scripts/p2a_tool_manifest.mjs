@@ -41,6 +41,7 @@ export const PROJECT_RUNTIME_SCRIPT_FILES = [
   'p2a_acceptance_review_gate.mjs',
   'p2a_visual_media.mjs',
   'p2a_proposals.mjs',
+  'p2a_github_issues.mjs',
   'p2a_eval.mjs',
   'p2a_buildlore.mjs',
   'p2a_reference.mjs',

@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- Add simple GitHub issue preview and explicit publication commands for four-section P2A retrospective Markdown, with a github.com-pinned target, secret/path rejection, and marker-based duplicate detection.
+
 ## [0.5.19] - 2026-08-28
 
 ### Changed

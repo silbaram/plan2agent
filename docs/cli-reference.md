@@ -619,6 +619,12 @@ node scripts/run_fixtures.mjs
 
 `mine`은 기록된 run log와 monitor sidecar를 읽어 회고 후보만 만든다. provider CLI나 재시도 run을 자동으로 시작하지 않으며, blocked run의 `retry`, `ask_user`, `stop` 결정과 후속 실행은 owner가 별도로 기록·수행한다.
 
+네 H2 섹션(`Observed issue`, `User impact`, `Suggested improvement`, `Evidence`)으로 작성한 짧은
+P2A 회고는 공개 GitHub 이슈 초안으로 변환할 수 있다. `issue-preview`는 GitHub를 호출하지
+않고 제목과 본문을 출력한다. `publish-issue`는 같은 Markdown을 다시 읽고 `--yes` 확인 후
+`github.com/silbaram/plan2agent`에 게시한다. 같은 marker가 있는 열린·닫힌 이슈는 다시 만들지
+않으며 별도 draft, schema, receipt artifact는 생성하지 않는다.
+
 ```bash
 p2a proposals mine \
   --graph .plan2agent/artifacts/<project_id>/gate-c-task-graph/task-graph.json
@@ -641,6 +647,15 @@ p2a proposals approve-draft \
   --artifacts .plan2agent/artifacts/<project_id> \
   --approved-by <name>
 
+p2a proposals issue-preview \
+  --retrospective docs/retrospective/<project_id>-v<N>.md \
+  --target-area Execution
+
+p2a proposals publish-issue \
+  --retrospective docs/retrospective/<project_id>-v<N>.md \
+  --target-area Execution \
+  --yes
+
 p2a validate \
   --proposals-dir .plan2agent/proposals
 
@@ -655,9 +670,10 @@ p2a validate \
 
 p2a validate \
   --proposal-draft-approval .plan2agent/proposals/approvals/proposal-draft-approval-<hash>.json
+
 ```
 
-`digest` 결과는 빠른 현황 요약이고, `review`/`curate`/`draft-patch`/`approve-draft` 결과는 승인 판단과 후속 task 연결용 artifact다. 적용은 자동으로 하지 않고, 승인된 maintenance task를 별도 실행해서 반영한다.
+`digest` 결과는 빠른 현황 요약이고, `review`/`curate`/`draft-patch`/`approve-draft` 결과는 승인 판단과 후속 task 연결용 artifact다. `issue-preview`/`publish-issue`는 회고를 외부 backlog에 전달할 뿐 proposal 승인이나 구현 적용을 대신하지 않는다. 적용은 자동으로 하지 않고, 승인된 maintenance task를 별도 실행해서 반영한다.
 
 ### 워크플로우 E — 반복 열기와 Gate A 범위 확인/Gate B 초안 생성
 
