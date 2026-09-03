@@ -56,6 +56,8 @@ import {
   normalizeMonitorVerdictData,
 } from './p2a_monitor_gate.mjs';
 import { ValidationError, validateSchema } from './p2a_schema.mjs';
+import { missingRequiredFailureDetails } from './p2a_failure_details.mjs';
+import { runWriteTransactionPath } from './p2a_run_store.mjs';
 
 export { ValidationError, validateSchema } from './p2a_schema.mjs';
 
@@ -1013,6 +1015,196 @@ function validateComposedBaselineSourceReadiness(
       `${label}.status must be ${expectedStatus}, got ${JSON.stringify(source.status)}`,
     );
   }
+  return taskGraph;
+}
+
+function isBlockedScopeReplacementBaseline(context) {
+  const replacement = context?.replacement;
+  return Boolean(
+    replacement
+    && replacement.kind === 'blocked_scope_replan'
+    && replacement.task_coverage === 'full_spec'
+    && typeof replacement.replaces_iteration === 'string'
+    && replacement.replaces_iteration.trim()
+    && Array.isArray(replacement.blocked_task_ids)
+    && replacement.blocked_task_ids.length > 0
+    && typeof replacement.reason === 'string'
+    && replacement.reason.trim()
+    && typeof replacement.current_development_contract_sha256 === 'string'
+    && /^[a-f0-9]{64}$/u.test(replacement.current_development_contract_sha256)
+  );
+}
+
+function canonicalReplacementSnapshotPath(root, reference, expected, label) {
+  if (reference !== expected) {
+    throw new ValidationError(`${label} must be ${expected}`);
+  }
+  const filePath = path.resolve(root, reference);
+  assertFile(filePath, label);
+  assertFileInsideArtifactRoot(filePath, root, label);
+  return filePath;
+}
+
+function validateBlockedScopeReplacementSnapshot({
+  context,
+  root,
+  intakePath,
+  baselineSpecPath,
+  baselineSpec,
+}) {
+  if (!intakePath || !existsSync(intakePath)) {
+    throw new ValidationError(
+      'blocked-scope replacement baseline requires its canonical active iteration intake path',
+    );
+  }
+  const intakeRelative = normalizePath(path.relative(
+    realpathSync(root),
+    realpathSync(intakePath),
+  ));
+  const intakeMatch = /^iterations\/([A-Za-z0-9._-]+)\/gate-a-intake\/intake\.json$/u.exec(
+    intakeRelative,
+  );
+  if (!intakeMatch) {
+    throw new ValidationError(
+      'blocked-scope replacement baseline is valid only from a canonical iteration Gate A intake',
+    );
+  }
+  const iterationId = intakeMatch[1];
+  const metadataRef = `iterations/${iterationId}/iteration.json`;
+  const metadataPath = canonicalReplacementSnapshotPath(
+    root,
+    metadataRef,
+    metadataRef,
+    'blocked-scope replacement iteration metadata',
+  );
+  const metadata = loadJson(metadataPath);
+  if (
+    metadata.schema_version !== 'p2a.iteration_metadata.v1'
+    || metadata.iteration_id !== iterationId
+    || metadata.project_id !== baselineSpec.project_id
+    || !sameJson(metadata.replacement, context.replacement)
+  ) {
+    throw new ValidationError(
+      'blocked-scope replacement baseline must match its canonical iteration metadata lineage',
+    );
+  }
+  if (
+    metadata.baseline?.effective_spec_ref !== context.spec_ref
+    || metadata.baseline?.effective_spec_sha256 !== context.spec_sha256
+  ) {
+    throw new ValidationError(
+      'blocked-scope replacement baseline ref and hash must match iteration metadata',
+    );
+  }
+
+  const currentSpecPath = path.join(root, 'current-spec.json');
+  assertFile(currentSpecPath, 'blocked-scope replacement current-spec.json');
+  const currentSpec = loadJson(currentSpecPath);
+  if (metadata.status === 'archived') {
+    const closed = (currentSpec.closed_iterations ?? []).find((item) => (
+      item?.iteration_id === iterationId && item?.status === 'archived'
+    ));
+    if (!closed) {
+      throw new ValidationError(
+        'archived blocked-scope replacement must be recorded in current-spec.json.closed_iterations',
+      );
+    }
+  } else {
+    const pending = currentSpec.pending_iteration;
+    if (
+      currentSpec.active_iteration !== iterationId
+      || pending?.iteration_id !== iterationId
+      || !sameJson(pending.replacement, context.replacement)
+      || pending.baseline_effective_spec_ref !== context.spec_ref
+      || pending.baseline_effective_spec_sha256 !== context.spec_sha256
+      || !sameJson(pending.resume_authority, metadata.resume_authority)
+    ) {
+      throw new ValidationError(
+        'active blocked-scope replacement baseline must match current-spec.json pending lifecycle state',
+      );
+    }
+  }
+
+  const resumeAuthority = metadata.resume_authority;
+  const replacementSource = resumeAuthority?.replacement_source;
+  if (
+    !replacementSource
+    || context.replacement.current_development_contract_sha256
+      !== resumeAuthority.current_development_contract_sha256
+  ) {
+    throw new ValidationError(
+      'blocked-scope replacement baseline must bind its resume contract and source snapshots',
+    );
+  }
+  const baselineRootRef = `iterations/${iterationId}/baseline`;
+  const contractRef = `${baselineRootRef}/current-development-contract.json`;
+  const contractPath = canonicalReplacementSnapshotPath(
+    root,
+    resumeAuthority.current_development_contract_ref,
+    contractRef,
+    'blocked-scope replacement resume contract',
+  );
+  if (rawFileSha256(contractPath) !== resumeAuthority.current_development_contract_sha256) {
+    throw new ValidationError('blocked-scope replacement resume contract hash does not match');
+  }
+  const contract = validateCurrentDevelopmentContractData(loadJson(contractPath), {
+    projectId: baselineSpec.project_id,
+    iterationId: context.replacement.replaces_iteration,
+  });
+
+  const sourceSpecRef = `${baselineRootRef}/replacement-source-spec.json`;
+  const sourceIntakeRef = `${baselineRootRef}/replacement-source-intake.json`;
+  const sourceSpecPath = canonicalReplacementSnapshotPath(
+    root,
+    replacementSource.spec_ref,
+    sourceSpecRef,
+    'blocked-scope replacement source spec snapshot',
+  );
+  const sourceIntakePath = canonicalReplacementSnapshotPath(
+    root,
+    replacementSource.intake_ref,
+    sourceIntakeRef,
+    'blocked-scope replacement source intake snapshot',
+  );
+  if (
+    rawFileSha256(sourceSpecPath) !== replacementSource.spec_sha256
+    || rawFileSha256(sourceIntakePath) !== replacementSource.intake_sha256
+    || contract.bindings.activeSpec.sha256 !== replacementSource.spec_sha256
+  ) {
+    throw new ValidationError(
+      'blocked-scope replacement source snapshots do not match their resume contract binding',
+    );
+  }
+  const sourceSpec = validateAgainstSchema(sourceSpecPath, 'spec');
+  validateAgainstSchema(sourceIntakePath, 'intake');
+  if (
+    sourceSpec.approval !== 'approved'
+    || sourceSpec.open_decisions.length > 0
+    || (
+      sourceSpec.source_intake_sha256
+      && sourceSpec.source_intake_sha256 !== replacementSource.intake_sha256
+    )
+  ) {
+    throw new ValidationError(
+      'blocked-scope replacement source snapshots must preserve the approved source contract',
+    );
+  }
+
+  const baselineIntakePath = requireSpecSourceIntake(baselineSpecPath, baselineSpec);
+  const baselineIntakeRef = normalizePath(path.relative(root, baselineIntakePath));
+  const expectedBaselineSpec = structuredClone(sourceSpec);
+  expectedBaselineSpec.source_intake = path.posix.relative(
+    path.posix.dirname(context.spec_ref),
+    baselineIntakeRef,
+  );
+  expectedBaselineSpec.source_intake_sha256 = rawFileSha256(baselineIntakePath);
+  expectedBaselineSpec.approval = 'draft';
+  delete expectedBaselineSpec.approval_audit;
+  if (!sameJson(baselineSpec, expectedBaselineSpec)) {
+    throw new ValidationError(
+      'blocked-scope replacement baseline must be an exact semantic snapshot of the bound approved source spec',
+    );
+  }
 }
 
 function validateBaselineContext(
@@ -1141,12 +1333,26 @@ function validateBaselineContext(
   }
   if (baselineSpec.schema_version === 'p2a.spec.v1') {
     const validatedBaselineSpec = validateSpec(baselineSpecPath, null, nestedOptions);
+    const approvedBaseline = validatedBaselineSpec.approval === 'approved';
+    const replacementSnapshot = (
+      validatedBaselineSpec.approval === 'draft'
+      && isBlockedScopeReplacementBaseline(context)
+    );
+    if (replacementSnapshot) {
+      validateBlockedScopeReplacementSnapshot({
+        context,
+        root,
+        intakePath,
+        baselineSpecPath,
+        baselineSpec: validatedBaselineSpec,
+      });
+    }
     if (
-      validatedBaselineSpec.approval !== 'approved'
+      (!approvedBaseline && !replacementSnapshot)
       || validatedBaselineSpec.open_decisions.length > 0
     ) {
       throw new ValidationError(
-        'baseline_context.spec_ref must reference an approved spec with no open_decisions',
+        'baseline_context.spec_ref must reference an approved spec, or an immutable blocked-scope replacement snapshot, with no open_decisions',
       );
     }
     registerBaselineSpec(
@@ -1303,7 +1509,7 @@ function validateBaselineContext(
           );
         }
       }
-      validateComposedBaselineSourceReadiness(
+      const taskGraph = validateComposedBaselineSourceReadiness(
         baselineSpec,
         source,
         sourcePath,
@@ -1317,6 +1523,7 @@ function validateBaselineContext(
       validatedSources.push({
         ...source,
         spec: sourceSpec,
+        task_graph: taskGraph,
         metadata,
         source_intake: sourceIntake,
       });
@@ -1867,6 +2074,14 @@ export function validateCurrentDevelopmentContractData(data, options = {}) {
   for (const field of ['scope', 'mustPreserve', 'nonGoals', 'acceptance', 'verification']) {
     validateNonBlankStrings(data[field], `current development contract ${field}`);
   }
+  if (data.iterationConstraints) {
+    for (const field of ['architecture', 'interfaces', 'dependencies']) {
+      validateNonBlankStrings(
+        data.iterationConstraints[field],
+        `current development contract iterationConstraints.${field}`,
+      );
+    }
+  }
   validateConstitutionData({
     schema_version: 'p2a.constitution.v1',
     projectId: data.projectId,
@@ -1900,8 +2115,9 @@ export function validateCurrentDevelopmentContract(filePath, options = {}) {
   );
 }
 
-export function executionEnvelopeFromCurrentDevelopmentContract(contract, sourceRef) {
+export function executionEnvelopeFromCurrentDevelopmentContract(contract, sourceRef, options = {}) {
   validateCurrentDevelopmentContractData(contract);
+  const iterationConstraints = contract.iterationConstraints ?? options.iterationConstraints ?? null;
   const envelope = {
     objective: contract.objective,
     sourceGateRefs: [{
@@ -1909,6 +2125,9 @@ export function executionEnvelopeFromCurrentDevelopmentContract(contract, source
       sha256: currentDevelopmentContractSha256(contract),
     }],
     scope: structuredClone(contract.scope),
+    ...(iterationConstraints ? {
+      iterationConstraints: structuredClone(iterationConstraints),
+    } : {}),
     architecture: structuredClone(contract.architecture),
     stack: structuredClone(contract.stack),
     prohibitions: structuredClone(contract.prohibitions),
@@ -3790,6 +4009,14 @@ function nonBlankUniqueStrings(values) {
     .filter(Boolean))];
 }
 
+export function iterationConstraintsFromSpec(spec) {
+  return {
+    architecture: nonBlankUniqueStrings(spec.implementation.architecture),
+    interfaces: nonBlankUniqueStrings(spec.implementation.interfaces),
+    dependencies: nonBlankUniqueStrings(spec.implementation.dependencies),
+  };
+}
+
 export function executionEnvelopeSha256(envelope) {
   return createHash('sha256').update(JSON.stringify(envelope)).digest('hex');
 }
@@ -3888,6 +4115,7 @@ export function approvedExecutionEnvelope(specPath, sourceSpecRef, artifactRoot 
       sha256: rawFileSha256(specPath),
     }],
     scope: nonBlankUniqueStrings(spec.product.goals),
+    iterationConstraints: iterationConstraintsFromSpec(spec),
     mustPreserve: nonBlankUniqueStrings(spec.product.must_preserve),
     nonGoals: nonBlankUniqueStrings(spec.product.non_goals),
     acceptance,
@@ -4180,21 +4408,6 @@ export function validateReview(filePath, expectedSources = null, options = {}) {
   return data;
 }
 
-function hasStructuredDetailValue(section, keys) {
-  if (!section || typeof section !== 'object') return false;
-  return keys.some((key) => Array.isArray(section[key])
-    && section[key].some((value) => typeof value === 'string' && value.trim().length > 0));
-}
-
-function missingRequiredStructuredRunDetails(data) {
-  if (!['failed', 'blocked'].includes(data.status)) return [];
-  return [
-    hasStructuredDetailValue(data.reproduction, ['steps', 'commands', 'notes']) ? null : 'reproduction',
-    hasStructuredDetailValue(data.localization, ['findings', 'files']) ? null : 'localization',
-    hasStructuredDetailValue(data.guard, ['checks', 'notes']) ? null : 'guard',
-  ].filter(Boolean);
-}
-
 export function validateRunData(data) {
   try {
     validateSchema(data, loadJson(SCHEMA_PATHS.run));
@@ -4223,7 +4436,11 @@ export function validateRunData(data) {
         );
       }
     }
-    if (item.scope === 'related') {
+    const legacyFinishedUnboundRelated = item.scope === 'related'
+      && data.status === 'finished'
+      && item.argv === undefined
+      && item.selectedFileCount === undefined;
+    if (item.scope === 'related' && !legacyFinishedUnboundRelated) {
       if (!Number.isSafeInteger(item.selectedFileCount) || item.selectedFileCount < 1) {
         throw new ValidationError(`verification[${index}] related evidence must include selectedFileCount`);
       }
@@ -4233,12 +4450,14 @@ export function validateRunData(data) {
         );
       }
       const selectedFiles = item.argv.slice(-item.selectedFileCount);
+      const finalVerificationSelection = data.runKind === 'final_verification'
+        && data.changedFiles.length === 0;
       if (
         new Set(selectedFiles).size !== selectedFiles.length
-        || selectedFiles.some((file) => !data.changedFiles.includes(file))
+        || (!finalVerificationSelection && selectedFiles.some((file) => !data.changedFiles.includes(file)))
       ) {
         throw new ValidationError(
-          `verification[${index}] selected files must be unique members of run.changedFiles`,
+          `verification[${index}] selected files must be unique${finalVerificationSelection ? '' : ' members of run.changedFiles'}`,
         );
       }
     } else if (item.selectedFileCount !== undefined) {
@@ -4267,6 +4486,9 @@ export function validateRunData(data) {
   }
   const hasMode = data.mode !== undefined;
   const hasSelectionRationale = data.selectionRationale !== undefined;
+  if (data.verificationScope !== undefined && data.runKind !== 'final_verification') {
+    throw new ValidationError('verificationScope is only allowed for final_verification runs');
+  }
   if (hasMode !== hasSelectionRationale) {
     throw new ValidationError('run mode and selectionRationale must be recorded together');
   }
@@ -4368,9 +4590,11 @@ export function validateRunData(data) {
   if (data.status !== 'started' && data.finishedAt === null) {
     throw new ValidationError(`${data.status} run must include finishedAt`);
   }
-  const missingStructured = missingRequiredStructuredRunDetails(data);
+  const missingStructured = missingRequiredFailureDetails(data);
   if (missingStructured.length) {
-    throw new ValidationError(`${data.status} run must include structured debug detail: ${missingStructured.join(', ')}`);
+    throw new ValidationError(
+      `${data.status} run failure detail missing required keys: ${missingStructured.join(', ')}`,
+    );
   }
   return data;
 }
@@ -4740,6 +4964,7 @@ const MILESTONE_IMMUTABLE_RUN_FIELDS = [
   'workspaceRef',
   'workspacePath',
   'workspaceRevisionSha256',
+  'productRevisionSha256',
   'visualReviewEvidenceSha256',
   'visualReview',
   'acceptanceReviewEvidenceSha256',
@@ -5225,6 +5450,12 @@ function resolveRunCurrentDevelopmentContract(
       `run ${runData.runId} current task graph sourceSpec does not match the current development contract`,
     );
   }
+  assertFile(contractSpecPath, `run ${runData.runId} current development contract active spec`);
+  if (rawFileSha256(contractSpecPath) !== contract.bindings.activeSpec.sha256) {
+    throw new ValidationError(
+      `run ${runData.runId} current development contract active spec changed after materialization`,
+    );
+  }
   const constitutionPath = projectConstitutionPathFrom(taskGraphPath);
   const constitutionBinding = contract.bindings.constitution;
   if (constitutionBinding.ref === null && constitutionPath) {
@@ -5272,12 +5503,114 @@ function resolveRunCurrentDevelopmentContract(
       `run ${runData.runId} current development contract task bindings do not match the task graph`,
     );
   }
+  const expectedIterationConstraints = iterationConstraintsFromSpec(loadJson(contractSpecPath));
+  if (
+    contract.iterationConstraints !== undefined
+    && !sameJson(contract.iterationConstraints, expectedIterationConstraints)
+  ) {
+    throw new ValidationError(
+      `run ${runData.runId} current development contract iterationConstraints do not match the bound active spec`,
+    );
+  }
   return {
     contract,
     contractPath,
     constitutionPath,
-    envelope: executionEnvelopeFromCurrentDevelopmentContract(contract, normalizedRef),
+    envelope: executionEnvelopeFromCurrentDevelopmentContract(contract, normalizedRef, {
+      iterationConstraints: expectedIterationConstraints,
+    }),
   };
+}
+
+function trustedHistoricalCurrentDevelopmentEnvelope(
+  runData,
+  artifactRoot,
+  taskGraphPath,
+  sourceSpecPath,
+  graph,
+) {
+  if (
+    runData.status !== 'finished'
+    || runData.currentDevelopmentContractRef === undefined
+    || runData.currentDevelopmentContractSha256 === undefined
+  ) return null;
+  const iterationsRoot = path.join(artifactRoot, 'iterations');
+  if (!existsSync(iterationsRoot) || !lstatSync(iterationsRoot).isDirectory()) return null;
+  const expectedTaskBindings = graph.tasks.map((task) => ({
+    taskId: task.id,
+    sha256: taskContractSha256(task),
+  }));
+  const candidates = readdirSync(iterationsRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => path.join(
+      iterationsRoot,
+      entry.name,
+      'baseline',
+      'current-development-contract.json',
+    ));
+  for (const contractPath of candidates) {
+    try {
+      if (!existsSync(contractPath)) continue;
+      const contractStat = lstatSync(contractPath);
+      if (!contractStat.isFile() || contractStat.isSymbolicLink()) continue;
+      assertFileInsideArtifactRoot(
+        contractPath,
+        artifactRoot,
+        `run ${runData.runId} historical current development contract snapshot`,
+      );
+      const contract = validateCurrentDevelopmentContractData(loadJson(contractPath), {
+        projectId: runData.projectId,
+        iterationId: runData.iterationId,
+      });
+      if (currentDevelopmentContractSha256(contract) !== runData.currentDevelopmentContractSha256) {
+        continue;
+      }
+      const boundSpecPath = path.resolve(artifactRoot, normalizeReference(contract.bindings.activeSpec.ref));
+      if (
+        realpathSync(boundSpecPath) !== realpathSync(sourceSpecPath)
+        || rawFileSha256(boundSpecPath) !== contract.bindings.activeSpec.sha256
+        || !taskGraphRefMatchesGraph(contract.bindings.taskGraph.ref, taskGraphPath, artifactRoot)
+        || !sameJson(contract.bindings.taskGraph.tasks, expectedTaskBindings)
+      ) continue;
+      const constitutionBinding = contract.bindings.constitution;
+      let constitution;
+      if (constitutionBinding.ref === null) {
+        constitution = {
+          architecture: [],
+          stack: [],
+          prohibitions: [],
+          style: {},
+        };
+      } else {
+        if (constitutionBinding.ref !== '.plan2agent/constitution.json') continue;
+        const constitutionPath = path.join(path.dirname(contractPath), 'constitution.json');
+        if (!existsSync(constitutionPath)) continue;
+        const constitutionStat = lstatSync(constitutionPath);
+        if (!constitutionStat.isFile() || constitutionStat.isSymbolicLink()) continue;
+        assertFileInsideArtifactRoot(
+          constitutionPath,
+          artifactRoot,
+          `run ${runData.runId} historical constitution snapshot`,
+        );
+        if (rawFileSha256(constitutionPath) !== constitutionBinding.sha256) continue;
+        constitution = validateConstitution(constitutionPath, {
+          requireApproved: true,
+          projectId: runData.projectId,
+        });
+      }
+      if (!['architecture', 'stack', 'prohibitions', 'style'].every(
+        (field) => sameJson(contract[field], constitution[field]),
+      )) continue;
+      return executionEnvelopeFromCurrentDevelopmentContract(
+        contract,
+        'current-development-contract.json',
+      );
+    } catch {
+      // Ignore malformed or unrelated historical snapshots. A candidate is
+      // trusted only when every immutable binding above matches.
+    }
+  }
+  return null;
 }
 
 function currentContractVisualReview(contract) {
@@ -5502,36 +5835,115 @@ export function validateRunTaskContract(runData, artifactRoot, options = {}) {
           },
         }
       : null;
-    const currentContractLegacyEnvelope = (
-      currentDevelopment
-      || runData.currentDevelopmentContractRef !== undefined
+    const allowsLegacyConstraintEnvelope = (
+      runData.status === 'finished'
+      && runData.productRevisionSha256 === undefined
+      && executionEnvelope.iterationConstraints === undefined
+    );
+    const legacyConstraintEnvelope = (
+      allowsLegacyConstraintEnvelope
+      && expectedEnvelope.iterationConstraints
     )
-      ? {
-          objective: expectedEnvelope.objective,
-          sourceGateRefs: structuredClone(executionEnvelope.sourceGateRefs),
-          scope: structuredClone(expectedEnvelope.scope),
-          ...(['architecture', 'stack', 'prohibitions', 'style'].reduce(
-            (fields, field) => {
-              const value = expectedEnvelope[field] ?? executionEnvelope[field];
-              if (value !== undefined) fields[field] = structuredClone(value);
-              return fields;
-            },
-            {},
-          )),
-          mustPreserve: structuredClone(expectedEnvelope.mustPreserve),
-          nonGoals: structuredClone(expectedEnvelope.nonGoals),
-          acceptance: structuredClone(expectedEnvelope.acceptance),
-          verification: structuredClone(expectedEnvelope.verification),
-          executionAuthority: structuredClone(expectedEnvelope.executionAuthority),
-          ...(expectedEnvelope.visualContract ? {
-            visualContract: structuredClone(expectedEnvelope.visualContract),
-          } : {}),
-        }
+      ? (() => {
+          const legacy = structuredClone(expectedEnvelope);
+          delete legacy.iterationConstraints;
+          return legacy;
+        })()
       : null;
+    const legacyVisualConstraintEnvelope = (
+      allowsLegacyConstraintEnvelope
+      && legacyExpectedEnvelope?.iterationConstraints
+    )
+      ? (() => {
+          const legacy = structuredClone(legacyExpectedEnvelope);
+          delete legacy.iterationConstraints;
+          return legacy;
+        })()
+      : null;
+    const allowsCurrentContractLegacyEnvelope = (
+      currentDevelopment
+      && runData.status === 'finished'
+      && runData.productRevisionSha256 === undefined
+    );
+    const currentContractLegacyEnvelopeVariants = allowsCurrentContractLegacyEnvelope
+      ? (() => {
+          const activeSpecRef = currentDevelopment.contract.bindings.activeSpec.ref;
+          const activeSpecPath = path.resolve(sourceArtifactRoot, activeSpecRef);
+          const trustedLegacyEnvelope = approvedExecutionEnvelope(
+            activeSpecPath,
+            activeSpecRef,
+            sourceArtifactRoot,
+            options,
+          );
+          const variants = [trustedLegacyEnvelope];
+          if (trustedLegacyEnvelope.visualContract) {
+            variants.push({
+              ...trustedLegacyEnvelope,
+              visualContract: {
+                experienceSpecRef: trustedLegacyEnvelope.visualContract.experienceSpecRef,
+                experienceSpecSha256: trustedLegacyEnvelope.visualContract.experienceSpecSha256,
+              },
+            });
+          }
+          if (trustedLegacyEnvelope.iterationConstraints !== undefined) {
+            for (const candidate of [...variants]) {
+              const withoutIterationConstraints = structuredClone(candidate);
+              delete withoutIterationConstraints.iterationConstraints;
+              variants.push(withoutIterationConstraints);
+            }
+          }
+          return variants;
+        })()
+      : [];
+    const historicalCurrentContractEnvelope = (
+      !currentDevelopment
+      && sourceSpecPath
+      && runData.currentDevelopmentContractRef !== undefined
+    )
+      ? trustedHistoricalCurrentDevelopmentEnvelope(
+          runData,
+          sourceArtifactRoot,
+          taskGraphPath,
+          sourceSpecPath,
+          graph,
+        )
+      : null;
+    const historicalCurrentContractEnvelopeVariants = historicalCurrentContractEnvelope
+      ? (() => {
+          const variants = [historicalCurrentContractEnvelope];
+          if (historicalCurrentContractEnvelope.visualContract) {
+            variants.push({
+              ...historicalCurrentContractEnvelope,
+              visualContract: {
+                experienceSpecRef: historicalCurrentContractEnvelope.visualContract.experienceSpecRef,
+                experienceSpecSha256: historicalCurrentContractEnvelope.visualContract.experienceSpecSha256,
+              },
+            });
+          }
+          if (
+            allowsLegacyConstraintEnvelope
+            && historicalCurrentContractEnvelope.iterationConstraints !== undefined
+          ) {
+            for (const candidate of [...variants]) {
+              const withoutIterationConstraints = structuredClone(candidate);
+              delete withoutIterationConstraints.iterationConstraints;
+              variants.push(withoutIterationConstraints);
+            }
+          }
+          return variants;
+        })()
+      : [];
     if (
       !sameJson(executionEnvelope, expectedEnvelope)
       && (!legacyExpectedEnvelope || !sameJson(executionEnvelope, legacyExpectedEnvelope))
-      && (!currentContractLegacyEnvelope || !sameJson(executionEnvelope, currentContractLegacyEnvelope))
+      && (!legacyConstraintEnvelope || !sameJson(executionEnvelope, legacyConstraintEnvelope))
+      && (!legacyVisualConstraintEnvelope || !sameJson(executionEnvelope, legacyVisualConstraintEnvelope))
+      && !currentContractLegacyEnvelopeVariants.some(
+        (candidate) => sameJson(executionEnvelope, candidate),
+      )
+      && !historicalCurrentContractEnvelopeVariants.some(
+        (candidate) => sameJson(executionEnvelope, candidate),
+      )
     ) {
       throw new ValidationError(
         `finished run ${runData.runId} executionEnvelope does not match its current development contract`,
@@ -5615,6 +6027,12 @@ export function validateRunTaskContract(runData, artifactRoot, options = {}) {
 export function validateRunsDir(runsDir, options = {}) {
   if (!existsSync(runsDir)) throw new ValidationError(`runs directory is missing: ${runsDir}`);
   if (!lstatSync(runsDir).isDirectory()) throw new ValidationError(`runs path must be a directory: ${runsDir}`);
+  const pendingWritePath = runWriteTransactionPath(runsDir);
+  if (existsSync(pendingWritePath)) {
+    throw new ValidationError(
+      `run write transaction is pending: ${pendingWritePath}; retry a mutating runs command before validating the run store`,
+    );
+  }
   const indexPath = path.join(runsDir, 'run-index.json');
   assertFile(indexPath, 'run-index.json');
   const index = validateRunIndex(indexPath);

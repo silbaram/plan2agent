@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import test from 'node:test';
@@ -8,6 +16,7 @@ import test from 'node:test';
 import { FIXTURE_ROOT, makeTempDir, runP2a } from './helpers/fixtures.mjs';
 import { validateSchema } from '../scripts/p2a_schema.mjs';
 import { NEXT_DECISION_RULES } from '../scripts/p2a.mjs';
+import { blockedScopeReplacementAncestry } from '../scripts/p2a_iteration.mjs';
 import { buildNext } from '../scripts/p2a_next_service.mjs';
 import {
   auditArchivedIterationArtifacts,
@@ -31,6 +40,7 @@ import {
   workspaceRevisionExcludedPathsForRun,
   workspaceRevisionSha256,
 } from '../scripts/p2a_run_paths.mjs';
+import { productRevisionExcludedPaths } from '../scripts/p2a_verification_profile.mjs';
 
 const NEXT_V1_SCHEMA = JSON.parse(readFileSync(new URL('../schemas/next.schema.json', import.meta.url), 'utf8'));
 const NEXT_SCHEMA = JSON.parse(readFileSync(new URL('../schemas/next-v2.schema.json', import.meta.url), 'utf8'));
@@ -39,6 +49,29 @@ function writeJson(filePath, value) {
   mkdirSync(dirname(filePath), { recursive: true });
   writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
 }
+
+test('replacement composition uses only the final hash-bound ancestry snapshot', () => {
+  const replacement = (replacesIteration, replacedIterationIds) => ({
+    replacement: {
+      kind: 'blocked_scope_replan',
+      task_coverage: 'full_spec',
+      replaces_iteration: replacesIteration,
+      ...(replacedIterationIds ? {
+        replaced_iteration_ids: replacedIterationIds,
+      } : {}),
+    },
+  });
+  const metadata = new Map([
+    ['v2', {}],
+    ['v3', replacement('v1')],
+    ['v4', replacement('v3', ['v3', 'v2'])],
+  ]);
+
+  assert.deepEqual(
+    blockedScopeReplacementAncestry(metadata, 'v4'),
+    ['v3', 'v2'],
+  );
+});
 
 function project(options = {}) {
   const root = makeTempDir('p2a-next-');
@@ -573,29 +606,31 @@ function writeRuns(artifactRoot, runs) {
       startedAt,
       updatedAt: finishedAt ?? startedAt,
       finishedAt,
-      changedFiles: [],
+      changedFiles: run.changedFiles ?? [],
       verification: run.verification ?? [],
       interruptions: run.interruptions ?? [],
       notes: run.notes ?? [],
       ...(run.runKind ? { runKind: run.runKind } : {}),
+      ...(run.verificationScope ? { verificationScope: run.verificationScope } : {}),
       ...(run.workspaceRevisionSha256 ? { workspaceRevisionSha256: run.workspaceRevisionSha256 } : {}),
+      ...(run.productRevisionSha256 ? { productRevisionSha256: run.productRevisionSha256 } : {}),
       ...(['failed', 'blocked'].includes(run.status) ? {
-        failure: {
+        failure: run.failure ?? {
           class: 'implementation_incomplete',
           retryable: 'after_fix',
           needsUserDecision: false,
           source: 'owner',
         },
-        reproduction: {
+        reproduction: run.reproduction ?? {
           steps: ['Reproduce the fixture failure.'],
           commands: [],
           notes: [],
         },
-        localization: {
+        localization: run.localization ?? {
           findings: ['The fixture run records a localized failure.'],
           files: [],
         },
-        guard: {
+        guard: run.guard ?? {
           checks: ['Validate the repaired run evidence.'],
           notes: [],
         },
@@ -660,6 +695,17 @@ function writeFinalVerification(root, artifactRoot, iterationId) {
       workspacePath,
     }),
   );
+  const productRevision = workspaceRevisionSha256(
+    workspacePath,
+    [
+      ...workspaceRevisionExcludedPathsForRun(runsDir, revisionRun, {
+        artifactRoot,
+        graphPath,
+        workspacePath,
+      }),
+      ...productRevisionExcludedPaths(workspacePath),
+    ],
+  );
   writeRuns(artifactRoot, [{
     runId: 'run-final-verification',
     iterationId,
@@ -668,6 +714,7 @@ function writeFinalVerification(root, artifactRoot, iterationId) {
     workspaceRef: '.',
     workspacePath,
     workspaceRevisionSha256: revision,
+    productRevisionSha256: productRevision,
     verification: [{
       type: 'test',
       command: 'npm test',
@@ -681,6 +728,7 @@ function writeFinalVerification(root, artifactRoot, iterationId) {
       source: 'config',
       scope: 'full',
       workspaceRevisionSha256: revision,
+      productRevisionSha256: productRevision,
     }],
   }]);
 }
@@ -698,6 +746,8 @@ function writeReusableImplementationVerification(root, artifactRoot, iterationId
   writeJson(join(root, '.plan2agent', 'project.config.json'), {
     testCommand: 'npm test',
   });
+  mkdirSync(join(root, 'src'), { recursive: true });
+  writeFileSync(join(root, 'src', 'reusable-verification.js'), 'export const verified = true;\n', 'utf8');
   const revisionRun = {
     projectId: currentProjectId(artifactRoot),
     iterationId,
@@ -712,6 +762,17 @@ function writeReusableImplementationVerification(root, artifactRoot, iterationId
       workspacePath,
     }),
   );
+  const productRevision = workspaceRevisionSha256(
+    workspacePath,
+    [
+      ...workspaceRevisionExcludedPathsForRun(runsDir, revisionRun, {
+        artifactRoot,
+        graphPath,
+        workspacePath,
+      }),
+      ...productRevisionExcludedPaths(workspacePath),
+    ],
+  );
   writeRuns(artifactRoot, [{
     runId: 'run-reusable-implementation-verification',
     taskId: 'task-001',
@@ -719,6 +780,9 @@ function writeReusableImplementationVerification(root, artifactRoot, iterationId
     status: 'finished',
     workspaceRef: '.',
     workspacePath,
+    workspaceRevisionSha256: revision,
+    productRevisionSha256: productRevision,
+    changedFiles: ['src/reusable-verification.js'],
     verification: [{
       type: 'test',
       command: 'npm test',
@@ -732,6 +796,7 @@ function writeReusableImplementationVerification(root, artifactRoot, iterationId
       source: 'config',
       scope: 'full',
       workspaceRevisionSha256: revision,
+      productRevisionSha256: productRevision,
     }],
   }]);
 }
@@ -761,23 +826,27 @@ function assertAction(payload, state, kind, argv = null, requiresApproval = null
       assert.deepEqual(payload.command.argv, expectedArgv);
     }
     if (requiresApproval !== null) assert.equal(payload.command.requiresApproval, requiresApproval);
-  } else {
+  } else if (kind === 'skill') {
     assert.equal('argv' in payload.command, false);
-    if (kind === 'skill') {
-      assert.match(payload.command.skill, /^p2a-/);
-      assert.ok(Array.isArray(payload.command.args));
-    }
+    assert.match(payload.command.skill, /^p2a-/);
+    assert.ok(Array.isArray(payload.command.args));
+  } else if ('argv' in payload.command) {
+    assert.equal(kind, 'approval');
+    assert.ok(Array.isArray(payload.command.argv) && payload.command.argv.length > 0);
+    assert.equal(payload.command.quotePlaceholder, '<user-utterance>');
+    assert.equal(payload.command.argv.filter((value) => value === '<user-utterance>').length, 1);
   }
 }
 
 function assertCompletionDecision(payload, artifactRoot) {
   assertAction(payload, 'iteration_review_or_close_required', 'approval');
-  assert.match(payload.reason, /explicitly choose product review, P2A retrospective, or close/i);
+  assert.match(payload.reason, /(?:choose product review, P2A retrospective, or close|Closing the iteration is recommended)/i);
   assert.deepEqual(payload.command.options.map((option) => option.id), ['review', 'retrospective', 'close']);
   const [review, retrospective, close] = payload.command.options;
   assert.equal(review.action.kind, 'review');
   assert.match(review.action.display, /read-only/i);
   assert.match(review.action.display, /without rerunning product commands/i);
+  assert.match(review.action.display, /do not repeat this menu/i);
   assert.deepEqual(review.action.remediation.argv, [
     'tasks', 'todo', '--artifacts', artifactRoot, '<task-id>',
     '--reopen', '--note', '<review finding>',
@@ -891,16 +960,16 @@ test('next chooses one read-only action for every primary state', () => {
         writeJson(join(rootArtifact, 'current-spec.json'), { project_id: 'sample', active_iteration: 'v1' });
         return root;
       },
-      expected: (root) => ['incomplete_iteration_layout', 'cli', ['iteration', 'validate', '--artifacts', artifactPath(root)]],
+      expected: (root) => ['incomplete_iteration_layout', 'cli', ['iteration', 'validate', '--artifacts', artifactPath(root)], false],
     },
     {
-      id: 'gate A approval',
+      id: 'gate A open questions',
       setup: () => {
         const root = project();
         writeGateA(artifact(root));
         return root;
       },
-      expected: () => ['gate_a_needs_approval', 'approval'],
+      expected: () => ['gate_what', 'skill'],
     },
     {
       id: 'gate A ready for spec',
@@ -909,7 +978,7 @@ test('next chooses one read-only action for every primary state', () => {
         writeGateA(artifact(root), 'ready_for_spec');
         return root;
       },
-      expected: () => ['shape', 'skill'],
+      expected: () => ['gate_a_ready_for_spec', 'skill'],
     },
     {
       id: 'gate B approval',
@@ -986,7 +1055,7 @@ test('next chooses one read-only action for every primary state', () => {
         writeGateD(rootArtifact, [], iterationId);
         return root;
       },
-      expected: (root) => ['tasks_blocked', 'cli', ['tasks', 'show', '--artifacts', artifactPath(root), 'task-001']],
+      expected: (root) => ['tasks_blocked', 'cli', ['tasks', 'show', '--artifacts', artifactPath(root), 'task-001'], false],
     },
     {
       id: 'all tasks done require final full verification',
@@ -1022,7 +1091,7 @@ test('next chooses one read-only action for every primary state', () => {
       expected: (root) => ['final_acceptance_review_required', 'cli', ['execute', 'accept', '--artifacts', artifactPath(root)]],
     },
     {
-      id: 'closed iteration mines proposals before opening',
+      id: 'closed iteration does not require optional proposal mining before opening',
       setup: () => {
         const root = project({ proposals: true });
         const rootArtifact = artifact(root);
@@ -1034,28 +1103,27 @@ test('next chooses one read-only action for every primary state', () => {
         writeRuns(rootArtifact, [{ runId: 'run-001', iterationId, status: 'failed' }]);
         return root;
       },
-      expected: (root) => ['run_evidence_needs_proposal_mining', 'cli', [
-        'proposals', 'mine', '--artifacts', artifactPath(root), '--run-id', 'run-001',
-        '--proposals', join(root, '.plan2agent', 'proposals'),
+      expected: (root) => ['iteration_complete', 'cli', [
+        'iteration', 'open', '--artifacts', artifactPath(root),
+        '--idea', '<change idea>',
       ]],
     },
     {
-      id: 'failed run mines proposals without requiring a closed iteration',
+      id: 'optional proposal mining does not replace normal blocked-task routing',
       setup: () => {
         const root = project({ proposals: true });
         const rootArtifact = artifact(root);
         const iterationId = writeIteration(rootArtifact);
         writeGateA(rootArtifact, 'ready_for_spec', iterationId);
         writeGateB(rootArtifact, 'approved', iterationId);
-        writeGateC(rootArtifact, [task('task-001', 'in_progress')], iterationId);
+        writeGateC(rootArtifact, [task('task-001', 'blocked')], iterationId);
         writeGateD(rootArtifact, [], iterationId);
         writeRuns(rootArtifact, [{ runId: 'run-001', iterationId, status: 'failed' }]);
         return root;
       },
-      expected: (root) => ['run_evidence_needs_proposal_mining', 'cli', [
-        'proposals', 'mine', '--artifacts', artifactPath(root), '--run-id', 'run-001',
-        '--proposals', join(root, '.plan2agent', 'proposals'),
-      ]],
+      expected: (root) => ['tasks_blocked', 'cli', [
+        'tasks', 'show', '--artifacts', artifactPath(root), 'task-001',
+      ], false],
     },
     {
       id: 'closed iteration ignores historical composition gaps',
@@ -1067,7 +1135,7 @@ test('next chooses one read-only action for every primary state', () => {
       },
       expected: (root) => ['iteration_complete', 'cli', [
         'iteration', 'open', '--artifacts', artifactPath(root),
-        '--iteration-id', '<id>', '--idea', '<change idea>',
+        '--idea', '<change idea>',
       ]],
     },
     {
@@ -1082,7 +1150,7 @@ test('next chooses one read-only action for every primary state', () => {
         writeGateD(rootArtifact, [], iterationId);
         return root;
       },
-      expected: (root) => ['iteration_complete', 'cli', ['iteration', 'open', '--artifacts', artifactPath(root), '--iteration-id', '<id>', '--idea', '<change idea>']],
+      expected: (root) => ['iteration_complete', 'cli', ['iteration', 'open', '--artifacts', artifactPath(root), '--idea', '<change idea>']],
     },
   ];
 
@@ -1097,6 +1165,1021 @@ test('next chooses one read-only action for every primary state', () => {
     } finally {
       remove(root);
     }
+  }
+});
+
+test('a closed iteration binds an explicit idea or entry to the next open action', () => {
+  const root = project();
+  try {
+    const rootArtifact = artifact(root);
+    const iterationId = writeIteration(rootArtifact, 'sample', { closed: true });
+    writeGateA(rootArtifact, 'ready_for_spec', iterationId);
+    writeGateB(rootArtifact, 'approved', iterationId);
+    writeGateC(rootArtifact, [task('task-001', 'done')], iterationId);
+    writeGateD(rootArtifact, [], iterationId);
+
+    const idea = 'Add a replay dashboard for failed deliveries.';
+    assertAction(next(root, ['--idea', idea]), 'iteration_complete', 'cli', [
+      'iteration', 'open', '--artifacts', artifactPath(root), '--idea', idea,
+    ]);
+
+    const entryPath = join(root, 'next-change.md');
+    const entryIdea = 'Replace the operator search with one unified query.';
+    writeFileSync(entryPath, `${entryIdea}\n`, 'utf8');
+    assertAction(next(root, ['--entry', entryPath]), 'iteration_complete', 'cli', [
+      'iteration', 'open', '--artifacts', artifactPath(root), '--idea', entryIdea,
+    ]);
+  } finally {
+    remove(root);
+  }
+});
+
+test('an explicit new entry pauses instead of auto-starting current approved work', () => {
+  const root = project();
+  try {
+    const rootArtifact = artifact(root);
+    const iterationId = writeIteration(rootArtifact);
+    writeGateA(rootArtifact, 'ready_for_spec', iterationId);
+    writeGateB(rootArtifact, 'approved', iterationId);
+    writeGateC(rootArtifact, [task('task-001', 'todo')], iterationId);
+    writeGateD(rootArtifact, [], iterationId);
+    const entryPath = join(root, 'competing-change.md');
+    writeFileSync(entryPath, 'Add a separate dashboard after the current work.\n', 'utf8');
+
+    const payload = next(root, ['--entry', entryPath]);
+    assertAction(payload, 'entry_deferred', 'approval');
+    assert.match(payload.reason, /will not be started or replaced implicitly/u);
+    assert.ok(payload.command.decisionSummary.some((item) => /Saved the new request/u.test(item)));
+    assert.doesNotMatch(JSON.stringify(payload.command), /execute start/u);
+  } finally {
+    remove(root);
+  }
+});
+
+test('an explicit new request is deferred for orphan in-progress and completed-open work', () => {
+  for (const status of ['in_progress', 'done']) {
+    const root = project();
+    try {
+      const rootArtifact = artifact(root);
+      const iterationId = writeIteration(rootArtifact);
+      writeGateA(rootArtifact, 'ready_for_spec', iterationId);
+      writeGateB(rootArtifact, 'approved', iterationId);
+      writeGateC(rootArtifact, [task('task-001', status)], iterationId);
+      writeGateD(rootArtifact, [], iterationId);
+
+      const idea = `Add the next dashboard after ${status} work closes.`;
+      const payload = next(root, ['--idea', idea]);
+      assertAction(payload, 'entry_deferred', 'approval');
+      assert.ok(payload.command.decisionSummary.some((item) => item.includes(idea)));
+      assert.doesNotMatch(JSON.stringify(payload.command), /execute start|iteration open/u);
+    } finally {
+      remove(root);
+    }
+  }
+});
+
+test('a single unconsumed provisional request survives until a closed iteration can open it', () => {
+  const root = project();
+  try {
+    const rootArtifact = artifact(root);
+    const iterationId = writeIteration(rootArtifact, 'sample', { closed: true });
+    writeGateA(rootArtifact, 'ready_for_spec', iterationId);
+    writeGateB(rootArtifact, 'approved', iterationId);
+    writeGateC(rootArtifact, [task('task-001', 'done')], iterationId);
+    writeGateD(rootArtifact, [], iterationId);
+
+    const idea = 'Add a saved replay dashboard after the closed iteration.';
+    assertAction(next(root, ['--idea', idea]), 'iteration_complete', 'cli', [
+      'iteration', 'open', '--artifacts', artifactPath(root), '--idea', idea,
+    ]);
+    assertAction(next(root), 'iteration_complete', 'cli', [
+      'iteration', 'open', '--artifacts', artifactPath(root), '--idea', idea,
+    ]);
+
+    const secondIdea = 'Add a second unrelated provisional request.';
+    const firstEntryPath = join(
+      root,
+      '.plan2agent',
+      'entries',
+      `idea-${createHash('sha256').update(`${idea}\n`).digest('hex').slice(0, 12)}.md`,
+    );
+    utimesSync(
+      firstEntryPath,
+      new Date('2026-06-01T00:00:00.000Z'),
+      new Date('2026-06-01T00:00:00.000Z'),
+    );
+    next(root, ['--idea', secondIdea]);
+    assertAction(next(root), 'iteration_complete', 'cli', [
+      'iteration', 'open', '--artifacts', artifactPath(root), '--idea', secondIdea,
+    ]);
+  } finally {
+    remove(root);
+  }
+});
+
+test('repeating a consumed idea explicitly makes the stable provisional entry pending again', () => {
+  const root = project();
+  try {
+    const idea = 'Reopen the same replay dashboard scope for a new iteration.';
+    const initial = next(root, ['--idea', idea]);
+    const entryPath = initial.command.args[1];
+    utimesSync(entryPath, new Date('2025-01-01T00:00:00.000Z'), new Date('2025-01-01T00:00:00.000Z'));
+
+    const rootArtifact = artifact(root);
+    const iterationId = writeIteration(rootArtifact, 'sample', { closed: true });
+    writeGateA(rootArtifact, 'ready_for_spec', iterationId);
+    writeGateB(rootArtifact, 'approved', iterationId);
+    writeGateC(rootArtifact, [task('task-001', 'done')], iterationId);
+    writeGateD(rootArtifact, [], iterationId);
+    const intakePath = join(
+      rootArtifact,
+      'iterations',
+      iterationId,
+      'gate-a-intake',
+      'intake.json',
+    );
+    const intake = JSON.parse(readFileSync(intakePath, 'utf8'));
+    intake.idea = idea;
+    intake.summary = idea;
+    writeJson(intakePath, intake);
+    utimesSync(intakePath, new Date('2026-06-01T00:00:00.000Z'), new Date('2026-06-01T00:00:00.000Z'));
+
+    assertAction(next(root), 'iteration_complete', 'cli', [
+      'iteration', 'open', '--artifacts', artifactPath(root), '--idea', '<change idea>',
+    ]);
+    assertAction(next(root, ['--idea', idea]), 'iteration_complete', 'cli', [
+      'iteration', 'open', '--artifacts', artifactPath(root), '--idea', idea,
+    ]);
+    assertAction(next(root), 'iteration_complete', 'cli', [
+      'iteration', 'open', '--artifacts', artifactPath(root), '--idea', idea,
+    ]);
+  } finally {
+    remove(root);
+  }
+});
+
+test('plain next does not attach a provisional entry that matches only historical intake', () => {
+  const root = project();
+  try {
+    const rootArtifact = artifact(root);
+    const activeIteration = writeIteration(rootArtifact, 'sample', {
+      iterationId: 'v1-active',
+    });
+    writeGateA(rootArtifact, 'blocked_on_user', activeIteration);
+    writeGateB(rootArtifact, 'approved', activeIteration);
+    const historicalIdea = 'Restore a historical dashboard that is not the active scope.';
+    writeGateA(rootArtifact, 'blocked_on_user', 'v0-history');
+    const historicalIntakePath = join(
+      rootArtifact,
+      'iterations',
+      'v0-history',
+      'gate-a-intake',
+      'intake.json',
+    );
+    const historicalIntake = JSON.parse(readFileSync(historicalIntakePath, 'utf8'));
+    historicalIntake.idea = historicalIdea;
+    historicalIntake.summary = historicalIdea;
+    writeJson(historicalIntakePath, historicalIntake);
+    const entriesRoot = join(root, '.plan2agent', 'entries');
+    mkdirSync(entriesRoot, { recursive: true });
+    const staleEntryPath = join(entriesRoot, 'idea-aaaaaaaaaaaa.md');
+    writeFileSync(staleEntryPath, `${historicalIdea}\n`, 'utf8');
+
+    const payload = next(root);
+    assertAction(payload, 'gate_what', 'skill');
+    assert.deepEqual(payload.command.args, []);
+    assert.doesNotMatch(payload.command.display, /idea-aaaaaaaaaaaa/u);
+  } finally {
+    remove(root);
+  }
+});
+
+test('a blocked run records the bounded user decision and returns the task to retry', () => {
+  const root = project();
+  try {
+    const rootArtifact = artifact(root);
+    const iterationId = writeIteration(rootArtifact);
+    writeGateA(rootArtifact, 'ready_for_spec', iterationId);
+    writeGateB(rootArtifact, 'approved', iterationId);
+    writeGateC(rootArtifact, [task('task-001', 'blocked')], iterationId);
+    writeGateD(rootArtifact, [], iterationId);
+    writeRuns(rootArtifact, [{
+      runId: 'run-scope-decision',
+      iterationId,
+      status: 'blocked',
+      failure: {
+        class: 'scope_violation',
+        retryable: 'no',
+        needsUserDecision: true,
+        source: 'owner',
+      },
+      localization: {
+        findings: ['The requested change also modifies the public payment API.'],
+        files: ['src/payment-api.js'],
+      },
+    }]);
+    const oldGraphPath = join(
+      rootArtifact,
+      'iterations',
+      iterationId,
+      'gate-c-task-graph',
+      'task-graph.json',
+    );
+    const oldRunPath = join(rootArtifact, 'runs', 'run-scope-decision.json');
+    const oldGraphBytes = readFileSync(oldGraphPath);
+    const oldRunBytes = readFileSync(oldRunPath);
+    const oldCurrentSpecBytes = readFileSync(join(rootArtifact, 'current-spec.json'));
+    const oldContractBytes = readFileSync(
+      join(rootArtifact, 'current-development-contract.json'),
+    );
+
+    const payload = next(root);
+    assertAction(payload, 'tasks_blocked', 'approval');
+    assert.equal(payload.command.quotePlaceholder, '<user-utterance>');
+    assert.deepEqual(payload.command.argv, [
+      'tasks', 'todo', '--artifacts', artifactPath(root), 'task-001',
+      '--note', '<user-utterance>',
+    ]);
+    assert.match(payload.reason, /public payment API/u);
+    assert.match(payload.reason, /revert that change|replacement scope/u);
+
+    const human = runP2a(['next', '--target', root]);
+    assert.equal(human.status, 0, `${human.stdout}${human.stderr}`);
+    assert.match(human.stdout, /사용자 결정이 필요한 내용/u);
+    assert.match(human.stdout, /public payment API/u);
+    assert.match(human.stdout, /승인 범위 안에서/u);
+
+    const replacementEntry = join(root, 'replacement-scope.md');
+    writeFileSync(
+      replacementEntry,
+      'Replace the payment API contract and prepare a new compatibility scope.\n',
+      'utf8',
+    );
+    const replacement = next(root, ['--entry', replacementEntry]);
+    assertAction(
+      replacement,
+      'blocked_scope_replacement_ready',
+      'cli',
+      [
+        'iteration', 'replace-scope',
+        '--artifacts', artifactPath(root),
+        '--idea', 'Replace the payment API contract and prepare a new compatibility scope.',
+        '--reason', 'User requested a replacement scope instead of bounded recovery for task task-001.',
+      ],
+      true,
+    );
+    assert.match(replacement.reason, /without closing that incomplete iteration/u);
+
+    const replaced = runP2a(replacement.command.argv);
+    assert.equal(replaced.status, 0, `${replaced.stdout}${replaced.stderr}`);
+    assert.deepEqual(readFileSync(oldGraphPath), oldGraphBytes);
+    assert.deepEqual(readFileSync(oldRunPath), oldRunBytes);
+    const replacementCurrentSpec = JSON.parse(readFileSync(
+      join(rootArtifact, 'current-spec.json'),
+      'utf8',
+    ));
+    const replacementIterationId = replacementCurrentSpec.active_iteration;
+    assert.notEqual(replacementIterationId, iterationId);
+    assert.equal(
+      replacementCurrentSpec.pending_iteration?.replacement?.replaces_iteration,
+      iterationId,
+    );
+    assert.equal(
+      replacementCurrentSpec.closed_iterations?.some(
+        (record) => record.iteration_id === iterationId,
+      ) ?? false,
+      false,
+    );
+    const replacementMetadata = JSON.parse(readFileSync(
+      join(rootArtifact, 'iterations', replacementIterationId, 'iteration.json'),
+      'utf8',
+    ));
+    assert.deepEqual(
+      replacementMetadata.replacement,
+      replacementCurrentSpec.pending_iteration.replacement,
+    );
+    assertAction(
+      next(root, ['--entry', replacementEntry]),
+      'gate_what',
+      'skill',
+    );
+
+    const abandoned = runP2a([
+      'iteration', 'abandon',
+      '--artifacts', rootArtifact,
+      '--reason', 'Exercise exact blocked-scope recovery.',
+    ]);
+    assert.equal(abandoned.status, 0, `${abandoned.stdout}${abandoned.stderr}`);
+    assert.deepEqual(readFileSync(join(rootArtifact, 'current-spec.json')), oldCurrentSpecBytes);
+    assert.deepEqual(
+      readFileSync(join(rootArtifact, 'current-development-contract.json')),
+      oldContractBytes,
+    );
+    assert.deepEqual(readFileSync(oldGraphPath), oldGraphBytes);
+    assert.deepEqual(readFileSync(oldRunPath), oldRunBytes);
+    assertAction(next(root), 'tasks_blocked', 'approval');
+
+    const quote = '승인 범위 밖 변경을 되돌리고 현재 범위 안에서 다시 진행해줘';
+    const resolved = runP2a(payload.command.argv.map((argument) => (
+      argument === '<user-utterance>' ? quote : argument
+    )));
+    assert.equal(resolved.status, 0, `${resolved.stdout}${resolved.stderr}`);
+    const graph = JSON.parse(readFileSync(
+      join(rootArtifact, 'iterations', iterationId, 'gate-c-task-graph', 'task-graph.json'),
+      'utf8',
+    ));
+    assert.equal(graph.tasks[0].status, 'todo');
+    assert.equal(graph.tasks[0].blockReason, undefined);
+    assert.equal(graph.tasks[0].blockNote, quote);
+    assertAction(next(root), 'ready_task_available', 'cli');
+  } finally {
+    remove(root);
+  }
+});
+
+test('blocked routing never resurfaces an older decision after a newer terminal run', () => {
+  const root = project();
+  try {
+    const rootArtifact = artifact(root);
+    const iterationId = writeIteration(rootArtifact);
+    writeGateA(rootArtifact, 'ready_for_spec', iterationId);
+    writeGateB(rootArtifact, 'approved', iterationId);
+    writeGateC(rootArtifact, [task('task-001', 'blocked')], iterationId);
+    writeGateD(rootArtifact, [], iterationId);
+    writeRuns(rootArtifact, [
+      {
+        runId: 'run-old-scope-decision',
+        iterationId,
+        status: 'blocked',
+        failure: {
+          class: 'scope_violation',
+          retryable: 'no',
+          needsUserDecision: true,
+          source: 'owner',
+        },
+        localization: { findings: ['Old public API scope question.'], files: [] },
+      },
+      {
+        runId: 'run-new-environment-failure',
+        iterationId,
+        status: 'failed',
+        failure: {
+          class: 'environment_failure',
+          retryable: 'yes',
+          needsUserDecision: false,
+          source: 'owner',
+        },
+      },
+    ]);
+
+    const payload = next(root);
+    assertAction(payload, 'tasks_blocked', 'cli', [
+      'tasks', 'show', '--artifacts', artifactPath(root), 'task-001',
+    ]);
+    assert.doesNotMatch(payload.reason, /Old public API/u);
+  } finally {
+    remove(root);
+  }
+});
+
+test('a manually reblocked task does not revive a user decision from before its latest successful run', () => {
+  const root = project();
+  try {
+    const rootArtifact = artifact(root);
+    const iterationId = writeIteration(rootArtifact);
+    writeGateA(rootArtifact, 'ready_for_spec', iterationId);
+    writeGateB(rootArtifact, 'approved', iterationId);
+    writeGateC(rootArtifact, [task('task-001', 'blocked')], iterationId);
+    writeGateD(rootArtifact, [], iterationId);
+    writeRuns(rootArtifact, [
+      {
+        runId: 'run-old-scope-decision',
+        iterationId,
+        status: 'blocked',
+        failure: {
+          class: 'scope_violation',
+          retryable: 'no',
+          needsUserDecision: true,
+          source: 'owner',
+        },
+        localization: { findings: ['Old public API scope question.'], files: [] },
+      },
+      {
+        runId: 'run-new-success',
+        iterationId,
+        status: 'finished',
+      },
+    ]);
+
+    const payload = next(root);
+    assertAction(payload, 'tasks_blocked', 'cli', [
+      'tasks', 'show', '--artifacts', artifactPath(root), 'task-001',
+    ]);
+    assert.doesNotMatch(payload.reason, /Old public API/u);
+
+    const replacementEntry = join(root, 'new-request.md');
+    writeFileSync(replacementEntry, 'Replace the public API contract.\n', 'utf8');
+    const withEntry = next(root, ['--entry', replacementEntry]);
+    assertAction(withEntry, 'entry_deferred', 'approval');
+  } finally {
+    remove(root);
+  }
+});
+
+test('blocked scope replacement reaches a full-spec executable graph and composes without closing the old work', () => {
+  const root = project();
+  try {
+    writeJson(join(root, '.plan2agent', 'project.config.json'), {
+      runTracking: { persistence: 'active_only' },
+    });
+    const rootArtifact = artifact(root);
+    const baselineIteration = writeIteration(rootArtifact, 'sample', {
+      iterationId: 'v1',
+      closed: true,
+    });
+    writeGateA(rootArtifact, 'ready_for_spec', baselineIteration);
+    writeGateB(rootArtifact, 'approved', baselineIteration);
+    writeGateC(rootArtifact, [task('task-001', 'done')], baselineIteration);
+    writeGateD(rootArtifact, [], baselineIteration);
+    addArchivedArtifactAudits(rootArtifact);
+
+    let result = runP2a([
+      'iteration', 'open',
+      '--artifacts', rootArtifact,
+      '--iteration-id', 'v2',
+      '--idea', 'Deliver the original payment recovery workflow.',
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+
+    const approveActivePlanningArtifacts = (iterationId, options = {}) => {
+      const intakePath = join(
+        rootArtifact,
+        'iterations', iterationId,
+        'gate-a-intake', 'intake.json',
+      );
+      const specPath = join(
+        rootArtifact,
+        'iterations', iterationId,
+        'gate-b-spec', 'spec.json',
+      );
+      let draftResult = runP2a([
+        'iteration', 'draft', '--artifacts', rootArtifact,
+      ]);
+      assert.equal(draftResult.status, 0, `${draftResult.stdout}${draftResult.stderr}`);
+      if (options.exerciseSnapshotGuard) {
+        const currentSpecPath = join(rootArtifact, 'current-spec.json');
+        const metadataPath = join(
+          rootArtifact,
+          'iterations', iterationId,
+          'iteration.json',
+        );
+        const baselineRef = JSON.parse(readFileSync(currentSpecPath, 'utf8'))
+          .pending_iteration.baseline_effective_spec_ref;
+        const baselinePath = join(rootArtifact, baselineRef);
+        const originalBaseline = readFileSync(baselinePath);
+        const originalCurrentSpec = readFileSync(currentSpecPath);
+        const originalMetadata = readFileSync(metadataPath);
+        const originalIntake = readFileSync(intakePath);
+        const tamperedBaseline = JSON.parse(originalBaseline.toString('utf8'));
+        tamperedBaseline.product.goals = tamperedBaseline.product.goals.slice(1);
+        writeJson(baselinePath, tamperedBaseline);
+        const tamperedSha256 = createHash('sha256')
+          .update(readFileSync(baselinePath))
+          .digest('hex');
+        const tamperedCurrentSpec = JSON.parse(originalCurrentSpec.toString('utf8'));
+        tamperedCurrentSpec.pending_iteration.baseline_effective_spec_sha256 = tamperedSha256;
+        writeJson(currentSpecPath, tamperedCurrentSpec);
+        const tamperedMetadata = JSON.parse(originalMetadata.toString('utf8'));
+        tamperedMetadata.baseline.effective_spec_sha256 = tamperedSha256;
+        writeJson(metadataPath, tamperedMetadata);
+        const tamperedIntake = JSON.parse(originalIntake.toString('utf8'));
+        tamperedIntake.baseline_context.spec_sha256 = tamperedSha256;
+        writeJson(intakePath, tamperedIntake);
+        const rejectedSnapshot = runP2a([
+          'iteration', 'validate', '--artifacts', rootArtifact,
+          '--allow-planning', '--stage', 'gate-a',
+        ]);
+        assert.notEqual(rejectedSnapshot.status, 0);
+        assert.match(
+          `${rejectedSnapshot.stdout}${rejectedSnapshot.stderr}`,
+          /exact semantic snapshot of the bound approved source spec/u,
+        );
+        writeFileSync(baselinePath, originalBaseline);
+        writeFileSync(currentSpecPath, originalCurrentSpec);
+        writeFileSync(metadataPath, originalMetadata);
+        writeFileSync(intakePath, originalIntake);
+      }
+      const intake = JSON.parse(readFileSync(intakePath, 'utf8'));
+      intake.clarifying_questions = intake.clarifying_questions.map((question) => ({
+        ...question,
+        status: 'answered',
+        answer: 'Keep the approved scope narrow and backward compatible.',
+      }));
+      intake.needs_user_decision = intake.needs_user_decision.map((decision) => ({
+        ...decision,
+        status: 'answered',
+        answer: decision.default,
+        current_resolution: decision.default,
+      }));
+      intake.status = 'ready_for_spec';
+      intake.approval_audit = {
+        approved_by: 'user',
+        approved_at: '2026-08-30',
+        approved_artifacts: [`iterations/${iterationId}/gate-a-intake/intake.json`],
+        approval_note: `User approved Gate A for ${iterationId}.`,
+      };
+      writeJson(intakePath, intake);
+      draftResult = runP2a([
+        'iteration', 'draft', '--artifacts', rootArtifact,
+      ]);
+      assert.equal(draftResult.status, 0, `${draftResult.stdout}${draftResult.stderr}`);
+      const spec = JSON.parse(readFileSync(specPath, 'utf8'));
+      spec.approval = 'approved';
+      spec.approval_audit = {
+        approved_by: 'user',
+        approved_at: '2026-08-30',
+        approved_artifacts: [`iterations/${iterationId}/gate-b-spec/spec.json`],
+        approval_note: `User approved Gate B for ${iterationId}.`,
+      };
+      writeJson(specPath, spec);
+      result = runP2a([
+        'iteration', 'promote-spec', '--artifacts', rootArtifact,
+      ]);
+      assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+      result = runP2a([
+        'iteration', 'diff-tasks', '--artifacts', rootArtifact,
+      ]);
+      assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+      if (options.exerciseCoverageGuard) {
+        const draftPath = join(
+          rootArtifact,
+          'iterations', iterationId,
+          'gate-c-task-graph', 'task-graph.draft.json',
+        );
+        const incompleteDraft = JSON.parse(readFileSync(draftPath, 'utf8'));
+        incompleteDraft.tasks = incompleteDraft.tasks.map((draftTask) => ({
+          ...draftTask,
+          sourceSpecRefs: draftTask.sourceSpecRefs.filter(
+            (ref) => ref !== 'product.problem',
+          ),
+        }));
+        for (const draftTask of incompleteDraft.tasks) {
+          if (!draftTask.sourceSpecRefs.length) {
+            draftTask.sourceSpecRefs = ['implementation.verification'];
+          }
+        }
+        writeJson(draftPath, incompleteDraft);
+        const rejectedValidation = runP2a([
+          'iteration', 'validate', '--artifacts', rootArtifact,
+          '--allow-planning', '--stage', 'gate-c-draft',
+        ]);
+        assert.notEqual(rejectedValidation.status, 0);
+        assert.match(
+          `${rejectedValidation.stdout}${rejectedValidation.stderr}`,
+          /unfinished prior work is not treated as delivered.*product\.problem/u,
+        );
+        const rejectedPromotion = runP2a([
+          'iteration', 'promote-tasks', '--artifacts', rootArtifact,
+        ]);
+        assert.notEqual(rejectedPromotion.status, 0);
+        assert.match(
+          `${rejectedPromotion.stdout}${rejectedPromotion.stderr}`,
+          /unfinished prior work is not treated as delivered.*product\.problem/u,
+        );
+        result = runP2a([
+          'iteration', 'diff-tasks', '--artifacts', rootArtifact, '--force',
+        ]);
+        assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+      }
+      result = runP2a([
+        'iteration', 'promote-tasks', '--artifacts', rootArtifact,
+      ]);
+      assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    };
+
+    approveActivePlanningArtifacts('v2');
+    const oldGraphPath = join(
+      rootArtifact,
+      'iterations', 'v2',
+      'gate-c-task-graph', 'task-graph.json',
+    );
+    const oldGraph = JSON.parse(readFileSync(oldGraphPath, 'utf8'));
+    oldGraph.tasks = oldGraph.tasks.map((oldTask) => ({
+      ...oldTask,
+      status: 'blocked',
+      blockReason: 'scope_violation',
+      blockNote: 'The approved payment contract must be replaced before continuing.',
+    }));
+    writeJson(oldGraphPath, oldGraph);
+    writeRuns(rootArtifact, [{
+      runId: 'run-v2-blocked-scope',
+      taskId: oldGraph.tasks[0].id,
+      iterationId: 'v2',
+      status: 'blocked',
+      failure: {
+        class: 'scope_violation',
+        retryable: 'no',
+        needsUserDecision: true,
+        source: 'owner',
+      },
+      localization: {
+        findings: ['The original payment contract cannot satisfy the replacement request.'],
+        files: ['src/payment.js'],
+      },
+    }]);
+    const oldGraphBytes = readFileSync(oldGraphPath);
+    const oldApprovedSpec = JSON.parse(readFileSync(
+      join(rootArtifact, 'iterations', 'v2', 'gate-b-spec', 'spec.json'),
+      'utf8',
+    ));
+    const oldIntakePath = join(
+      rootArtifact,
+      'iterations', 'v2',
+      'gate-a-intake', 'intake.json',
+    );
+    const oldRunPath = join(rootArtifact, 'runs', 'run-v2-blocked-scope.json');
+    const oldRunBytes = readFileSync(oldRunPath);
+    const oldCurrentSpecBytes = readFileSync(join(rootArtifact, 'current-spec.json'));
+    const oldContractBytes = readFileSync(
+      join(rootArtifact, 'current-development-contract.json'),
+    );
+
+    const replacementEntry = join(root, 'replacement.md');
+    const replacementIdea = 'Replace the payment contract and add compatibility recovery.';
+    writeFileSync(replacementEntry, `${replacementIdea}\n`, 'utf8');
+    let replacement = next(root, ['--entry', replacementEntry]);
+    assertAction(
+      replacement,
+      'blocked_scope_replacement_ready',
+      'cli',
+      null,
+      true,
+    );
+    result = runP2a(replacement.command.argv);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    const abandonedReplacementIteration = JSON.parse(readFileSync(
+      join(rootArtifact, 'current-spec.json'),
+      'utf8',
+    )).active_iteration;
+    writeFileSync(
+      join(
+        rootArtifact,
+        'iterations', abandonedReplacementIteration,
+        'gate-b-spec', 'spec.json',
+      ),
+      '{"schema_version":"p2a.spec.v1",',
+      'utf8',
+    );
+    result = runP2a([
+      'iteration', 'abandon',
+      '--artifacts', rootArtifact,
+      '--reason', 'Confirm replacement planning can restore the exact blocked pointer.',
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    assert.deepEqual(readFileSync(join(rootArtifact, 'current-spec.json')), oldCurrentSpecBytes);
+    assert.deepEqual(
+      readFileSync(join(rootArtifact, 'current-development-contract.json')),
+      oldContractBytes,
+    );
+    assertAction(next(root), 'tasks_blocked', 'approval');
+    replacement = next(root, ['--entry', replacementEntry]);
+    assertAction(
+      replacement,
+      'blocked_scope_replacement_ready',
+      'cli',
+      null,
+      true,
+    );
+    result = runP2a(replacement.command.argv);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    const replacementCurrentSpec = JSON.parse(readFileSync(
+      join(rootArtifact, 'current-spec.json'),
+      'utf8',
+    ));
+    const replacementIteration = replacementCurrentSpec.active_iteration;
+    assert.equal(replacementCurrentSpec.pending_iteration.replacement.task_coverage, 'full_spec');
+    assert.deepEqual(
+      replacementCurrentSpec.pending_iteration.replacement.replaced_iteration_ids,
+      ['v2'],
+    );
+    const replacementBaseline = JSON.parse(readFileSync(
+      join(rootArtifact, replacementCurrentSpec.pending_iteration.baseline_effective_spec_ref),
+      'utf8',
+    ));
+    assert.deepEqual(replacementBaseline.product, oldApprovedSpec.product);
+    assert.deepEqual(replacementBaseline.implementation, oldApprovedSpec.implementation);
+    assert.deepEqual(
+      replacementBaseline.clarifying_question_disposition,
+      oldApprovedSpec.clarifying_question_disposition,
+    );
+    assert.deepEqual(replacementBaseline.visual_experience, oldApprovedSpec.visual_experience);
+    assert.equal(replacementBaseline.approval, 'draft');
+    assert.equal(replacementBaseline.source_intake, '../gate-a-intake/intake.json');
+    const replacementMetadata = JSON.parse(readFileSync(
+      join(rootArtifact, 'iterations', replacementIteration, 'iteration.json'),
+      'utf8',
+    ));
+    assert.match(
+      replacementMetadata.resume_authority.replacement_source.spec_ref,
+      /baseline\/replacement-source-spec\.json$/u,
+    );
+    assert.match(
+      replacementMetadata.resume_authority.replacement_source.intake_ref,
+      /baseline\/replacement-source-intake\.json$/u,
+    );
+
+    approveActivePlanningArtifacts(replacementIteration, {
+      exerciseCoverageGuard: true,
+      exerciseSnapshotGuard: true,
+    });
+    const replacementSpec = JSON.parse(readFileSync(
+      join(rootArtifact, 'iterations', replacementIteration, 'gate-b-spec', 'spec.json'),
+      'utf8',
+    ));
+    assert.match(JSON.stringify(replacementSpec.product), /original payment recovery workflow/u);
+    assert.match(JSON.stringify(replacementSpec.product), /compatibility recovery/u);
+    const replacementGraphPath = join(
+      rootArtifact,
+      'iterations', replacementIteration,
+      'gate-c-task-graph', 'task-graph.json',
+    );
+    let replacementGraph = JSON.parse(readFileSync(replacementGraphPath, 'utf8'));
+    const coveredRefs = new Set(
+      replacementGraph.tasks.flatMap((replacementTask) => replacementTask.sourceSpecRefs),
+    );
+    for (const field of [
+      'product.problem',
+      'product.goals',
+      'product.success_criteria',
+      'implementation.architecture',
+      'implementation.verification',
+    ]) {
+      assert.ok(coveredRefs.has(field), `replacement graph did not cover ${field}`);
+    }
+    assertAction(next(root), 'ready_task_available', 'cli');
+    assert.deepEqual(readFileSync(oldGraphPath), oldGraphBytes);
+    assert.deepEqual(readFileSync(oldRunPath), oldRunBytes);
+
+    rmSync(replacementGraphPath);
+    rmSync(join(rootArtifact, 'current-development-contract.json'));
+    result = runP2a([
+      'execute', 'prepare',
+      '--artifacts', rootArtifact,
+      '--mode', 'direct',
+      '--selection-rationale', 'The replacement is one bounded approved objective.',
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    replacementGraph = JSON.parse(readFileSync(replacementGraphPath, 'utf8'));
+    const directCoveredRefs = new Set(replacementGraph.tasks[0].sourceSpecRefs);
+    for (const field of [
+      'product.problem',
+      'product.target_users',
+      'product.goals',
+      'product.constraints',
+      'implementation.architecture',
+      'implementation.data_flow',
+      'implementation.verification',
+    ]) {
+      assert.ok(directCoveredRefs.has(field), `direct replacement graph did not cover ${field}`);
+    }
+
+    const completeDoneGraph = structuredClone(replacementGraph);
+    completeDoneGraph.tasks = completeDoneGraph.tasks.map((replacementTask) => ({
+      ...replacementTask,
+      status: 'done',
+    }));
+    const incompleteDoneGraph = structuredClone(completeDoneGraph);
+    incompleteDoneGraph.tasks[0].sourceSpecRefs = incompleteDoneGraph.tasks[0].sourceSpecRefs
+      .filter((ref) => ref !== 'product.problem');
+    writeJson(replacementGraphPath, incompleteDoneGraph);
+    writeJson(
+      join(rootArtifact, 'current-development-contract.json'),
+      materializeCurrentDevelopmentContract(resolveIterationState(rootArtifact, {
+        requireReady: false,
+      })),
+    );
+    const rejectedClose = runP2a(['iteration', 'close', '--artifacts', rootArtifact]);
+    assert.notEqual(rejectedClose.status, 0);
+    assert.match(
+      `${rejectedClose.stdout}${rejectedClose.stderr}`,
+      /unfinished prior work is not treated as delivered.*product\.problem/u,
+    );
+
+    replacementGraph = completeDoneGraph;
+    writeJson(replacementGraphPath, replacementGraph);
+    writeJson(
+      join(rootArtifact, 'current-development-contract.json'),
+      materializeCurrentDevelopmentContract(resolveIterationState(rootArtifact, {
+        requireReady: false,
+      })),
+    );
+    const finalRunId = 'run-v3-final-verification';
+    result = runP2a([
+      'execute', 'verify-final',
+      '--artifacts', rootArtifact,
+      '--task', replacementGraph.tasks[0].id,
+      '--run-id', finalRunId,
+      '--agent-tool', 'manual',
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    result = runP2a([
+      'runs', 'verify',
+      '--artifacts', rootArtifact,
+      '--run-id', finalRunId,
+      '--test-command', `"${process.execPath}" -e "process.exit(0)"`,
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    result = runP2a([
+      'execute', 'finish',
+      '--artifacts', rootArtifact,
+      '--run-id', finalRunId,
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    result = runP2a(['iteration', 'close', '--artifacts', rootArtifact]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    const closedGraphBytes = readFileSync(replacementGraphPath);
+    const closedPointerBytes = readFileSync(join(rootArtifact, 'current-spec.json'));
+    const ineligibleArchivedReplacement = JSON.parse(closedGraphBytes.toString('utf8'));
+    ineligibleArchivedReplacement.tasks[0].status = 'todo';
+    writeJson(replacementGraphPath, ineligibleArchivedReplacement);
+    const rejectedCompose = runP2a([
+      'iteration', 'compose', '--artifacts', rootArtifact,
+    ]);
+    assert.notEqual(rejectedCompose.status, 0);
+    assert.match(
+      `${rejectedCompose.stdout}${rejectedCompose.stderr}`,
+      /closed iteration .* artifact changed after close: .*task-graph\.json/u,
+    );
+    assert.deepEqual(
+      readFileSync(join(rootArtifact, 'current-spec.json')),
+      closedPointerBytes,
+    );
+    writeFileSync(replacementGraphPath, closedGraphBytes);
+    const closedPointer = JSON.parse(readFileSync(
+      join(rootArtifact, 'current-spec.json'),
+      'utf8',
+    ));
+    const replacementClose = closedPointer.closed_iterations.find((closed) => (
+      closed.iteration_id === replacementIteration
+    ));
+    assert.equal(
+      replacementClose.artifact_hashes[
+        `iterations/${replacementIteration}/baseline/replacement-source-spec.json`
+      ].present,
+      true,
+    );
+    assert.equal(
+      replacementClose.artifact_hashes[
+        `iterations/${replacementIteration}/baseline/replacement-source-intake.json`
+      ].present,
+      true,
+    );
+    const changedOldIntake = JSON.parse(readFileSync(oldIntakePath, 'utf8'));
+    changedOldIntake.known_facts.push('This unaudited skipped-iteration file changed after replacement close.');
+    writeJson(oldIntakePath, changedOldIntake);
+    assert.doesNotThrow(
+      () => auditArchivedIterationArtifacts({
+        ...closedPointer,
+        closed_iterations: [replacementClose],
+      }, rootArtifact),
+    );
+    result = runP2a(['iteration', 'compose', '--artifacts', rootArtifact]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    const composed = JSON.parse(readFileSync(join(rootArtifact, 'current-spec.json'), 'utf8'));
+    assert.deepEqual(composed.composed_from, ['v1', replacementIteration]);
+    assert.ok(composed.skipped_iterations.some((item) => item.iteration_id === 'v2'));
+    assert.ok(composed.skipped_iterations.some((item) => (
+      item.iteration_id === abandonedReplacementIteration
+      && item.reason === 'planning iteration was abandoned'
+    )));
+    assert.equal(
+      composed.closed_iterations.some((item) => item.iteration_id === 'v2'),
+      false,
+    );
+    assert.deepEqual(readFileSync(oldGraphPath), oldGraphBytes);
+    assert.deepEqual(readFileSync(oldRunPath), oldRunBytes);
+  } finally {
+    remove(root);
+  }
+});
+
+test('a retryable blocked run routes through idempotent finish recovery', () => {
+  const root = project();
+  try {
+    const rootArtifact = artifact(root);
+    const iterationId = writeIteration(rootArtifact);
+    writeGateA(rootArtifact, 'ready_for_spec', iterationId);
+    writeGateB(rootArtifact, 'approved', iterationId);
+    writeGateC(rootArtifact, [task('task-001', 'blocked')], iterationId);
+    writeGateD(rootArtifact, [], iterationId);
+    writeRuns(rootArtifact, [{
+      runId: 'run-retryable-block',
+      iterationId,
+      status: 'blocked',
+      failure: {
+        class: 'test_flake',
+        retryable: 'yes',
+        needsUserDecision: false,
+        source: 'owner',
+      },
+    }]);
+
+    const payload = next(root);
+    assertAction(payload, 'tasks_blocked', 'cli', [
+      'execute', 'finish', '--artifacts', artifactPath(root),
+      '--run-id', 'run-retryable-block',
+    ], false);
+    assert.match(payload.reason, /without asking the user/u);
+  } finally {
+    remove(root);
+  }
+});
+
+test('replace-scope rejects ready and started work without changing project state', () => {
+  const cases = [
+    {
+      id: 'ready',
+      taskStatus: 'todo',
+      runs: [],
+      error: /no approved task can continue.*task-001/u,
+    },
+    {
+      id: 'started',
+      taskStatus: 'in_progress',
+      runs: [{ runId: 'run-started', status: 'started' }],
+      error: /requires no started run.*run-started/u,
+    },
+    {
+      id: 'orphan in-progress',
+      taskStatus: 'in_progress',
+      runs: [],
+      error: /requires no in-progress task.*task-001/u,
+    },
+  ];
+  for (const caseData of cases) {
+    const root = project();
+    try {
+      const rootArtifact = artifact(root);
+      const iterationId = writeIteration(rootArtifact);
+      writeGateA(rootArtifact, 'ready_for_spec', iterationId);
+      writeGateB(rootArtifact, 'approved', iterationId);
+      writeGateC(rootArtifact, [task('task-001', caseData.taskStatus)], iterationId);
+      writeGateD(rootArtifact, [], iterationId);
+      if (caseData.runs.length) {
+        writeRuns(rootArtifact, caseData.runs.map((run) => ({
+          ...run,
+          iterationId,
+          taskId: 'task-001',
+        })));
+      }
+      const before = snapshotHarness(root);
+      const result = runP2a([
+        'iteration', 'replace-scope',
+        '--artifacts', rootArtifact,
+        '--idea', `Replacement rejected for ${caseData.id}.`,
+        '--reason', 'The user requested a replacement scope.',
+      ]);
+      assert.notEqual(result.status, 0);
+      assert.match(`${result.stdout}${result.stderr}`, caseData.error);
+      assert.deepEqual(snapshotHarness(root), before);
+    } finally {
+      remove(root);
+    }
+  }
+});
+
+test('next defers a replacement request while an orphan in-progress task still needs recovery', () => {
+  const root = project();
+  try {
+    const rootArtifact = artifact(root);
+    const iterationId = writeIteration(rootArtifact);
+    writeGateA(rootArtifact, 'ready_for_spec', iterationId);
+    writeGateB(rootArtifact, 'approved', iterationId);
+    writeGateC(rootArtifact, [
+      task('task-001', 'blocked'),
+      task('task-002', 'in_progress'),
+    ], iterationId);
+    writeGateD(rootArtifact, [], iterationId);
+    writeRuns(rootArtifact, [{
+      runId: 'run-blocked-scope',
+      taskId: 'task-001',
+      iterationId,
+      status: 'blocked',
+      failure: {
+        class: 'scope_violation',
+        retryable: 'no',
+        needsUserDecision: true,
+        source: 'owner',
+      },
+    }]);
+    const replacementEntry = join(root, 'replacement-request.md');
+    writeFileSync(replacementEntry, 'Replace the blocked public contract.\n', 'utf8');
+
+    const payload = next(root, ['--entry', replacementEntry]);
+    assertAction(payload, 'entry_deferred', 'approval');
+    assert.doesNotMatch(JSON.stringify(payload.command), /replace-scope/u);
+  } finally {
+    remove(root);
   }
 });
 
@@ -1160,8 +2243,8 @@ test('a generated retrospective report does not stale final verification but oth
       '# Product note\n',
       'utf8',
     );
-    assertAction(next(root), 'final_verification_required', 'cli', [
-      'execute', 'verify-final', '--artifacts', artifactPath(root),
+    assertAction(next(root), 'relevant_verification_required', 'cli', [
+      'execute', 'verify-final', '--scope', 'relevant', '--artifacts', artifactPath(root),
     ]);
   } finally {
     remove(root);
@@ -1261,6 +2344,9 @@ test('completed iteration exposes bounded retrospective candidates without block
     assert.equal(human.status, 0, `${human.stdout}${human.stderr}`);
     assert.match(human.stdout, /감지된 회고 내용:/);
     assert.match(human.stdout, /사용자가 진행 방향을 바로잡은 기록이 1회 있습니다/);
+    assert.match(human.stdout, /회고를 먼저 살펴보는 것을 권장합니다/);
+    assert.match(human.stdout, /회고\(권장\):/);
+    assert.doesNotMatch(human.stdout, /특이 사항이 없다면 종료를 권장/);
     assert.doesNotMatch(human.stdout, /explicit_correction|SECRET_RETRO_VALUE/);
     assert.deepEqual(snapshotHarness(root), before);
   } finally {
@@ -1281,18 +2367,22 @@ test('human next output defaults to actionable v2 options while unqualified JSON
 
     const human = runP2a(['next', '--target', root]);
     assert.equal(human.status, 0, `${human.stdout}${human.stderr}`);
-    assert.match(human.stdout, /state: iteration_review_or_close_required/);
-    assert.match(human.stdout, /Options:/);
-    assert.match(human.stdout, /Review and remediate \(review\)/);
-    assert.match(human.stdout, /Remediation: .*tasks todo .*--reopen.*--note/);
-    assert.match(human.stdout, /Remediation approval required: no/);
-    assert.match(human.stdout, /Review development process \(retrospective\)/);
-    assert.match(human.stdout, /No automatic development process signal was found/);
-    assert.match(human.stdout, /Retrospective report: .*docs[/\\]retrospective[/\\]sample-v1\.md/);
-    assert.match(human.stdout, /Report approval required: yes/);
-    assert.match(human.stdout, /Close iteration \(close\)/);
-    assert.match(human.stdout, /Action: .*iteration close/);
-    assert.match(human.stdout, /Approval required: yes/);
+    assert.doesNotMatch(human.stdout, /state:|reason:|--artifacts|\.plan2agent/u);
+    assert.match(human.stdout, /코드 리뷰:/u);
+    assert.match(human.stdout, /회고:/u);
+    assert.match(human.stdout, /종료\(권장\):/u);
+    assert.match(human.stdout, /종료를 권장합니다/);
+    assert.match(human.stdout, /완료한 결과:/u);
+    assert.match(human.stdout, /통과한 확인: 테스트 1건/u);
+    assert.match(human.stdout, /메뉴를 반복하지 않고 종료할지 한 번만 묻습니다/);
+
+    const detailedHuman = runP2a(['next', '--target', root, '--details']);
+    assert.equal(detailedHuman.status, 0, `${detailedHuman.stdout}${detailedHuman.stderr}`);
+    assert.match(detailedHuman.stdout, /state: iteration_review_or_close_required/);
+    assert.match(detailedHuman.stdout, /Review and remediate \(review\)/);
+    assert.match(detailedHuman.stdout, /Remediation: .*tasks todo .*--reopen.*--note/);
+    assert.match(detailedHuman.stdout, /Retrospective report: .*docs[/\\]retrospective[/\\]sample-v1\.md/);
+    assert.match(detailedHuman.stdout, /Action: .*iteration close/);
 
     const legacyResult = runP2a(['next', '--target', root, '--json']);
     assert.equal(legacyResult.status, 0, `${legacyResult.stdout}${legacyResult.stderr}`);
@@ -1362,7 +2452,6 @@ test('closed current development routes without archive audit or run hydration',
       [
         'iteration', 'open',
         '--artifacts', artifactPath(root),
-        '--iteration-id', '<id>',
         '--idea', '<change idea>',
       ],
     );
@@ -1401,7 +2490,7 @@ test('closed current development ignores archived spec byte drift', () => {
     const payload = JSON.parse(result.stdout);
     assertAction(payload, 'iteration_complete', 'cli', [
       'iteration', 'open', '--artifacts', artifactPath(root),
-      '--iteration-id', '<id>', '--idea', '<change idea>',
+      '--idea', '<change idea>',
     ]);
     assert.match(result.stderr, /historical:reads: 0/);
     assert.doesNotMatch(result.stderr, /artifact:deep-validation/);
@@ -1432,7 +2521,7 @@ test('closed current development ignores historical artifact hash coverage', () 
     const payload = JSON.parse(result.stdout);
     assertAction(payload, 'iteration_complete', 'cli', [
       'iteration', 'open', '--artifacts', artifactPath(root),
-      '--iteration-id', '<id>', '--idea', '<change idea>',
+      '--idea', '<change idea>',
     ]);
     assert.match(result.stderr, /historical:reads: 0/);
   } finally {
@@ -1549,7 +2638,7 @@ test('BuildLore-shaped history routes from the current contract only', () => {
       'cli',
       [
         'iteration', 'open', '--artifacts', artifactPath(root),
-        '--iteration-id', '<id>', '--idea', '<change idea>',
+        '--idea', '<change idea>',
       ],
     );
     assert.ok(durationMs < 5_000, `closed routing took ${durationMs.toFixed(1)}ms`);
@@ -1580,7 +2669,7 @@ test('current development routing ignores historical composition drift and extra
     const semanticPayload = JSON.parse(semanticResult.stdout);
     assertAction(semanticPayload, 'iteration_complete', 'cli', [
       'iteration', 'open', '--artifacts', artifactPath(root),
-      '--iteration-id', '<id>', '--idea', '<change idea>',
+      '--idea', '<change idea>',
     ]);
     assert.match(semanticResult.stderr, /historical:reads: 0/);
     assert.doesNotMatch(semanticResult.stderr, /artifact:deep-validation/);
@@ -1606,7 +2695,7 @@ test('current development routing ignores historical composition drift and extra
     const extraPayload = JSON.parse(extraResult.stdout);
     assertAction(extraPayload, 'iteration_complete', 'cli', [
       'iteration', 'open', '--artifacts', artifactPath(root),
-      '--iteration-id', '<id>', '--idea', '<change idea>',
+      '--idea', '<change idea>',
     ]);
     assert.match(extraResult.stderr, /historical:reads: 0/);
   } finally {
@@ -1803,7 +2892,7 @@ test('iteration open ignores historical archive drift while explicit administrat
   }
 });
 
-test('current routing finds failed run proposal evidence without historical fallback', () => {
+test('current routing does not make optional proposal mining a prerequisite', () => {
   const root = project({ proposals: true });
   try {
     const rootArtifact = artifact(root);
@@ -1823,17 +2912,10 @@ test('current routing finds failed run proposal evidence without historical fall
     ]);
     assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
     const payload = JSON.parse(result.stdout);
-    assertAction(
-      payload,
-      'run_evidence_needs_proposal_mining',
-      'cli',
-      [
-        'proposals', 'mine',
-        '--artifacts', artifactPath(root),
-        '--run-id', 'run-audited-failure',
-        '--proposals', join(root, '.plan2agent', 'proposals'),
-      ],
-    );
+    assertAction(payload, 'iteration_complete', 'cli', [
+      'iteration', 'open', '--artifacts', artifactPath(root),
+      '--idea', '<change idea>',
+    ]);
     assert.match(result.stderr, /historical:reads: 0/);
     assert.doesNotMatch(result.stderr, /artifact:deep-validation/);
     assert.doesNotMatch(result.stderr, /runs:hydrate/);
@@ -1855,7 +2937,7 @@ test('current routing ignores composition gaps and malformed historical composit
     assert.equal(gapResult.status, 0, `${gapResult.stdout}${gapResult.stderr}`);
     assertAction(JSON.parse(gapResult.stdout), 'iteration_complete', 'cli', [
       'iteration', 'open', '--artifacts', artifactPath(root),
-      '--iteration-id', '<id>', '--idea', '<change idea>',
+      '--idea', '<change idea>',
     ]);
     assert.match(gapResult.stderr, /historical:reads: 0/);
     assert.doesNotMatch(gapResult.stderr, /artifact:deep-validation/);
@@ -1876,7 +2958,7 @@ test('current routing ignores composition gaps and malformed historical composit
     const invalidPayload = JSON.parse(invalidResult.stdout);
     assertAction(invalidPayload, 'iteration_complete', 'cli', [
       'iteration', 'open', '--artifacts', artifactPath(root),
-      '--iteration-id', '<id>', '--idea', '<change idea>',
+      '--idea', '<change idea>',
     ]);
     assert.match(invalidResult.stderr, /historical:reads: 0/);
   } finally {
@@ -1909,7 +2991,7 @@ test('next ignores reopened archived metadata while mutation commands still reje
     const payload = next(root);
     assertAction(payload, 'iteration_complete', 'cli', [
       'iteration', 'open', '--artifacts', artifactPath(root),
-      '--iteration-id', '<id>', '--idea', '<change idea>',
+      '--idea', '<change idea>',
     ]);
 
     for (const command of [
@@ -1961,7 +3043,7 @@ test('next ignores archived planning metadata while mutation commands still reje
     const payload = next(root);
     assertAction(payload, 'iteration_complete', 'cli', [
       'iteration', 'open', '--artifacts', artifactPath(root),
-      '--iteration-id', '<id>', '--idea', '<change idea>',
+      '--idea', '<change idea>',
     ]);
 
     for (const command of [
@@ -2198,23 +3280,79 @@ test('next preserves canonical root gate fallback before entering iteration Gate
 test('next carries the original entry into a new Gate A approval command', () => {
   const root = project();
   try {
-    writeGateA(artifact(root));
+    const rootArtifact = artifact(root);
+    writeGateA(rootArtifact, 'ready_for_spec');
+    const revoked = runP2a([
+      'decide', 'revoke', '--artifacts', rootArtifact, '--quote', '범위를 다시 확인하자',
+    ]);
+    assert.equal(revoked.status, 0, `${revoked.stdout}${revoked.stderr}`);
     const entryPath = join(root, 'idea.md');
     writeFileSync(entryPath, 'Build the approved sample workflow from this entry document.\n', 'utf8');
 
     const withoutEntry = next(root);
     assertAction(withoutEntry, 'gate_a_needs_approval', 'approval');
-    assert.match(withoutEntry.command.display, /p2a next --entry <original-entry-path>/);
+    assert.deepEqual(withoutEntry.command.argv, [
+      'decide',
+      '--quote',
+      '<user-utterance>',
+      '--artifacts',
+      artifactPath(root),
+    ]);
 
     const withEntry = next(root, ['--entry', 'idea.md']);
     assertAction(withEntry, 'gate_a_needs_approval', 'approval');
     assert.ok(withEntry.command.display.includes(`--entry ${JSON.stringify(entryPath)}`));
+    assert.deepEqual(withEntry.command.argv, [
+      'decide',
+      '--quote',
+      '<user-utterance>',
+      '--entry',
+      entryPath,
+      '--artifacts',
+      artifactPath(root),
+    ]);
+    assert.ok(withEntry.command.decisionSummary.some((item) => item.startsWith('목표:')));
+    assert.ok(withEntry.command.decisionSummary.some((item) => item.startsWith('확인한 결정:')));
   } finally {
     remove(root);
   }
 });
 
-test('next routes Gate A approval through Gate ② and reuses approved or legacy style contracts', () => {
+test('next resumes unresolved Gate A and Gate B decisions before approval', () => {
+  const gateARoot = project();
+  const gateBRoot = project();
+  try {
+    writeGateA(artifact(gateARoot));
+    const gateA = next(gateARoot);
+    assertAction(gateA, 'gate_what', 'skill');
+    assert.equal(gateA.command.skill, 'p2a-harness');
+    assert.deepEqual(gateA.command.args, []);
+
+    const rootArtifact = artifact(gateBRoot);
+    writeGateA(rootArtifact, 'ready_for_spec');
+    writeGateB(rootArtifact, 'draft');
+    const specPath = join(rootArtifact, 'gate-b-spec', 'spec.json');
+    const spec = JSON.parse(readFileSync(specPath, 'utf8'));
+    spec.clarifying_question_disposition[0] = {
+      ...spec.clarifying_question_disposition[0],
+      status: 'promoted_to_decision',
+      promoted_decision_id: 'ND-4',
+    };
+    delete spec.clarifying_question_disposition[0].resolved_by;
+    spec.open_decisions = ['ND-4'];
+    writeJson(specPath, spec);
+
+    const gateB = next(gateBRoot);
+    assertAction(gateB, 'gate_b_needs_decisions', 'skill');
+    assert.equal(gateB.command.skill, 'p2a-spec');
+    assert.deepEqual(gateB.command.args, []);
+  } finally {
+    remove(gateARoot);
+    remove(gateBRoot);
+  }
+});
+
+test('next requires Gate ② only when a material constitution artifact exists', () => {
   const missingRoot = project();
   const draftRoot = project();
   const approvedRoot = project();
@@ -2223,11 +3361,21 @@ test('next routes Gate A approval through Gate ② and reuses approved or legacy
   const mismatchedRoot = project();
   try {
     writeGateA(artifact(missingRoot), 'ready_for_spec');
-    assertAction(next(missingRoot), 'shape', 'skill');
+    assertAction(next(missingRoot), 'gate_a_ready_for_spec', 'skill');
 
     writeGateA(artifact(draftRoot), 'ready_for_spec');
     writeConstitution(draftRoot, 'sample', false);
-    assertAction(next(draftRoot), 'shape', 'approval');
+    const shapeApproval = next(draftRoot);
+    assertAction(shapeApproval, 'shape', 'approval');
+    assert.deepEqual(shapeApproval.command.argv, [
+      'shape',
+      'approve',
+      '--target',
+      draftRoot,
+      '--quote',
+      '<user-utterance>',
+    ]);
+    assert.ok(shapeApproval.command.decisionSummary.length > 0);
 
     writeGateA(artifact(approvedRoot), 'ready_for_spec');
     writeConstitution(approvedRoot);
@@ -2542,7 +3690,7 @@ test('next requires a project id only when multiple artifact roots are ambiguous
     assertAction(ambiguous, 'project_selection_required', 'cli', ['next', '--project-id', '<project-id>']);
 
     const selected = next(root, ['--project-id', 'second']);
-    assertAction(selected, 'shape', 'skill');
+    assertAction(selected, 'gate_a_ready_for_spec', 'skill');
     assert.equal(selected.projectId, 'second');
   } finally {
     remove(root);
@@ -2589,6 +3737,14 @@ test('next points Gate B approval at the active iteration and ignores legacy Gat
     assert.ok(payload.command.display.includes(
       join(rootArtifact, 'iterations', iterationId, 'gate-b-spec', 'spec.json'),
     ));
+    assert.deepEqual(payload.command.argv, [
+      'decide',
+      '--quote',
+      '<user-utterance>',
+      '--artifacts',
+      artifactPath(root),
+    ]);
+    assert.ok(payload.command.decisionSummary.some((item) => item.startsWith('Product outcome:')));
 
     writeGateB(rootArtifact, 'approved', iterationId);
     writeGateC(rootArtifact, [task('task-001', 'todo')], iterationId);
@@ -2601,7 +3757,7 @@ test('next points Gate B approval at the active iteration and ignores legacy Gat
   }
 });
 
-test('next mines a failed run only once before opening a closed iteration', () => {
+test('next opens a closed iteration without requiring proposal mining', () => {
   const root = project({ proposals: true });
   try {
     const rootArtifact = artifact(root);
@@ -2612,24 +3768,15 @@ test('next mines a failed run only once before opening a closed iteration', () =
     writeGateD(rootArtifact, [], iterationId);
     writeRuns(rootArtifact, [{ runId: 'run-001', iterationId, status: 'failed' }]);
 
-    assertAction(next(root), 'run_evidence_needs_proposal_mining', 'cli', [
-      'proposals', 'mine', '--artifacts', artifactPath(root), '--run-id', 'run-001',
-      '--proposals', join(root, '.plan2agent', 'proposals'),
-    ], true);
-
-    writeJson(join(root, '.plan2agent', 'proposals', 'proposal-run-001.json'), {
-      sourceRunId: 'run-001',
-    });
-
     assertAction(next(root), 'iteration_complete', 'cli', [
-      'iteration', 'open', '--artifacts', artifactPath(root), '--iteration-id', '<id>', '--idea', '<change idea>',
+      'iteration', 'open', '--artifacts', artifactPath(root), '--idea', '<change idea>',
     ]);
   } finally {
     remove(root);
   }
 });
 
-test('next mines flat handoff run evidence before reporting execution complete', () => {
+test('next reports flat handoff complete without requiring proposal mining', () => {
   const root = project({ mode: 'handoff', proposals: true });
   try {
     const rootArtifact = artifact(root);
@@ -2638,15 +3785,6 @@ test('next mines flat handoff run evidence before reporting execution complete',
     writeGateC(rootArtifact, [task('task-001', 'done')]);
     writeGateD(rootArtifact);
     writeRuns(rootArtifact, [{ runId: 'run-001', status: 'failed' }]);
-
-    assertAction(next(root), 'run_evidence_needs_proposal_mining', 'cli', [
-      'proposals', 'mine', '--artifacts', artifactPath(root), '--run-id', 'run-001',
-      '--proposals', join(root, '.plan2agent', 'proposals'),
-    ], true);
-
-    writeJson(join(root, '.plan2agent', 'proposals', 'proposal-run-001.json'), {
-      sourceRunId: 'run-001',
-    });
 
     assertAction(next(root), 'flat_execution_complete', 'approval');
   } finally {
@@ -2667,6 +3805,12 @@ test('next reports flat execution complete when proposal mining is disabled', ()
     const payload = next(root);
     assertAction(payload, 'flat_execution_complete', 'approval');
     assert.equal(JSON.stringify(payload).includes('"--proposals",null'), false);
+    const human = runP2a(['next', '--target', root]);
+    assert.equal(human.status, 0, `${human.stdout}${human.stderr}`);
+    assert.match(human.stdout, /요청한 개발과 검증이 완료되었습니다/u);
+    assert.match(human.stdout, /별도로 닫을 반복 개발 상태가 없습니다/u);
+    assert.match(human.stdout, /추가 요청이 없다면 이 개발은 여기서 마칩니다/u);
+    assert.doesNotMatch(human.stdout, /승인한다고 답해주세요/u);
   } finally {
     remove(root);
   }
@@ -2732,7 +3876,7 @@ test('info keeps its JSON contract and points human output to next', () => {
 });
 
 test('next keeps the ordered decision rules required by the contract', () => {
-  assert.equal(NEXT_DECISION_RULES.length, 32);
+  assert.equal(NEXT_DECISION_RULES.length, 36);
   for (const rule of NEXT_DECISION_RULES) {
     assert.equal(typeof rule.when, 'function');
     assert.equal(typeof rule.reason, 'function');
@@ -2795,8 +3939,9 @@ test('next skips historical composition while explicit administration can still 
     const beforeCompose = next(root);
     assertAction(beforeCompose, 'iteration_complete', 'cli', [
       'iteration', 'open', '--artifacts', artifactPath(root),
-      '--iteration-id', '<id>', '--idea', '<change idea>',
+      '--idea', '<change idea>',
     ]);
+    addArchivedArtifactAudits(rootArtifact);
     const composeResult = runP2a([
       'iteration', 'compose', '--artifacts', artifactPath(root),
     ]);
@@ -2813,14 +3958,17 @@ test('next skips historical composition while explicit administration can still 
 
     const afterCompose = next(root);
     assertAction(afterCompose, 'iteration_complete', 'cli', [
-      'iteration', 'open', '--artifacts', artifactPath(root), '--iteration-id', '<id>', '--idea', '<change idea>',
+      'iteration', 'open', '--artifacts', artifactPath(root), '--idea', '<change idea>',
     ]);
     const openResult = runP2a(afterCompose.command.argv.map((argument) => {
-      if (argument === '<id>') return 'v3';
       if (argument === '<change idea>') return 'Verify the next composed baseline';
       return argument;
     }));
     assert.equal(openResult.status, 0, `${openResult.stdout}${openResult.stderr}`);
+    const draftResult = runP2a([
+      'iteration', 'draft', '--artifacts', artifactPath(root),
+    ]);
+    assert.equal(draftResult.status, 0, `${draftResult.stdout}${draftResult.stderr}`);
 
     const currentSpec = JSON.parse(readFileSync(
       join(rootArtifact, 'current-spec.json'),
@@ -2828,6 +3976,15 @@ test('next skips historical composition while explicit administration can still 
     ));
     assert.equal(currentSpec.active_iteration, 'v3');
     assert.equal(currentSpec.pending_iteration?.baseline_iteration, 'v2');
+    const nextIntake = JSON.parse(readFileSync(
+      join(rootArtifact, 'iterations', 'v3', 'gate-a-intake', 'intake.json'),
+      'utf8',
+    ));
+    assert.match(nextIntake.summary, /^This iteration will make only the following change:/u);
+    assert.doesNotMatch(
+      nextIntake.assumptions.map((item) => item.statement).join('\n'),
+      /[가-힣]/u,
+    );
     assert.match(
       currentSpec.pending_iteration?.baseline_effective_spec_ref ?? '',
       /^iterations\/v3\/baseline\/gate-b-spec\/spec\.json$/,
@@ -3219,6 +4376,18 @@ test('next routes a completed non-UI iteration through acceptance unless disable
   }), false);
 });
 
+test('next marks deterministic closed-iteration composition as automatic', () => {
+  const rule = NEXT_DECISION_RULES.find(
+    (candidate) => candidate.state === 'iteration_composition_required',
+  );
+  assert.equal(rule.requiresApproval, false);
+  assert.equal(rule.when({
+    allTasksDone: true,
+    closedIteration: true,
+    iterationCompositionRequired: true,
+  }), true);
+});
+
 test('next rejects invalid review pass configuration', () => {
   const root = project();
   try {
@@ -3391,6 +4560,23 @@ test('next schema declares the CLI, skill, and approval command shapes', () => {
     /must not match forbidden schema/,
   );
 
+  const resumableApproval = {
+    ...structuredClone(reviewOrClosePayload),
+    state: 'gate_a_needs_approval',
+    reasonCode: 'gate_a_needs_approval',
+    command: {
+      kind: 'approval',
+      display: 'Approve the confirmed scope.',
+      argv: ['decide', '--quote', '<user-utterance>', '--artifacts', '.plan2agent/artifacts/sample'],
+      quotePlaceholder: '<user-utterance>',
+      decisionSummary: ['목표: 승인된 범위의 기능을 구현합니다.'],
+    },
+  };
+  delete resumableApproval.retrospective;
+  assert.doesNotThrow(() => validateSchema(resumableApproval, NEXT_SCHEMA));
+  const approvalWithoutSummary = structuredClone(resumableApproval);
+  delete approvalWithoutSummary.command.decisionSummary;
+  assert.throws(() => validateSchema(approvalWithoutSummary, NEXT_SCHEMA), /oneOf/);
   assert.doesNotThrow(() => validateSchema(
     ['review', 'retrospective', 'close'],
     { type: 'array', prefixItems: [{ const: 'review' }, { const: 'retrospective' }, { const: 'close' }], items: false },
@@ -3569,5 +4755,12 @@ test('p2a-next skill delegates to the CLI without duplicating decision rules', (
   assert.match(skill, /structured option/);
   assert.match(skill, /action\.remediation/);
   assert.match(skill, /action\.report\.path/);
+  assert.match(skill, /After a clean review, report no material issue and ask once/);
+  assert.doesNotMatch(skill, /A clean review runs `next` again/);
+  assert.doesNotMatch(skill, /show the returned artifact or approval instruction/);
+  assert.match(skill, /Keep the returned artifact path and approval command internal/);
+  assert.match(skill, /explicitly approves that pending action on a later turn, execute its returned `argv` exactly once/);
+  assert.match(skill, /keep the exact command internal while waiting/);
+  assert.doesNotMatch(skill, /Never execute a CLI command when `requiresApproval` is true/);
   assert.doesNotMatch(skill, /gate-a|ready task|iteration init/i);
 });

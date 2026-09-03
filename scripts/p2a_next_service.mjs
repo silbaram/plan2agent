@@ -39,8 +39,7 @@ import {
 import { compareRunEvidence, taskGraphRefMatchesGraph } from './p2a_run_paths.mjs';
 import { assertFinalVisualReviewRunReady } from './p2a_visual_review_gate.mjs';
 import { assertFinalAcceptanceReviewRunReady } from './p2a_acceptance_review_gate.mjs';
-import { minedProposalRunIds } from './p2a_proposal_mining.mjs';
-import { iterationFullVerificationNeeded } from './p2a_final_verification_gate.mjs';
+import { iterationVerificationStatus } from './p2a_final_verification_gate.mjs';
 import {
   buildRetrospectiveCandidates,
   retrospectiveMonitorMismatchRunIds,
@@ -48,6 +47,7 @@ import {
 import {
   discoverEntryDocument,
   discoverFeatureRadarPreflightRuns,
+  inspectEntryDocument,
 } from './p2a_radar_preflight.mjs';
 import {
   acceptanceReviewContract,
@@ -110,6 +110,10 @@ function stringValue(value) {
   return typeof value === 'string' && value.trim() ? value : null;
 }
 
+function contentLanguage(...values) {
+  return /[가-힣]/u.test(JSON.stringify(values)) ? 'ko' : 'en';
+}
+
 function jsonRecords(value) {
   return Array.isArray(value)
     ? value.filter((item) => item && typeof item === 'object' && !Array.isArray(item))
@@ -138,6 +142,161 @@ function listDirectories(dirPath) {
   } catch {
     return [];
   }
+}
+
+function provisionalEntryDocuments(targetRoot) {
+  const entriesRoot = path.join(targetRoot, '.plan2agent', 'entries');
+  if (!isDirectory(entriesRoot)) return [];
+  try {
+    return readdirSync(entriesRoot, { withFileTypes: true })
+      .filter((entry) => (
+        entry.isFile()
+        && /^idea-[a-f0-9]{12}\.md$/u.test(entry.name)
+      ))
+      .map((entry) => {
+        const inspected = inspectEntryDocument(path.join(entriesRoot, entry.name), {
+          baseDir: targetRoot,
+          selection: 'auto',
+        });
+        let modifiedAtMs = null;
+        try {
+          const value = lstatSync(inspected.path).mtimeMs;
+          modifiedAtMs = Number.isFinite(value) ? value : null;
+        } catch {
+          // Invalid or concurrently removed entries are discarded below.
+        }
+        return { ...inspected, modifiedAtMs };
+      })
+      .filter((entry) => entry.valid)
+      .sort((left, right) => left.path.localeCompare(right.path));
+  } catch {
+    return [];
+  }
+}
+
+function timestampMs(value) {
+  if (!stringValue(value)) return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function activeIntakeForInspection(inspection) {
+  const artifactRoot = inspection?.artifactRoot;
+  const activeIteration = stringValue(inspection?.activeIteration);
+  const paths = new Set([
+    inspection?.gates?.intakePath,
+    artifactRoot && activeIteration
+      ? path.join(artifactRoot, 'iterations', activeIteration, 'gate-a-intake', 'intake.json')
+      : null,
+    artifactRoot ? path.join(artifactRoot, 'gate-a-intake', 'intake.json') : null,
+  ].filter(Boolean));
+  for (const intakePath of paths) {
+    const data = readJsonObject(intakePath);
+    if (!data || !stringValue(data.idea)) continue;
+    let modifiedAtMs = null;
+    try {
+      const value = lstatSync(intakePath).mtimeMs;
+      modifiedAtMs = Number.isFinite(value) ? value : null;
+    } catch {
+      // The caller can still use canonical lifecycle timestamps.
+    }
+    return { path: intakePath, data, modifiedAtMs };
+  }
+  return null;
+}
+
+function activeScopeForInspection(inspection) {
+  const currentSpec = inspection?.currentSpec;
+  const activeIteration = stringValue(inspection?.activeIteration);
+  const intake = activeIntakeForInspection(inspection);
+  const metadata = activeIteration && inspection?.artifactRoot
+    ? readJsonObject(path.join(
+        inspection.artifactRoot,
+        'iterations',
+        activeIteration,
+        'iteration.json',
+      ))
+    : null;
+  const closedRecords = [
+    currentSpec?.last_closed_iteration,
+    ...jsonRecords(currentSpec?.closed_iterations),
+  ].filter((record) => record?.iteration_id === activeIteration);
+  const closed = isClosedIteration(currentSpec, activeIteration);
+  const pending = currentSpec?.pending_iteration?.iteration_id === activeIteration
+    ? currentSpec.pending_iteration
+    : null;
+  const idea = stringValue(intake?.data?.idea) ?? stringValue(pending?.idea);
+  return {
+    closed,
+    idea: idea?.trim() ?? null,
+    intakeModifiedAtMs: intake?.modifiedAtMs ?? null,
+    openedAtMs: timestampMs(pending?.opened_at ?? metadata?.opened_at),
+    closedAtMs: timestampMs(
+      closedRecords.find((record) => stringValue(record?.closed_at))?.closed_at
+      ?? metadata?.closed_at,
+    ),
+  };
+}
+
+function candidateIsNewerThan(candidate, boundaries) {
+  const finiteBoundaries = boundaries.filter(Number.isFinite);
+  if (!Number.isFinite(candidate.modifiedAtMs)) return finiteBoundaries.length === 0;
+  return finiteBoundaries.length === 0
+    || candidate.modifiedAtMs > Math.max(...finiteBoundaries);
+}
+
+function latestDistinctCandidate(candidates) {
+  if (candidates.length === 1) return candidates[0];
+  const ordered = [...candidates].sort((left, right) => (
+    (right.modifiedAtMs ?? Number.NEGATIVE_INFINITY)
+    - (left.modifiedAtMs ?? Number.NEGATIVE_INFINITY)
+  ));
+  return Number.isFinite(ordered[0]?.modifiedAtMs)
+    && ordered[0].modifiedAtMs > (ordered[1]?.modifiedAtMs ?? Number.NEGATIVE_INFINITY)
+    ? ordered[0]
+    : null;
+}
+
+function discoverRelevantProvisionalEntry(targetRoot, inspectedArtifacts) {
+  const candidates = provisionalEntryDocuments(targetRoot)
+    .map((entry) => ({ ...entry, idea: readFileSync(entry.path, 'utf8').trim() }))
+    .filter((entry) => entry.idea);
+  if (!candidates.length) return null;
+
+  const activeScopes = inspectedArtifacts.map(activeScopeForInspection);
+  const openScopes = activeScopes.filter((scope) => !scope.closed && scope.idea);
+  const openScopeIdeas = new Set(openScopes.map((scope) => scope.idea));
+  const currentMatches = candidates.filter((entry) => openScopeIdeas.has(entry.idea));
+  if (currentMatches.length === 1) {
+    return { ...currentMatches[0], provisionalRole: 'current_scope' };
+  }
+
+  // A lone saved idea is not enough to associate it with a different live
+  // scope. Keep it dormant until that scope closes instead of feeding stale
+  // text back into the active Gate A conversation.
+  if (openScopes.length) return null;
+
+  const closedScopes = activeScopes.filter((scope) => scope.closed);
+  const pending = candidates.filter((entry) => {
+    const matchingClosedScopes = closedScopes.filter((scope) => scope.idea === entry.idea);
+    if (matchingClosedScopes.length) {
+      return candidateIsNewerThan(entry, matchingClosedScopes.flatMap((scope) => [
+        scope.closedAtMs,
+        scope.closedAtMs === null ? scope.intakeModifiedAtMs : null,
+        scope.closedAtMs === null && scope.intakeModifiedAtMs === null
+          ? scope.openedAtMs
+          : null,
+      ]));
+    }
+    return candidateIsNewerThan(entry, closedScopes.flatMap((scope) => [
+      scope.openedAtMs,
+      scope.openedAtMs === null ? scope.intakeModifiedAtMs : null,
+    ]));
+  });
+  const selectedPending = latestDistinctCandidate(pending);
+  return selectedPending
+    ? { ...selectedPending, provisionalRole: 'pending_scope' }
+    : null;
 }
 
 function readManifest(targetRoot) {
@@ -1167,7 +1326,133 @@ function taskSourceArgs(context) {
   ];
 }
 
-function cliNextAction(state, reason, argv, requiresApproval = true, continuation = null) {
+function latestBlockedUserDecisionRun(activeRuns, blockedTaskIds) {
+  const reversed = [...activeRuns].reverse();
+  const latestTaskRuns = blockedTaskIds
+    .map((taskId) => reversed.find((run) => run.taskId === taskId))
+    .filter(Boolean);
+  return latestTaskRuns.find((run) => (
+    ['failed', 'blocked'].includes(run.status)
+    && run.failure?.needsUserDecision === true
+  )) ?? null;
+}
+
+function latestRetryableBlockedRun(activeRuns, blockedTaskIds) {
+  const reversed = [...activeRuns].reverse();
+  return blockedTaskIds
+    .map((taskId) => reversed.find((run) => run.taskId === taskId))
+    .filter(Boolean)
+    .find((run) => (
+      run.status === 'blocked'
+      && run.failure?.needsUserDecision === false
+      && run.failure?.retryable !== 'no'
+    )) ?? null;
+}
+
+function firstRecordedBlockerDetail(run) {
+  const candidates = [
+    ...(run?.localization?.findings ?? []),
+    ...(run?.reproduction?.notes ?? []),
+    ...(run?.reproduction?.steps ?? []),
+    ...(run?.guard?.notes ?? []),
+  ];
+  return candidates.find((value) => typeof value === 'string' && value.trim())?.trim()
+    ?? `the blocker recorded by run ${run?.runId ?? '<unknown>'}`;
+}
+
+function blockedUserDecisionReason(run) {
+  const detail = firstRecordedBlockerDetail(run);
+  if (run?.failure?.class === 'scope_violation') {
+    return `Task ${run.taskId} is blocked by an out-of-scope change described as ${JSON.stringify(detail)}. Confirm that P2A should revert that change and retry inside the approved scope. Reject this action if the product goal itself must expand; the task will stay blocked until a replacement scope is approved.`;
+  }
+  if (run?.failure?.class === 'missing_dependency') {
+    return `Task ${run.taskId} is blocked by a missing dependency described as ${JSON.stringify(detail)}. Confirm the dependency or bounded alternative that is authorized inside the approved plan, then retry the same task. Reject this action if the approved dependency contract must change.`;
+  }
+  return `Task ${run?.taskId ?? '<unknown>'} is blocked and cannot be resolved automatically. Confirm the intended resolution for ${JSON.stringify(detail)} only if it stays inside the approved plan, then retry the same task.`;
+}
+
+function blockedUserDecisionSummary(run) {
+  const detail = firstRecordedBlockerDetail(run);
+  const korean = contentLanguage(detail) === 'ko';
+  if (run?.failure?.class === 'scope_violation') {
+    return korean
+      ? [
+          `승인 범위를 벗어난 변경을 되돌리고 현재 범위 안에서 다시 진행합니다: ${detail}`,
+          '제품 목표를 넓혀야 한다면 승인하지 말고 새 범위 계획을 요청합니다.',
+        ]
+      : [
+          `Revert the out-of-scope change and retry inside the approved scope: ${detail}`,
+          'If the product goal must expand, reject this recovery and request a new scope plan.',
+        ];
+  }
+  if (run?.failure?.class === 'missing_dependency') {
+    return korean
+      ? [
+          `승인된 계획 안에서 사용할 dependency 또는 대안을 확인하고 다시 진행합니다: ${detail}`,
+          'dependency 계약 자체가 바뀌어야 한다면 승인하지 말고 계획 변경을 요청합니다.',
+        ]
+      : [
+          `Confirm the dependency or bounded alternative allowed by the approved plan: ${detail}`,
+          'If the dependency contract itself must change, reject this recovery and request a plan change.',
+        ];
+  }
+  return korean
+    ? [`승인된 계획 안에서 다음 해결 방향을 적용하고 다시 진행합니다: ${detail}`]
+    : [`Apply this bounded resolution inside the approved plan and retry: ${detail}`];
+}
+
+function entryIdea(entry) {
+  if (!entry?.valid || !isFile(entry.path)) return null;
+  const idea = readFileSync(entry.path, 'utf8').trim();
+  return idea || null;
+}
+
+function entryMatchesCurrentScope(context) {
+  const candidateIdea = entryIdea(context.entry);
+  if (!candidateIdea) return false;
+  const routedIntakeIdea = stringValue(context.gates?.intake?.idea);
+  if (routedIntakeIdea?.trim() === candidateIdea) return true;
+  const activeIteration = stringValue(context.detail?.activeIteration);
+  if (!activeIteration || !context.artifactRoot) return false;
+  const activeIntake = readJsonObject(path.join(
+    context.artifactRoot,
+    'iterations',
+    activeIteration,
+    'gate-a-intake',
+    'intake.json',
+  ));
+  return stringValue(activeIntake?.idea)?.trim() === candidateIdea;
+}
+
+function deferredEntryDecisionSummary(context) {
+  const idea = entryIdea(context.entry);
+  const preview = idea && idea.length > 180 ? `${idea.slice(0, 177).trimEnd()}...` : idea;
+  return [
+    `Saved the new request for the next scope${preview ? `: ${preview}` : '.'}`,
+    'The current approved work remains authoritative until it is finished or explicitly replaced.',
+  ];
+}
+
+function nextIterationIdea(context) {
+  if (!context.explicitEntryRequested && !context.pendingProvisionalEntry) {
+    return '<change idea>';
+  }
+  return entryIdea(context.entry) ?? '<change idea>';
+}
+
+function readOnlyNextCommand(argv) {
+  if (!Array.isArray(argv) || !argv.length) return false;
+  const [command, action] = argv;
+  if (['info', 'status', 'doctor', 'validate', 'decisions'].includes(command)) return true;
+  if (command === 'next') return !argv.includes('--idea');
+  if (command === 'iteration' && ['current', 'validate', 'context'].includes(action)) return true;
+  if (['run', 'runs'].includes(command) && ['list', 'show', 'revision', 'validate'].includes(action)) return true;
+  if (['task', 'tasks'].includes(command) && ['list', 'show', 'prompt'].includes(action)) return true;
+  if (command === 'execute' && ['plan', 'status', 'resume'].includes(action)) return true;
+  return ['update', 'upgrade'].includes(command) && argv.includes('--dry-run');
+}
+
+function cliNextAction(state, reason, argv, requiresApproval = null, continuation = null) {
   return {
     state,
     reason,
@@ -1176,7 +1461,7 @@ function cliNextAction(state, reason, argv, requiresApproval = true, continuatio
       kind: 'cli',
       argv,
       display: p2aCommandLine(P2A_PATHS, argv),
-      requiresApproval,
+      requiresApproval: requiresApproval ?? !readOnlyNextCommand(argv),
     },
   };
 }
@@ -1195,12 +1480,24 @@ function skillNextAction(state, reason, display, skill, args = [], continuation 
   };
 }
 
-function approvalNextAction(state, reason, display, options = null) {
+function approvalNextAction(
+  state,
+  reason,
+  display,
+  { options = null, argv = null, decisionSummary = null } = {},
+) {
   const command = {
     kind: 'approval',
     display,
   };
   if (Array.isArray(options) && options.length) command.options = options;
+  if (Array.isArray(argv) && argv.length) {
+    command.argv = argv;
+    command.quotePlaceholder = '<user-utterance>';
+  }
+  if (Array.isArray(decisionSummary) && decisionSummary.length) {
+    command.decisionSummary = decisionSummary;
+  }
   return {
     state,
     reason,
@@ -1256,7 +1553,7 @@ function completionOptions(context) {
       description: 'Keep the active iteration open, review the completed implementation read-only using current final verification evidence, and reopen the owning completed task only when a finding requires code changes.',
       action: {
         kind: 'review',
-        display: 'Review the completed implementation read-only while keeping the active iteration open. Inspect the diff, code, tests, and current final verification evidence without rerunning product commands. A clean review returns to this same decision; remediation changes use the normal verification lifecycle.',
+        display: `Review the completed implementation read-only while keeping the active iteration open. Inspect the diff, code, tests, and current verification evidence without rerunning product commands. If no material finding exists, do not repeat this menu: report "No material issue found" and ask once whether to close with ${p2aCommandLine(P2A_PATHS, closeArgv)}. Remediation changes use the normal verification lifecycle.`,
         remediation: {
           kind: 'cli',
           argv: remediationArgv,
@@ -1267,7 +1564,9 @@ function completionOptions(context) {
     },
     {
       id: 'retrospective',
-      label: 'Review development process',
+      label: context.retrospectiveCandidates.length
+        ? 'Review development process (Recommended)'
+        : 'Review development process',
       description: context.retrospectiveCandidates.length
         ? `Review ${context.retrospectiveCandidates.length} detected development performance or P2A process signal(s) before deciding whether to continue the retrospective.`
         : 'No automatic development process signal was found. Ask once whether the user experienced delay, errors, wrong routing, or unnecessary steps.',
@@ -1287,8 +1586,12 @@ function completionOptions(context) {
     },
     {
       id: 'close',
-      label: 'Close iteration',
-      description: 'Archive the completed active iteration without running another optional review, or after explicitly ending the review loop.',
+      label: context.retrospectiveCandidates.length
+        ? 'Close iteration'
+        : 'Close iteration (Recommended)',
+      description: context.retrospectiveCandidates.length
+        ? 'Archive the completed active iteration without running another optional review, or after explicitly ending the review loop.'
+        : 'Current verification is fresh and no automatic review or retrospective signal is open; archive this completed work unless you want an optional review.',
       action: {
         kind: 'cli',
         argv: closeArgv,
@@ -1321,6 +1624,10 @@ function gateANextCommand(intake, intakePath) {
     : `Review and approve ${intakePath}; then record the Gate A approval_audit.`;
 }
 
+function gateAHasOpenQuestions(intake) {
+  return Boolean(intake && intake.status !== 'ready_for_spec');
+}
+
 function gateAApprovalCommand(context) {
   const intakePath = commandProjectPath(context.targetRoot, context.gates.intakePath);
   const hasLegacyApprovalCopy = Boolean(
@@ -1335,6 +1642,111 @@ function gateAApprovalCommand(context) {
     ? ` --entry ${JSON.stringify(context.entryArg)}`
     : '';
   return `Review ${intakePath}, then run p2a decide --quote "<user utterance>"${entryOption} --artifacts ${JSON.stringify(context.artifactArg)}.`;
+}
+
+function gateAApprovalArgv(context) {
+  const hasLegacyApprovalCopy = Boolean(
+    context.gates.intake?.status === 'ready_for_spec'
+    && context.gates.intake?.approval_audit,
+  );
+  const needsDocumentEntry = !context.gates.intake?.baseline_context && !hasLegacyApprovalCopy;
+  if (needsDocumentEntry && !context.entryArg) return null;
+  return [
+    'decide',
+    '--quote',
+    '<user-utterance>',
+    ...(context.entryArg ? ['--entry', context.entryArg] : []),
+    '--artifacts',
+    context.artifactArg,
+  ];
+}
+
+function compactDecisionSummary(values, maxItems = 8) {
+  return [...new Set(values
+    .filter((value) => typeof value === 'string')
+    .map((value) => value.trim())
+    .filter(Boolean))].slice(0, maxItems);
+}
+
+function gateAScopeDecisionSummary(context) {
+  const intake = context.gates.intake;
+  if (!intake) return [];
+  const korean = contentLanguage(intake.idea, intake.summary) === 'ko';
+  const idea = stringValue(intake.idea);
+  const summary = stringValue(intake.summary);
+  const assumptions = jsonRecords(intake.assumptions)
+    .map((item) => stringValue(item.statement))
+    .filter(Boolean);
+  const confirmedAnswers = [
+    ...jsonRecords(intake.clarifying_questions),
+    ...jsonRecords(intake.needs_user_decision),
+  ]
+    .filter((item) => item.status === 'answered' && stringValue(item.answer))
+    .map((item) => {
+      const question = stringValue(item.question);
+      const answer = stringValue(item.answer);
+      return question
+        ? `${korean ? '확인한 결정' : 'Confirmed decision'}: ${question} → ${answer}`
+        : `${korean ? '확인한 결정' : 'Confirmed decision'}: ${answer}`;
+    });
+  return compactDecisionSummary([
+    idea ? `${korean ? '목표' : 'Goal'}: ${idea}` : null,
+    summary && summary !== idea ? `${korean ? '범위 요약' : 'Scope summary'}: ${summary}` : null,
+    ...confirmedAnswers,
+    intake.baseline_context
+      ? korean
+        ? '최소 범위: 요청한 변경에 필요한 부분만 수정합니다.'
+        : 'Minimum scope: change only what the request requires.'
+      : null,
+    ...(intake.baseline_context
+      ? assumptions.slice(0, 2).map((item) => `${korean ? '유지 조건' : 'Must preserve'}: ${item}`)
+      : assumptions.slice(0, 2).map((item) => `${korean ? '가정' : 'Assumption'}: ${item}`)),
+  ]);
+}
+
+function constitutionDecisionSummary(context) {
+  const constitution = context.constitution.data;
+  if (!constitution) return [];
+  const korean = contentLanguage(constitution) === 'ko';
+  const summary = compactDecisionSummary([
+    ...jsonRecords(constitution.architecture).map((item) => (
+      stringValue(item.rule) ? `${korean ? '아키텍처' : 'Architecture'}: ${item.rule}` : null
+    )),
+    ...jsonRecords(constitution.stack).map((item) => (
+      stringValue(item.choice) ? `${korean ? '기술 선택' : 'Stack choice'}: ${item.choice}` : null
+    )),
+    ...jsonRecords(constitution.prohibitions).map((item) => (
+      stringValue(item.rule) ? `${korean ? '금지 조건' : 'Prohibition'}: ${item.rule}` : null
+    )),
+  ]);
+  return summary.length
+    ? summary
+    : [korean
+        ? '장기 프로젝트 제약: 새로 추가할 아키텍처·기술·금지 조건이 없습니다.'
+        : 'Long-term project constraints: no new architecture, stack, or prohibition rules.'];
+}
+
+function gateBDecisionSummary(context) {
+  const spec = context.gates.spec;
+  if (!spec) return [];
+  const korean = contentLanguage(spec.product, spec.implementation) === 'ko';
+  const product = spec.product ?? {};
+  const implementation = spec.implementation ?? {};
+  const first = (value) => stringArrayValue(value).map(stringValue).filter(Boolean)[0] ?? null;
+  const implementationChoices = compactDecisionSummary([
+    first(implementation.architecture),
+    first(implementation.interfaces),
+    first(implementation.dependencies),
+  ], 3);
+  return compactDecisionSummary([
+    stringValue(product.problem) ? `${korean ? '제품 결과' : 'Product outcome'}: ${product.problem.trim()}` : null,
+    first(product.goals) ? `${korean ? '최소 범위' : 'Minimum scope'}: ${first(product.goals)}` : null,
+    first(product.must_preserve) ? `${korean ? '유지 조건' : 'Must preserve'}: ${first(product.must_preserve)}` : null,
+    implementationChoices.length
+      ? `${korean ? '구현 방법' : 'Implementation'}: ${implementationChoices.join(' / ')}`
+      : null,
+    first(implementation.verification) ? `${korean ? '검증 방법' : 'Verification'}: ${first(implementation.verification)}` : null,
+  ]);
 }
 
 function inspectConstitution(targetRoot) {
@@ -1607,6 +2019,8 @@ function buildNextDecisionContext(
     retrospectivePolicy,
     entry: explicitEntry,
     entryArg: explicitEntry ? commandProjectPath(targetRoot, explicitEntry.path) : null,
+    explicitEntryRequested: explicitEntry?.selection === 'explicit',
+    pendingProvisionalEntry: explicitEntry?.provisionalRole === 'pending_scope',
     projectId: requestedProjectId,
     hasCanonicalPlanningState: false,
     constitution: inspectConstitution(targetRoot),
@@ -1685,6 +2099,16 @@ function buildNextDecisionContext(
         ),
       };
     }
+    if (closedContext.explicitEntryRequested && entry?.valid === false) {
+      return {
+        ...closedContext,
+        selection: approvalNextAction(
+          'entry_invalid',
+          `The entry document did not validate: ${closedContext.entryArg}`,
+          `Fix the document, then run ${p2aCommandLine(P2A_PATHS, ['validate', '--entry', closedContext.entryArg])}.`,
+        ),
+      };
+    }
     const composition = detail.closedRouting.composition;
     if (composition.required) {
       return {
@@ -1702,7 +2126,9 @@ function buildNextDecisionContext(
       ...closedContext,
       selection: cliNextAction(
         'iteration_complete',
-        'The active iteration is closed; start the next iteration when a new change idea is ready.',
+        (closedContext.explicitEntryRequested || closedContext.pendingProvisionalEntry)
+          ? 'The active iteration is closed and the supplied request is ready to open as the next iteration.'
+          : 'The active iteration is closed; start the next iteration when a new change idea is ready.',
         [
           'iteration',
           'open',
@@ -1711,7 +2137,7 @@ function buildNextDecisionContext(
           '--iteration-id',
           '<id>',
           '--idea',
-          '<change idea>',
+          nextIterationIdea(closedContext),
         ],
       ),
     };
@@ -1795,42 +2221,15 @@ function buildNextDecisionContext(
     reviewPasses.acceptance === 'on'
     && acceptanceReviewApplicable
   );
-  const needsCloseReadyVisualAudit = (
-    hasRequiredVisualContract
-    && allTasksDone
-    && detail.layout.kind === 'iteration'
-  );
-  const needsCloseReadyAcceptanceAudit = (
-    acceptanceReviewEnabled
-    && allTasksDone
-    && detail.layout.kind === 'iteration'
-    && !hasRequiredVisualContract
-  );
   const needsCloseReadyFullVerificationAudit = (
     allTasksDone
     && detail.layout.kind === 'iteration'
   );
   const proposals = info.enhancements.proposals;
-  const minedRunIds = proposals.enabled
-    ? minedProposalRunIds(targetRoot, proposals)
-    : null;
-  const failedOrBlockedRunCandidate = proposals.enabled
-    ? activeRuns.find((run) => {
-        const runId = stringValue(run.runId);
-        return Boolean(runId)
-          && ['failed', 'blocked'].includes(run.status)
-          && !minedRunIds.has(runId);
-      })
-    : null;
   let runEvidenceValidationError = null;
   if (
     detail.runs.runsDir
-    && (
-      failedOrBlockedRunCandidate
-      || needsCloseReadyVisualAudit
-      || needsCloseReadyAcceptanceAudit
-      || needsCloseReadyFullVerificationAudit
-    )
+    && allTasksDone
   ) {
     try {
       if (detail.currentDevelopmentRouting?.eligible) {
@@ -1850,9 +2249,6 @@ function buildNextDecisionContext(
         : String(error);
     }
   }
-  const unminedFailedOrBlockedRun = runEvidenceValidationError
-    ? null
-    : failedOrBlockedRunCandidate;
   const retrospectiveCandidates = (
     retrospectivePolicy.enabled
     && allTasksDone
@@ -1869,16 +2265,17 @@ function buildNextDecisionContext(
         activeRuns,
       ),
     }).map(validateRetrospectiveCandidateData) : [];
-  const fullVerificationNeeded = (
+  const verificationStatus = (
     needsCloseReadyFullVerificationAudit
     && !runEvidenceValidationError
-  ) ? iterationFullVerificationNeeded({
+  ) ? iterationVerificationStatus({
       runsDir: detail.runs.runsDir ?? path.join(artifactRoot, 'runs'),
       runs: activeRuns,
       artifactRoot,
       graphPath: gates.taskGraphPath,
       activeIteration: detail.activeIteration,
-    }) : false;
+    }) : { needed: false, profile: null, error: null, scope: null };
+  const fullVerificationNeeded = verificationStatus.needed;
   const visualReviewNeeded = (
     hasRequiredVisualContract
     && allTasksDone
@@ -1962,6 +2359,10 @@ function buildNextDecisionContext(
         { allowLegacyFallback: !decisions.exists },
       )
     : { approved: false, source: 'approval_audit', event: null };
+  const blockedTaskIds = taskIdsWithStatus(detail.tasks, 'blocked');
+  const inProgressTaskIds = taskIdsWithStatus(detail.tasks, 'in_progress');
+  const blockedUserDecisionRun = latestBlockedUserDecisionRun(activeRuns, blockedTaskIds);
+  const retryableBlockedRun = latestRetryableBlockedRun(activeRuns, blockedTaskIds);
   return {
     ...context,
     constitution,
@@ -2013,9 +2414,15 @@ function buildNextDecisionContext(
     acceptanceReviewActivated,
     acceptanceReviewApplicable,
     fullVerificationNeeded,
+    verificationProfile: verificationStatus.profile,
+    verificationReadinessError: verificationStatus.error,
+    verificationScope: verificationStatus.scope,
     retrospectiveCandidates,
     readyIds: readyTaskIds(gates.taskGraph),
-    blockedTaskIds: taskIdsWithStatus(detail.tasks, 'blocked'),
+    blockedTaskIds,
+    inProgressTaskIds,
+    blockedUserDecisionRun,
+    retryableBlockedRun,
     allTasksDone,
     closedIteration: isClosedIteration(detail.currentSpec, detail.activeIteration),
     iterationCompositionRequired: compositionRequirement.required,
@@ -2028,7 +2435,6 @@ function buildNextDecisionContext(
       ),
     ),
     runEvidenceValidationError,
-    unminedFailedOrBlockedRun,
   };
 }
 
@@ -2087,10 +2493,10 @@ export const NEXT_DECISION_RULES = [
     ),
     reason: (context) => (
       activeIterationAwaitsGateA(context)
-        ? `Active iteration ${context.detail.activeIteration} is ready for Gate A, but a concise entry document is required before planning can begin.`
-        : 'The harness is installed, but a concise entry document is required before planning can begin.'
+        ? `Active iteration ${context.detail.activeIteration} is ready for Gate A; provide a concise idea or entry document to begin scope confirmation.`
+        : 'The harness is installed; provide a concise idea or entry document to begin scope confirmation.'
     ),
-    command: () => 'Create or choose an entry document, then run p2a next --entry <path>.',
+    command: () => 'Run p2a next --idea "<what to build>" or p2a next --entry <path>.',
   },
   {
     state: 'incomplete_iteration_layout',
@@ -2218,55 +2624,85 @@ export const NEXT_DECISION_RULES = [
   },
   {
     state: 'shape',
-    kind: (context) => context.constitution.exists ? 'approval' : 'skill',
-    skill: 'p2a-harness',
-    args: ['--stage', 'gate-shape'],
+    kind: 'approval',
     when: (context) => (
       context.gateAValid
       && context.gateAApproved
+      && context.constitution.exists
       && !context.constitution.approved
-      && (
-        context.constitution.exists
-        || (!context.gateBExists && !context.constitution.legacyStyleExists)
-      )
     ),
-    reason: (context) => (
-      context.constitution.exists
-        ? 'The Gate ② project constitution is valid but still needs an explicit quoted user approval.'
-        : 'Gate A scope is approved, but the project has no Gate ② constitution yet.'
-    ),
+    reason: () => 'A material project constitution was created and still needs explicit quoted user approval.',
     command: (context) => (
-      context.constitution.exists
-        ? `Review ${commandProjectPath(context.targetRoot, context.constitution.path)}, then run p2a shape approve --quote "<user utterance>".`
-        : '/p2a-harness (Gate ②: propose architecture, stack, prohibitions, and style)'
+      `Review ${commandProjectPath(context.targetRoot, context.constitution.path)}, then run p2a shape approve --quote "<user utterance>".`
     ),
+    approvalArgv: (context) => [
+      'shape',
+      'approve',
+      '--target',
+      context.targetRoot,
+      '--quote',
+      '<user-utterance>',
+    ],
+    decisionSummary: constitutionDecisionSummary,
   },
   {
-    state: (context) => context.gateAApproved
-      ? gateANextState(context.gates.intake)
-      : 'gate_a_needs_approval',
-    kind: (context) => context.gateAApproved
-      ? gateANextKind(context.gates.intake)
-      : 'approval',
-    skill: 'p2a-spec',
-    args: [],
+    state: (context) => gateAHasOpenQuestions(context.gates.intake)
+      ? 'gate_what'
+      : context.gateAApproved
+        ? gateANextState(context.gates.intake)
+        : 'gate_a_needs_approval',
+    kind: (context) => gateAHasOpenQuestions(context.gates.intake)
+      ? 'skill'
+      : context.gateAApproved
+        ? gateANextKind(context.gates.intake)
+        : 'approval',
+    skill: (context) => gateAHasOpenQuestions(context.gates.intake)
+      ? 'p2a-harness'
+      : 'p2a-spec',
+    args: (context) => (
+      gateAHasOpenQuestions(context.gates.intake) && context.entryArg
+        ? ['--entry', context.entryArg]
+        : []
+    ),
     when: (context) => (
       context.gateAValid
       && (!context.gateAApproved || !context.gateBExists || context.gateAInvalidatesGateB)
     ),
     reason: (context) => (
-      !context.gateAApproved
+      gateAHasOpenQuestions(context.gates.intake)
+        ? 'Material scope questions remain unresolved; resume the scope conversation before requesting approval.'
+        : !context.gateAApproved
         ? 'Gate ① scope is not approved by the decision ledger or legacy approval audit.'
         : context.gateAInvalidatesGateB
         ? 'Gate A is not confirmed for the existing Gate B specification, or its persisted bytes have changed; resume from Gate A before continuing downstream.'
         : gateANextReason(context.gates.intake)
     ),
-    command: (context) => context.gateAApproved
+    command: (context) => gateAHasOpenQuestions(context.gates.intake)
+      ? context.entryArg
+        ? `/p2a-harness --entry ${JSON.stringify(context.entryArg)}`
+        : '/p2a-harness'
+      : context.gateAApproved
       ? gateANextCommand(
           context.gates.intake,
           commandProjectPath(context.targetRoot, context.gates.intakePath),
         )
       : gateAApprovalCommand(context),
+    approvalArgv: gateAApprovalArgv,
+    decisionSummary: gateAScopeDecisionSummary,
+  },
+  {
+    state: 'gate_b_needs_decisions',
+    kind: 'skill',
+    skill: 'p2a-spec',
+    args: [],
+    when: (context) => (
+      context.gateBValid
+      && !context.gateBApproved
+      && Array.isArray(context.gates.spec?.open_decisions)
+      && context.gates.spec.open_decisions.length > 0
+    ),
+    reason: () => 'The draft development plan still has material open decisions; resolve them before requesting approval.',
+    command: () => '/p2a-spec',
   },
   {
     state: 'invalid_gate_b',
@@ -2299,9 +2735,19 @@ export const NEXT_DECISION_RULES = [
     when: (context) => (
       context.gateBValid
       && !context.gateBApproved
+      && Array.isArray(context.gates.spec?.open_decisions)
+      && context.gates.spec.open_decisions.length === 0
     ),
     reason: () => 'The Gate ① specification decision is not approved or has been revoked.',
     command: (context) => `Review ${commandProjectPath(context.targetRoot, context.gates.specPath)}, then run p2a decide --quote "<user utterance>" --artifacts ${JSON.stringify(context.artifactArg)}.`,
+    approvalArgv: (context) => [
+      'decide',
+      '--quote',
+      '<user-utterance>',
+      '--artifacts',
+      context.artifactArg,
+    ],
+    decisionSummary: gateBDecisionSummary,
   },
   {
     state: 'gate_b_approved_needs_spec_promotion',
@@ -2382,6 +2828,72 @@ export const NEXT_DECISION_RULES = [
     ],
   },
   {
+    state: 'entry_invalid',
+    kind: 'approval',
+    when: (context) => (
+      context.explicitEntryRequested
+      && context.gateCValid
+      && context.entry?.valid === false
+    ),
+    reason: (context) => `The new entry document did not validate: ${context.entryArg}`,
+    command: (context) => (
+      `Fix the document, then run ${p2aCommandLine(P2A_PATHS, ['validate', '--entry', context.entryArg])}. The current approved work remains unchanged.`
+    ),
+  },
+  {
+    state: 'blocked_scope_replacement_ready',
+    kind: 'cli',
+    requiresApproval: true,
+    when: (context) => (
+      context.explicitEntryRequested
+      && context.entry?.valid === true
+      && context.gateCValid
+      && !entryMatchesCurrentScope(context)
+      && Boolean(context.blockedUserDecisionRun)
+      && !context.startedRun
+      && context.inProgressTaskIds.length === 0
+      && context.readyIds.length === 0
+    ),
+    reason: (context) => (
+      `The bounded recovery for task ${context.blockedUserDecisionRun.taskId} was not selected. The supplied request can replace the blocked scope without closing that incomplete iteration or changing its run history.`
+    ),
+    command: (context) => [
+      'iteration',
+      'replace-scope',
+      '--artifacts',
+      context.artifactArg,
+      '--idea',
+      entryIdea(context.entry),
+      '--reason',
+      `User requested a replacement scope instead of bounded recovery for task ${context.blockedUserDecisionRun.taskId}.`,
+    ],
+  },
+  {
+    state: 'entry_deferred',
+    kind: 'approval',
+    when: (context) => (
+      context.explicitEntryRequested
+      && context.entry?.valid === true
+      && context.gateCValid
+      && !entryMatchesCurrentScope(context)
+      && (
+        Boolean(context.startedRun)
+        || context.readyIds.length > 0
+        || context.blockedTaskIds.length > 0
+        || context.inProgressTaskIds.length > 0
+        || (context.allTasksDone && !context.closedIteration)
+        || context.detail.layout.requiresIterationInit
+      )
+    ),
+    reason: (context) => (
+      `The new request is saved at ${context.entryArg}, but the current approved development still has active work. It will not be started or replaced implicitly.`
+    ),
+    command: (context) => (
+      `Continue the current approved work with ${p2aCommandLine(P2A_PATHS, ['next', '--target', commandTarget(context.targetRoot)])}, or leave it paused. After the current iteration closes, resume the saved request with ${p2aCommandLine(P2A_PATHS, ['next', '--target', commandTarget(context.targetRoot), '--entry', context.entryArg])}.`
+    ),
+    decisionSummary: deferredEntryDecisionSummary,
+  },
+  {
     state: 'gate_c_validated_needs_iteration_init',
     kind: 'cli',
     requiresApproval: false,
@@ -2450,16 +2962,43 @@ export const NEXT_DECISION_RULES = [
   },
   {
     state: 'tasks_blocked',
-    kind: 'cli',
+    kind: (context) => context.blockedUserDecisionRun ? 'approval' : 'cli',
     requiresApproval: false,
     when: (context) => context.blockedTaskIds.length > 0 && !context.readyIds.length,
-    reason: (context) => `No task is ready and task ${context.blockedTaskIds[0]} is blocked.`,
-    command: (context) => [
-      'tasks',
-      'show',
-      ...taskSourceArgs(context),
-      context.blockedTaskIds[0],
-    ],
+    reason: (context) => context.blockedUserDecisionRun
+      ? blockedUserDecisionReason(context.blockedUserDecisionRun)
+      : context.retryableBlockedRun
+        ? `Task ${context.retryableBlockedRun.taskId} is still marked blocked after retryable run ${context.retryableBlockedRun.runId}. Recover its already-recorded transition and retry without asking the user.`
+      : `No task is ready and task ${context.blockedTaskIds[0]} is blocked.`,
+    command: (context) => context.blockedUserDecisionRun
+      ? 'Confirm the bounded recovery above, or reject it and request a replacement product scope.'
+      : context.retryableBlockedRun
+        ? [
+            'execute',
+            'finish',
+            ...taskSourceArgs(context),
+            '--run-id',
+            context.retryableBlockedRun.runId,
+          ]
+      : [
+          'tasks',
+          'show',
+          ...taskSourceArgs(context),
+          context.blockedTaskIds[0],
+        ],
+    approvalArgv: (context) => context.blockedUserDecisionRun
+      ? [
+          'tasks',
+          'todo',
+          ...taskSourceArgs(context),
+          context.blockedUserDecisionRun.taskId,
+          '--note',
+          '<user-utterance>',
+        ]
+      : null,
+    decisionSummary: (context) => context.blockedUserDecisionRun
+      ? blockedUserDecisionSummary(context.blockedUserDecisionRun)
+      : null,
   },
   {
     state: 'final_visual_review_required',
@@ -2515,6 +3054,31 @@ export const NEXT_DECISION_RULES = [
     ],
   },
   {
+    state: 'relevant_verification_required',
+    kind: 'cli',
+    requiresApproval: false,
+    when: (context) => (
+      context.allTasksDone
+      && !context.closedIteration
+      && context.detail.layout.kind === 'iteration'
+      && context.fullVerificationNeeded
+      && context.verificationScope === 'relevant'
+    ),
+    reason: (context) => (
+      context.verificationProfile?.id === 'docs_metadata'
+        ? 'Only documentation or metadata changed, so product-wide verification is not required; the current workspace still needs one related check before close.'
+        : 'Product verification is still current; only the docs/metadata changes need a related check before close.'
+    ),
+    command: (context) => [
+      'execute',
+      'verify-final',
+      '--scope',
+      'relevant',
+      '--artifacts',
+      context.artifactArg,
+    ],
+  },
+  {
     state: 'final_verification_required',
     kind: 'cli',
     requiresApproval: false,
@@ -2523,10 +3087,15 @@ export const NEXT_DECISION_RULES = [
       && !context.closedIteration
       && context.detail.layout.kind === 'iteration'
       && context.fullVerificationNeeded
+      && context.verificationScope !== 'relevant'
     ),
-    reason: () => (
-      'The completed iteration needs one configured full verification pass bound to the current canonical workspace revision before close.'
-    ),
+    reason: (context) => {
+      const profile = context.verificationProfile?.id;
+      if (profile === 'isolated_code') {
+        return 'The isolated code change has no reusable full verification bound to the current product revision.';
+      }
+      return 'This high-risk or integrated change needs one canonical final full verification before close.';
+    },
     command: (context) => [
       'execute',
       'verify-final',
@@ -2544,14 +3113,12 @@ export const NEXT_DECISION_RULES = [
     when: (context) => (
       context.allTasksDone
       && !context.closedIteration
-      && (
-        context.detail.layout.kind === 'iteration'
-        || !context.unminedFailedOrBlockedRun
-      )
     ),
     reason: (context) => (
       context.detail.layout.kind === 'iteration'
-        ? `Every task in the active iteration is done and the iteration is still open. ${context.retrospectiveCandidates.length} bounded retrospective candidate(s) were found. The user must explicitly choose product review, P2A retrospective, or close. Retrospective writes require separate approval, while skipping retrospective keeps close available.`
+        ? context.retrospectiveCandidates.length
+          ? `Every task in the active iteration is done and the iteration is still open. ${context.retrospectiveCandidates.length} bounded retrospective candidate(s) were found. The user must explicitly choose product review, P2A retrospective, or close.`
+          : 'Every task is done, current verification evidence is fresh, and no automatic retrospective signal was found. Closing the iteration is recommended; review remains optional.'
         : 'Every task in the handed-off flat artifact bundle is done; this layout has no iteration state to close.'
     ),
     command: (context) => (
@@ -2566,24 +3133,9 @@ export const NEXT_DECISION_RULES = [
     ),
   },
   {
-    state: 'run_evidence_needs_proposal_mining',
-    kind: 'cli',
-    when: (context) => Boolean(context.unminedFailedOrBlockedRun),
-    reason: (context) => `Run ${context.unminedFailedOrBlockedRun.runId} has not been mined for proposals yet.`,
-    command: (context) => [
-      'proposals',
-      'mine',
-      '--artifacts',
-      context.artifactArg,
-      '--run-id',
-      context.unminedFailedOrBlockedRun.runId,
-      '--proposals',
-      context.proposalQueueArg,
-    ],
-  },
-  {
     state: 'iteration_composition_required',
     kind: 'cli',
+    requiresApproval: false,
     when: (context) => (
       context.allTasksDone
       && context.closedIteration
@@ -2604,8 +3156,22 @@ export const NEXT_DECISION_RULES = [
       && context.closedIteration
       && !context.iterationCompositionRequired
     ),
-    reason: () => 'The active iteration is closed; start the next iteration when a new change idea is ready.',
-    command: (context) => ['iteration', 'open', '--artifacts', context.artifactArg, '--iteration-id', '<id>', '--idea', '<change idea>'],
+    reason: (context) => (
+      context.explicitEntryRequested
+      || context.pendingProvisionalEntry
+    )
+      ? 'The active iteration is closed and the supplied request is ready to open as the next iteration.'
+      : 'The active iteration is closed; start the next iteration when a new change idea is ready.',
+    command: (context) => [
+      'iteration',
+      'open',
+      '--artifacts',
+      context.artifactArg,
+      '--iteration-id',
+      '<id>',
+      '--idea',
+      nextIterationIdea(context),
+    ],
   },
 ];
 
@@ -2627,7 +3193,7 @@ function actionForNextRule(rule, context) {
       state,
       reason,
       command,
-      resolveNextRuleValue(rule.requiresApproval ?? true, context),
+      resolveNextRuleValue(rule.requiresApproval ?? null, context),
       continuation,
     );
   }
@@ -2645,8 +3211,25 @@ function actionForNextRule(rule, context) {
     state,
     reason,
     command,
-    resolveNextRuleValue(rule.options ?? null, context),
+    {
+      options: resolveNextRuleValue(rule.options ?? null, context),
+      argv: resolveNextRuleValue(rule.approvalArgv ?? null, context),
+      decisionSummary: resolveNextRuleValue(rule.decisionSummary ?? null, context),
+    },
   );
+}
+
+function conversationalIterationOpenCommand(command) {
+  const argv = [...command.argv];
+  const iterationIdIndex = argv.indexOf('--iteration-id');
+  if (iterationIdIndex >= 0 && argv[iterationIdIndex + 1] === '<id>') {
+    argv.splice(iterationIdIndex, 2);
+  }
+  return {
+    ...command,
+    argv,
+    display: p2aCommandLine(P2A_PATHS, argv),
+  };
 }
 
 function decideNextAction(context) {
@@ -2678,7 +3261,7 @@ function resolveNextDecision(
     snapshot.reviewPasses,
     snapshot.executionModePolicy,
     snapshot.retrospectivePolicy,
-    snapshot.explicitEntry,
+    snapshot.nextEntry,
     snapshot.validationSession,
   );
   const action = decideNextAction(context);
@@ -2688,7 +3271,9 @@ function resolveNextDecision(
       : action.command.kind === 'approval'
         ? { kind: 'approval', display: action.command.display }
         : action.command
-    : action.command.kind === 'cli' && action.continuation?.activation === 'after_command_success'
+    : action.state === 'iteration_complete' && action.command.kind === 'cli'
+      ? conversationalIterationOpenCommand(action.command)
+      : action.command.kind === 'cli' && action.continuation?.activation === 'after_command_success'
       ? {
           ...action.command,
           argv: action.command.argv.includes('--json')
@@ -2808,10 +3393,15 @@ function buildInfoSnapshot(targetRootInput, options = {}) {
         baseDir: targetRoot,
       })
     : null;
+  const provisionalEntry = !explicitEntry
+    ? discoverRelevantProvisionalEntry(targetRoot, inspectedArtifacts)
+    : null;
   const autoEntries = inspectedArtifacts
     .map((artifact) => artifact.entry)
     .filter(Boolean);
-  const selectedEntry = explicitEntry ?? (autoEntries.length === 1 ? autoEntries[0] : null);
+  const selectedEntry = explicitEntry
+    ?? provisionalEntry
+    ?? (autoEntries.length === 1 ? autoEntries[0] : null);
   const artifacts = inspectedArtifacts
     .map((inspected) => summarizeArtifact(targetRoot, inspected));
   const hasP2aDir = isDirectory(path.join(targetRoot, '.plan2agent'));
@@ -2832,7 +3422,7 @@ function buildInfoSnapshot(targetRootInput, options = {}) {
       nextActions.push(`Repair the entry document: ${selectedEntry.errors.join('; ')}`);
     }
   } else if (hasP2aDir && !artifacts.length) {
-    nextActions.push('Provide a Markdown or text idea document, then run p2a next --entry <path>.');
+    nextActions.push('Run p2a next --idea "<what to build>" or provide a Markdown/text document with p2a next --entry <path>.');
   }
   for (const artifact of artifacts) {
     if (artifact.layout.hasIncompleteIterationLayout) {
@@ -2917,6 +3507,7 @@ function buildInfoSnapshot(targetRootInput, options = {}) {
     executionModePolicy,
     retrospectivePolicy,
     explicitEntry,
+    nextEntry: explicitEntry ?? provisionalEntry,
     validationSession,
   };
 }

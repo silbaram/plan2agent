@@ -59,11 +59,16 @@ import {
   validateCurrentSpecCompositionData,
   validateMaintenanceTaskGraphProject,
 } from './p2a_iteration_state.mjs';
-import { loadRunsForArtifactRoot, pruneIndexedRunEvidence } from './p2a_runs.mjs';
+import {
+  loadRunsForArtifactRoot,
+  pruneIndexedRunEvidence,
+  recoverPendingRunWrite,
+} from './p2a_runs.mjs';
 import { normalizePath, resolveP2aPaths } from './p2a_paths.mjs';
 import {
   atomicWriteJson,
   atomicWriteText,
+  runWriteTransactionPath,
   withRunStoreLocks,
 } from './p2a_run_store.mjs';
 import { APPROVAL_SIDECAR_SHA256_PREFIX } from './p2a_constants.mjs';
@@ -80,7 +85,9 @@ import {
   canonicalCurrentDevelopmentBaselineSpecRef,
   cloneJson,
   compositionOpenDecisions,
+  compositionSourceContractError,
   composeCanonicalSpecSources,
+  fullSpecTaskRefs,
   IMPLEMENTATION_FIELDS,
   isComposedBaselineReference,
   isSupersedingDecision,
@@ -102,10 +109,17 @@ import {
 } from './p2a_run_paths.mjs';
 import {
   appendDecisionEventsLocked,
+  constitutionContentSha256,
   decisionLedgerPath,
+  latestActiveConstitutionApproval,
+  latestConstitutionApproval,
   readDecisions,
   scopeApprovalState,
 } from './p2a_decision_ledger.mjs';
+import {
+  deltaClarifyingQuestions,
+  greenfieldClarifyingQuestions,
+} from './p2a_intake_questions.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.projectRoot;
@@ -114,7 +128,7 @@ const STATUS_ORDER = ['todo', 'in_progress', 'done', 'blocked'];
 const DEFAULT_ITERATION_ID = 'v1-mvp';
 const INIT_REBASED_SOURCE_INTAKE = '../gate-a-intake/intake.json';
 const INIT_REBASED_SOURCE_SPEC = '../gate-b-spec/spec.json';
-const COMMANDS = new Set(['init', 'current', 'validate', 'close', 'open', 'draft', 'context', 'promote-spec', 'promote-tasks', 'diff-tasks', 'compose', 'migrate-current-contract', 'maintenance']);
+const COMMANDS = new Set(['init', 'current', 'validate', 'close', 'open', 'replace-scope', 'abandon', 'draft', 'context', 'promote-spec', 'promote-tasks', 'diff-tasks', 'compose', 'migrate-current-contract', 'maintenance']);
 const MAINTENANCE_ACTIONS = new Set(['add']);
 const CONTEXT_SCOPES = new Set(['feature', 'maintenance']);
 const VALIDATE_STAGES = new Set(['ready', 'gate-a', 'gate-b-draft', 'gate-b-approved', 'gate-c-draft']);
@@ -128,13 +142,15 @@ function usage() {
     '  p2a iteration current --artifacts <iterative-project-dir> [--json]',
     '  p2a iteration validate --artifacts <iterative-project-dir> [--require-close-ready] [--allow-planning] [--stage ready|gate-a|gate-b-draft|gate-b-approved|gate-c-draft] [--skip-archive-audit]',
     '  p2a iteration close --artifacts <iterative-project-dir> [--iteration-id active]',
-    '  p2a iteration open --artifacts <iterative-project-dir> --iteration-id <id> --idea <text>',
+    '  p2a iteration open --artifacts <iterative-project-dir> [--iteration-id <id>] --idea <text>',
+    '  p2a iteration replace-scope --artifacts <iterative-project-dir> [--iteration-id <id>] --idea <text> --reason <text>',
+    '  p2a iteration abandon --artifacts <iterative-project-dir> --reason <text>',
     '  p2a iteration draft --artifacts <iterative-project-dir> [--idea <text>] [--force]',
     '  p2a iteration context --artifacts <iterative-project-dir> [--scope feature|maintenance] [--idea <text>] [--code-root <dir>]',
     '  p2a iteration promote-spec --artifacts <iterative-project-dir>',
     '  p2a iteration promote-tasks --artifacts <iterative-project-dir> [--replace-existing]',
     '  p2a iteration diff-tasks --artifacts <iterative-project-dir> [--force]',
-    '  p2a iteration compose --artifacts <iterative-project-dir> [--allow-conflicts]',
+    '  p2a iteration compose --artifacts <iterative-project-dir> [--allow-conflicts] [--skip-archive-audit]',
     '  p2a iteration migrate-current-contract --artifacts <iterative-project-dir>',
     '  p2a iteration maintenance add --artifacts <iterative-project-dir> --title <text> --accept <text> [--accept <text> ...] [--description <text>] [--area <text>] [--prompt <text>] [--ref <value> ...] [--depends <task-id> ...] [--dry-run]',
     '  p2a iteration maintenance add --artifacts <iterative-project-dir> --from-draft <path> [--dry-run|--yes]',
@@ -145,6 +161,8 @@ function usage() {
     '  validate              Validate active iteration structure and Gate B/C readiness.',
     '  close                 Mark the active close-ready iteration as closed/archived metadata.',
     '  open                  Create a new active iteration skeleton from the current baseline.',
+    '  replace-scope         Open a replacement planning iteration only when current work is blocked with no ready or running task.',
+    '  abandon               Abandon only the active planning iteration and restore its approved baseline.',
     '  draft                 Generate Gate A scope confirmation, then Gate B after explicit Gate A confirmation.',
     '  context               Print JSON context for agent-authored Gate C task drafting.',
     '  promote-spec          Record an approved active Gate B spec and initialize current-spec when needed.',
@@ -176,8 +194,16 @@ function usage() {
     '  --iteration-id active|<id>  Iteration to close. Default: active. Only active is supported for now.',
     '',
     'open options:',
-    '  --iteration-id <id>   New iteration id. Required.',
+    '  --iteration-id <id>   New iteration id. Defaults to the next available id.',
     '  --idea <text>         Change idea for the new iteration. Required.',
+    '',
+    'replace-scope options:',
+    '  --iteration-id <id>   Replacement iteration id. Defaults to the next available id.',
+    '  --idea <text>         Approved replacement scope. Required.',
+    '  --reason <text>       Why the blocked scope is being replaced. Required.',
+    '',
+    'abandon options:',
+    '  --reason <text>       Short reason recorded in the abandoned iteration metadata. Required.',
     '',
     'draft options:',
     '  --idea <text>         Override the change idea stored by open.',
@@ -196,6 +222,7 @@ function usage() {
     '',
     'compose options:',
     '  --allow-conflicts     Write current-spec open_decisions when composition conflicts are detected.',
+    '  --skip-archive-audit  Explicitly bypass missing legacy close hashes during administrative composition.',
     '',
     'maintenance add options:',
     '  --title <text>        Task title. Required.',
@@ -242,6 +269,7 @@ function parseArgs(argv) {
     scope: 'feature',
     replaceExisting: false,
     yes: false,
+    reason: null,
   };
   const command = argv[0];
   if (!command) throw new Error(`missing command\n\n${usage()}`);
@@ -264,14 +292,18 @@ function parseArgs(argv) {
       args.artifacts = argv[++index];
       if (!args.artifacts) throw new Error('--artifacts requires a directory');
     } else if (arg === '--iteration-id') {
-      if (command !== 'init' && command !== 'open' && command !== 'close') throw new Error('--iteration-id is only supported by init, open, and close');
+      if (command !== 'init' && command !== 'open' && command !== 'replace-scope' && command !== 'close') throw new Error('--iteration-id is only supported by init, open, replace-scope, and close');
       args.iterationId = argv[++index];
       if (!args.iterationId) throw new Error('--iteration-id requires a value');
       args.iterationIdProvided = true;
     } else if (arg === '--idea') {
-      if (command !== 'open' && command !== 'draft' && command !== 'context') throw new Error('--idea is only supported by open, draft, and context');
+      if (command !== 'open' && command !== 'replace-scope' && command !== 'draft' && command !== 'context') throw new Error('--idea is only supported by open, replace-scope, draft, and context');
       args.idea = argv[++index];
       if (!args.idea) throw new Error('--idea requires a value');
+    } else if (arg === '--reason') {
+      if (command !== 'abandon' && command !== 'replace-scope') throw new Error('--reason is only supported by abandon and replace-scope');
+      args.reason = argv[++index];
+      if (!args.reason?.trim()) throw new Error('--reason requires non-blank text');
     } else if (arg === '--code-root') {
       if (command !== 'context') throw new Error('--code-root is only supported by context');
       args.codeRoot = argv[++index];
@@ -303,7 +335,9 @@ function parseArgs(argv) {
       if (command !== 'validate') throw new Error('--audit-archive is only supported by validate');
       args.auditArchive = true;
     } else if (arg === '--skip-archive-audit') {
-      if (command !== 'validate') throw new Error('--skip-archive-audit is only supported by validate');
+      if (command !== 'validate' && command !== 'compose') {
+        throw new Error('--skip-archive-audit is only supported by validate and compose');
+      }
       args.skipArchiveAudit = true;
     } else if (arg === '--allow-conflicts') {
       if (command !== 'compose') throw new Error('--allow-conflicts is only supported by compose');
@@ -362,8 +396,10 @@ function parseArgs(argv) {
   }
 
   if (!args.help && !args.artifacts) throw new Error(`--artifacts is required\n\n${usage()}`);
-  if (command === 'open' && !args.iterationIdProvided) throw new Error('--iteration-id is required for open');
   if (command === 'open' && (!args.idea || args.idea.trim().length === 0)) throw new Error('--idea is required for open');
+  if (command === 'replace-scope' && (!args.idea || args.idea.trim().length === 0)) throw new Error('--idea is required for replace-scope');
+  if (command === 'replace-scope' && !args.reason) throw new Error('--reason is required for replace-scope');
+  if (command === 'abandon' && !args.reason) throw new Error('--reason is required for abandon');
   if (command === 'maintenance' && args.action === 'add') {
     if (args.fromDraft) {
       if (args.title || args.intent || args.description || args.prompt || args.acceptanceCriteria.length || args.sourceSpecRefs.length || args.dependencies.length || args.areaProvided) {
@@ -611,10 +647,15 @@ function closedIterationArtifactRefs(iterationId, artifactRoot) {
   const experienceRef = `iterations/${iterationId}/gate-b-spec/experience-spec.json`;
   const visualRefs = closedIterationVisualArtifactRefs(iterationId, artifactRoot)
     .filter((reference) => reference !== experienceRef);
+  const replacementSourceRefs = [
+    `iterations/${iterationId}/baseline/replacement-source-spec.json`,
+    `iterations/${iterationId}/baseline/replacement-source-intake.json`,
+  ].filter((reference) => existsSync(path.join(artifactRoot, reference)));
   return [
     ...closedIterationRequiredArtifactRefs(iterationId),
     `iterations/${iterationId}/baseline/gate-a-intake/intake.json`,
     `iterations/${iterationId}/baseline/gate-b-spec/spec.json`,
+    ...replacementSourceRefs,
     ...visualRefs,
   ];
 }
@@ -856,7 +897,7 @@ export function renderIterationIndexMarkdown(artifactRoot, currentSpec) {
     `### Close Audit\n\n${renderClosedIterationAudit(currentSpec)}\n` +
     `### Handoff Audit\n\n${renderHandoffAudit(currentSpec)}\n` +
     `## 4. 다음\n\n` +
-    `- 새 기능 → \`p2a iteration open --iteration-id <next> --idea <text>\`\n` +
+    `- 새 기능 → \`p2a iteration open --idea <text>\` (다음 iteration id 자동 할당)\n` +
     `- 작은 fix → \`p2a iteration maintenance add ...\`\n` +
     `- 검증 → \`p2a iteration validate --artifacts <dir>\` (closed iteration archive audit 기본 수행)\n\n` +
     `## 5. 변경 이력\n\n` +
@@ -949,6 +990,7 @@ function currentSpecForOpen(
   openedAt,
   baselineSpecRef,
   baselineSpecSha256,
+  resumeAuthority,
 ) {
   const historicalSummary = {};
   for (const field of [
@@ -977,6 +1019,9 @@ function currentSpecForOpen(
       ...(baselineSpecSha256
         ? { baseline_effective_spec_sha256: baselineSpecSha256 }
         : {}),
+      resume_current_spec_ref: resumeAuthority.current_spec_ref,
+      resume_current_spec_sha256: resumeAuthority.current_spec_sha256,
+      resume_authority: cloneJson(resumeAuthority),
     },
     note: 'Current-state pointer. The planning baseline is materialized from the prior current development contract; historical Gate artifacts are not execution authority.',
   };
@@ -1093,6 +1138,24 @@ function withCurrentIterationArtifactManifest(metadata) {
       ))
     : [];
   const requiredArtifacts = [...CANONICAL_ITERATION_ARTIFACTS];
+  if (metadata?.resume_authority) {
+    requiredArtifacts.unshift(
+      'baseline/current-spec.json',
+      'baseline/current-development-contract.json',
+    );
+    if (metadata.resume_authority.constitution?.state === 'present') {
+      requiredArtifacts.unshift('baseline/constitution.json');
+    }
+    if (metadata.resume_authority.decisions?.state === 'present') {
+      requiredArtifacts.unshift('baseline/decisions.jsonl');
+    }
+    if (metadata.resume_authority.replacement_source) {
+      requiredArtifacts.unshift(
+        'baseline/replacement-source-spec.json',
+        'baseline/replacement-source-intake.json',
+      );
+    }
+  }
   const effectiveSpecRef = metadata?.baseline?.effective_spec_ref;
   if (isComposedBaselineReference(effectiveSpecRef) && effectiveSpecRef !== 'current-spec.json') {
     requiredArtifacts.unshift('baseline/current-spec.json');
@@ -1120,6 +1183,7 @@ function iterationMetadata(
   openedAt,
   effectiveSpecRef,
   effectiveSpecSha256,
+  resumeAuthority,
 ) {
   return withCurrentIterationArtifactManifest({
     schema_version: 'p2a.iteration_metadata.v1',
@@ -1136,6 +1200,7 @@ function iterationMetadata(
         ? { effective_spec_sha256: effectiveSpecSha256 }
         : {}),
     },
+    resume_authority: cloneJson(resumeAuthority),
   });
 }
 
@@ -1343,10 +1408,14 @@ function buildDeltaIntake({
   baselineSpec,
   baselineContext,
 }) {
+  const clarifyingQuestions = deltaClarifyingQuestions(idea);
+  const korean = /[가-힣]/u.test(idea);
   return {
     schema_version: 'p2a.intake.v1',
     idea,
-    summary: `${projectId}의 현재 baseline spec 위에 다음 변경을 반복 기획한다: ${idea}`,
+    summary: korean
+      ? `이번 반복 개발에서는 다음 변경만 진행합니다: ${idea}`
+      : `This iteration will make only the following change: ${idea}`,
     known_facts: [
       `Project id: ${projectId}`,
       `Active iteration: ${iterationId}`,
@@ -1357,46 +1426,22 @@ function buildDeltaIntake({
     assumptions: [
       {
         id: 'A-1',
-        statement: '기존 승인 spec의 목표, 제약, 인터페이스는 변경 아이디어에 필요한 범위만 수정하고 나머지는 유지한다.',
+        statement: korean
+          ? '요청한 변경에 필요한 범위만 수정하고 기존 동작과 제약은 나머지 그대로 유지한다.'
+          : 'Change only what the request requires and preserve all other existing behavior and constraints.',
         risk: 'medium',
         confirmation_needed: false,
       },
       {
         id: 'A-2',
-        statement: '이번 단계는 승인할 변경 범위를 기록한 뒤 Gate B 초안을 생성한다.',
+        statement: korean
+          ? '확인된 변경 범위를 기준으로 구현 방법과 검증 계획을 정리한다.'
+          : 'Prepare the implementation and verification plan from the confirmed change scope.',
         risk: 'low',
         confirmation_needed: false,
       },
     ],
-    clarifying_questions: [
-      {
-        id: 'CQ-1',
-        question: 'What observable outcome and verification would make this delta successful?',
-        why_it_matters: 'The answer defines the expected outcome and delta-specific success criteria without repeating the baseline.',
-        blocks: ['spec.product.success_criteria', 'spec.implementation.verification'],
-        status: 'open',
-      },
-      {
-        id: 'CQ-2',
-        question: 'What is the smallest scope required now, and which adjacent changes are explicitly out of scope?',
-        why_it_matters: 'The answer bounds the delta while preserving baseline goals and non-goals that are not being changed.',
-        blocks: ['spec.product.goals', 'spec.product.non_goals', 'spec.product.core_flows'],
-        status: 'open',
-      },
-      {
-        id: 'CQ-3',
-        question: 'Which baseline users, constraints, integrations, interfaces, or compatibility requirements does this delta change? If none, answer that the baseline remains unchanged.',
-        why_it_matters: 'The answer reuses approved baseline decisions by default and asks only for explicit delta overrides.',
-        blocks: [
-          'spec.product.target_users',
-          'spec.product.constraints',
-          'spec.product.external_integrations',
-          'spec.implementation.interfaces',
-          'spec.implementation.edge_cases',
-        ],
-        status: 'open',
-      },
-    ],
+    clarifying_questions: clarifyingQuestions,
     needs_user_decision: [],
     baseline_context: baselineContext,
     status: 'blocked_on_user',
@@ -1453,44 +1498,12 @@ function buildGreenfieldRestartIntake(intake, idea, iterationId) {
         ],
       }
     : cloneJson(intake);
+  const clarifyingQuestions = greenfieldClarifyingQuestions(idea);
   const next = {
     ...resetBase,
     idea,
     known_facts: appendUnique(resetBase.known_facts, priorIntakeContext),
-    clarifying_questions: [
-      {
-        id: 'CQ-1',
-        question: 'Who are the target users, and what core problem must the first iteration solve for them?',
-        why_it_matters: 'The answer establishes the greenfield problem statement and target users before Gate B.',
-        blocks: ['spec.product.problem', 'spec.product.target_users'],
-        status: 'open',
-      },
-      {
-        id: 'CQ-2',
-        question: 'What is the smallest first-iteration scope, expected outcome, and explicit non-goal?',
-        why_it_matters: 'The answer bounds goals, flows, exclusions, success criteria, and verification.',
-        blocks: [
-          'spec.product.goals',
-          'spec.product.non_goals',
-          'spec.product.core_flows',
-          'spec.product.success_criteria',
-          'spec.implementation.verification',
-        ],
-        status: 'open',
-      },
-      {
-        id: 'CQ-3',
-        question: 'Which constraints, risks, integrations, and compatibility requirements must the first iteration respect?',
-        why_it_matters: 'The answer defines external and implementation boundaries before Gate B.',
-        blocks: [
-          'spec.product.constraints',
-          'spec.product.external_integrations',
-          'spec.implementation.interfaces',
-          'spec.implementation.edge_cases',
-        ],
-        status: 'open',
-      },
-    ],
+    clarifying_questions: clarifyingQuestions,
     needs_user_decision: [],
     status: 'blocked_on_user',
   };
@@ -1641,6 +1654,31 @@ function applyConfirmedIntakeToSpec(spec, intake) {
   return next;
 }
 
+function applyApprovedDeltaIdea(spec, iterationId, idea) {
+  const normalizedIdea = idea.trim();
+  return {
+    ...spec,
+    product: {
+      ...spec.product,
+      goals: appendUnique(spec.product.goals, [
+        `Iteration ${iterationId} approved delta: ${normalizedIdea}`,
+      ]),
+      core_flows: appendUnique(spec.product.core_flows, [
+        `Iteration ${iterationId} requested behavior: ${normalizedIdea}`,
+      ]),
+      success_criteria: appendUnique(spec.product.success_criteria, [
+        `The approved iteration outcome is satisfied: ${normalizedIdea}`,
+      ]),
+    },
+    implementation: {
+      ...spec.implementation,
+      verification: appendUnique(spec.implementation.verification, [
+        `Verify the approved iteration delta: ${normalizedIdea}`,
+      ]),
+    },
+  };
+}
+
 function inferredVisualExperience(idea, intake) {
   const signals = JSON.stringify({
     idea,
@@ -1667,6 +1705,17 @@ function inferredVisualExperience(idea, intake) {
       };
 }
 
+function deltaVisualExperience(baselineSpec, idea, intake) {
+  const baselineVisualExperience = baselineSpec?.visual_experience;
+  if (baselineVisualExperience?.has_visual_interface) {
+    // A non-visual delta must not silently downgrade an existing visual contract.
+    // Gate B may still change this explicit draft when the user approves a visual
+    // supersession, including rebinding any iteration-owned experience artifacts.
+    return cloneJson(baselineVisualExperience);
+  }
+  return inferredVisualExperience(idea, intake);
+}
+
 export function buildDeltaSpec({ projectId, iterationId, idea, baselineSpec, baselineSpecRef, intake }) {
   const baselineMerge = applyBaselineSupersessions(baselineSpec, intake);
   if (baselineMerge.unresolved.length) {
@@ -1684,7 +1733,7 @@ export function buildDeltaSpec({ projectId, iterationId, idea, baselineSpec, bas
   }
   const product = baselineMerge.product;
   const implementation = baselineMerge.implementation;
-  const visualExperience = inferredVisualExperience(idea, intake);
+  const visualExperience = deltaVisualExperience(baselineSpec, idea, intake);
   if (
     visualExperience.has_visual_interface
     && (!Array.isArray(product.screens_or_interfaces) || product.screens_or_interfaces.length === 0)
@@ -1729,7 +1778,10 @@ export function buildDeltaSpec({ projectId, iterationId, idea, baselineSpec, bas
     ],
     reference_reconnaissance: carriedReferenceReconnaissance(baselineSpec, iterationId) ?? initialReferenceReconnaissance(iterationId, idea),
   };
-  return applyConfirmedIntakeToSpec(spec, intake);
+  return applyConfirmedIntakeToSpec(
+    applyApprovedDeltaIdea(spec, iterationId, idea),
+    intake,
+  );
 }
 
 function buildInitialSpec({ projectId, iterationId, idea, intake }) {
@@ -2895,6 +2947,37 @@ function inferSourceStatus({ iterationId, activeIteration, metadata, taskGraph }
   return incomplete.length ? 'active' : 'close-ready';
 }
 
+export function blockedScopeReplacementAncestry(
+  metadataByIteration,
+  replacementIterationId,
+) {
+  const replacement = metadataByIteration.get(replacementIterationId)?.replacement;
+  if (
+    replacement?.kind !== 'blocked_scope_replan'
+    || replacement.task_coverage !== 'full_spec'
+    || typeof replacement.replaces_iteration !== 'string'
+  ) {
+    return [];
+  }
+  const ancestry = replacement.replaced_iteration_ids ?? [replacement.replaces_iteration];
+  if (
+    !Array.isArray(ancestry)
+    || ancestry.length === 0
+    || ancestry[0] !== replacement.replaces_iteration
+    || ancestry.some((iterationId) => (
+      typeof iterationId !== 'string'
+      || !/^[A-Za-z0-9._-]+$/u.test(iterationId)
+      || iterationId === replacementIterationId
+    ))
+    || new Set(ancestry).size !== ancestry.length
+  ) {
+    throw new ValidationError(
+      `blocked scope replacement ${replacementIterationId} has an invalid replaced_iteration_ids snapshot`,
+    );
+  }
+  return ancestry;
+}
+
 function collectCompositionSources(artifactRoot, currentSpec) {
   const iterationsRoot = path.join(artifactRoot, 'iterations');
   assertDirectory(iterationsRoot, 'iterations');
@@ -2905,60 +2988,118 @@ function collectCompositionSources(artifactRoot, currentSpec) {
   const orderedIterationIds = sortIterationIds(iterationIds, artifactRoot, currentSpec);
   const sources = [];
   const skipped = [];
-
-  for (const iterationId of orderedIterationIds) {
+  const metadataByIteration = new Map(orderedIterationIds.map((iterationId) => [
+    iterationId,
+    loadOptionalIterationMetadata(artifactRoot, iterationId),
+  ]));
+  const closedIterationIds = new Set((currentSpec.closed_iterations ?? [])
+    .filter((closed) => closed?.status === 'archived')
+    .map((closed) => closed.iteration_id));
+  const sourceCandidate = (iterationId, metadata) => {
     const specPath = path.join(artifactRoot, sourceSpecRef(iterationId));
     const taskGraphPath = path.join(artifactRoot, taskGraphRef(iterationId));
-    if (!existsSync(specPath)) {
-      skipped.push({ iteration_id: iterationId, reason: 'missing spec.json' });
-      continue;
-    }
-
+    if (!existsSync(specPath)) return { reason: 'missing spec.json' };
     const spec = validateSpec(specPath, null, { artifactRoot });
     if (spec.project_id !== currentSpec.project_id) {
       throw new ValidationError(`iterations/${iterationId}/gate-b-spec/spec.json project_id must match current-spec.json project_id ${JSON.stringify(currentSpec.project_id)}`);
     }
     if (spec.approval !== 'approved') {
-      skipped.push({ iteration_id: iterationId, reason: `spec approval is ${spec.approval}` });
-      continue;
+      return { reason: `spec approval is ${spec.approval}` };
     }
-    if (spec.open_decisions.length) {
-      skipped.push({ iteration_id: iterationId, reason: 'spec has open_decisions' });
-      continue;
-    }
-    if (!existsSync(taskGraphPath)) {
-      skipped.push({ iteration_id: iterationId, reason: 'missing task-graph.json' });
-      continue;
-    }
+    if (spec.open_decisions.length) return { reason: 'spec has open_decisions' };
+    if (!existsSync(taskGraphPath)) return { reason: 'missing task-graph.json' };
     const taskGraph = validateTaskGraph(taskGraphPath, specPath);
     const incomplete = taskGraph.tasks.filter((task) => task.status !== 'done');
     if (incomplete.length) {
-      skipped.push({
-        iteration_id: iterationId,
+      return {
         reason: `tasks are not all done: ${incomplete.map((task) => `${task.id}:${task.status}`).join(', ')}`,
-      });
-      continue;
+      };
     }
-    const metadata = loadOptionalIterationMetadata(artifactRoot, iterationId);
     const resolvedSourceIntakePath = resolveSpecSourceIntake(specPath, spec);
     const sourceIntake = resolvedSourceIntakePath
       ? loadJson(resolvedSourceIntakePath)
       : null;
-    sources.push({
-      iteration_id: iterationId,
-      spec_ref: sourceSpecRef(iterationId),
-      task_graph_ref: taskGraphRef(iterationId),
-      status: inferSourceStatus({
-        iterationId,
-        activeIteration: currentSpec.active_iteration,
+    return {
+      source: {
+        iteration_id: iterationId,
+        spec_ref: sourceSpecRef(iterationId),
+        task_graph_ref: taskGraphRef(iterationId),
+        status: inferSourceStatus({
+          iterationId,
+          activeIteration: currentSpec.active_iteration,
+          metadata,
+          taskGraph,
+        }),
+        approval: spec.approval,
+        spec,
+        task_graph: taskGraph,
         metadata,
-        taskGraph,
-      }),
-      approval: spec.approval,
-      spec,
-      metadata,
-      source_intake: sourceIntake,
-    });
+        source_intake: sourceIntake,
+      },
+    };
+  };
+  const validatedReplacementSources = new Map();
+  const replacedBy = new Map();
+  for (const [iterationId, metadata] of metadataByIteration) {
+    const replacement = metadata?.replacement;
+    if (
+      metadata?.status === 'archived'
+      && closedIterationIds.has(iterationId)
+      && replacement?.kind === 'blocked_scope_replan'
+      && replacement.task_coverage === 'full_spec'
+      && typeof replacement.replaces_iteration === 'string'
+    ) {
+      const candidate = sourceCandidate(iterationId, metadata);
+      if (!candidate.source) {
+        throw new ValidationError(
+          `archived blocked scope replacement ${iterationId} cannot replace prior scope: ${candidate.reason}`,
+        );
+      }
+      assertReplacementTaskGraphCoversFullSpec(
+        metadata,
+        candidate.source.spec,
+        candidate.source.task_graph,
+      );
+      const sourceContractError = compositionSourceContractError([candidate.source]);
+      if (sourceContractError) throw new ValidationError(sourceContractError);
+      validatedReplacementSources.set(iterationId, candidate.source);
+      for (const replacedIterationId of blockedScopeReplacementAncestry(
+        metadataByIteration,
+        iterationId,
+      )) {
+        const existingReplacement = replacedBy.get(replacedIterationId);
+        if (existingReplacement && existingReplacement !== iterationId) {
+          throw new ValidationError(
+            `blocked scope replacement lineage for ${replacedIterationId} is claimed by both ${existingReplacement} and ${iterationId}`,
+          );
+        }
+        replacedBy.set(replacedIterationId, iterationId);
+      }
+    }
+  }
+
+  for (const iterationId of orderedIterationIds) {
+    const replacementIterationId = replacedBy.get(iterationId);
+    if (replacementIterationId) {
+      skipped.push({
+        iteration_id: iterationId,
+        reason: `unfinished scope was replaced by ${replacementIterationId}`,
+      });
+      continue;
+    }
+    const metadata = metadataByIteration.get(iterationId);
+    if (metadata?.status === 'abandoned') {
+      skipped.push({ iteration_id: iterationId, reason: 'planning iteration was abandoned' });
+      continue;
+    }
+    const validatedReplacement = validatedReplacementSources.get(iterationId);
+    if (validatedReplacement) {
+      sources.push(validatedReplacement);
+      continue;
+    }
+    const candidate = sourceCandidate(iterationId, metadata);
+    if (candidate.source) sources.push(candidate.source);
+    else skipped.push({ iteration_id: iterationId, reason: candidate.reason });
   }
 
   return { sources, skipped };
@@ -3560,6 +3701,7 @@ function validatePlanningIteration(args) {
     if (!existsSync(draftPath)) throw new ValidationError(`gate-c draft not found: ${draftPath}`);
     const draft = loadJson(draftPath);
     validateTaskGraphData(draft);
+    assertReplacementTaskGraphCoversFullSpec(iterationMetadata, spec, draft);
     console.log(`Plan2Agent gate-c draft valid: ${draft.tasks.length} task(s)`);
     return 0;
   }
@@ -4078,6 +4220,11 @@ function validateIteration(args) {
   validateCurrentSpecCompositionData(state.currentSpec, state.artifactRoot, { requireNoOpenDecisions: true });
   const spec = validateActiveSpecWithOptionalIntake(state);
   const taskGraph = validateTaskGraph(state.taskGraphPath, state.specPath);
+  const activeMetadata = loadOptionalIterationMetadata(
+    state.artifactRoot,
+    state.activeIteration,
+  );
+  assertReplacementTaskGraphCoversFullSpec(activeMetadata, spec, taskGraph);
   if (args.requireCloseReady) {
     assertCloseReadyTasks(taskGraph);
     const reviewPasses = projectReviewPasses(canonicalWorkspacePathForArtifactRoot(state.artifactRoot));
@@ -4125,6 +4272,16 @@ function closeLocked(args, artifactRoot, facts) {
   if (requestedIteration !== 'active') assertSafeIterationId(requestedIteration);
 
   assertCloseReadyTasks(facts.taskGraph);
+  const activeMetadata = loadOptionalIterationMetadata(
+    artifactRoot,
+    facts.state.activeIteration,
+  );
+  const activeSpec = validateActiveSpecWithOptionalIntake(facts.state);
+  assertReplacementTaskGraphCoversFullSpec(
+    activeMetadata,
+    activeSpec,
+    facts.taskGraph,
+  );
   const reviewPasses = projectReviewPasses(canonicalWorkspacePathForArtifactRoot(artifactRoot));
   validateCloseReadyVisualEvidence({
     artifactRoot,
@@ -4146,8 +4303,6 @@ function closeLocked(args, artifactRoot, facts) {
     taskGraphPath: facts.state.taskGraphPath,
     taskGraph: facts.taskGraph,
   });
-  const activeMetadata = loadOptionalIterationMetadata(artifactRoot, facts.state.activeIteration);
-
   if (requestedIteration !== 'active' && requestedIteration !== facts.state.activeIteration) {
     throw new Error(`close currently supports only active iteration ${JSON.stringify(facts.state.activeIteration)}, got ${JSON.stringify(requestedIteration)}`);
   }
@@ -4206,6 +4361,7 @@ function close(args) {
       path.join(artifactRoot, 'runs'),
     ],
     () => {
+      recoverPendingRunWrite(path.join(artifactRoot, 'runs'));
       const lockedPointerState = resolveIterationState(artifactRoot, {
         requireReady: false,
         requireEffectiveSpec: false,
@@ -4340,7 +4496,15 @@ function canonicalDraftVersion(version) {
 }
 
 function activeIterationRunHistory(state) {
-  const runIndexPath = path.join(state.artifactRoot, 'runs', 'run-index.json');
+  const runsDir = path.join(state.artifactRoot, 'runs');
+  const pendingWritePath = runWriteTransactionPath(runsDir);
+  if (existsSync(pendingWritePath)) {
+    throw new ValidationError(
+      `run history cannot be read while a run write transaction is pending: ${pendingWritePath}. `
+      + 'Retry a mutating runs command to recover it first',
+    );
+  }
+  const runIndexPath = path.join(runsDir, 'run-index.json');
   if (!existsSync(runIndexPath)) return [];
   const runIndex = validateRunIndexData(loadJson(runIndexPath));
   if (runIndex.projectId !== state.projectId) {
@@ -4359,6 +4523,29 @@ function assertNoTaskGraphExecutionHistory(state, operation) {
   );
 }
 
+function isBlockedScopeReplacementMetadata(metadata) {
+  return metadata?.replacement?.kind === 'blocked_scope_replan';
+}
+
+function requiredReplacementSpecRefs(spec) {
+  return normalizeRefs(fullSpecTaskRefs(spec));
+}
+
+function assertReplacementTaskGraphCoversFullSpec(metadata, spec, taskGraph) {
+  if (!isBlockedScopeReplacementMetadata(metadata)) return;
+  const coveredRefs = new Set(
+    taskGraph.tasks.flatMap((task) => normalizeRefs(task.sourceSpecRefs)),
+  );
+  const missingRefs = requiredReplacementSpecRefs(spec)
+    .filter((ref) => !coveredRefs.has(ref));
+  if (missingRefs.length) {
+    throw new ValidationError(
+      'blocked scope replacement task graph must cover the complete approved spec so unfinished prior work is not treated as delivered; '
+      + `missing sourceSpecRefs: ${missingRefs.join(', ')}`,
+    );
+  }
+}
+
 function promoteTasksLocked(args) {
   const state = resolveIterationState(args.artifacts, { requireReady: false });
   const metadata = loadOptionalIterationMetadata(state.artifactRoot, state.activeIteration);
@@ -4370,6 +4557,7 @@ function promoteTasksLocked(args) {
   if (!existsSync(draftPath)) throw new ValidationError(`gate-c draft not found; author one at ${draftPath} first`);
   const draft = loadJson(draftPath);
   validateTaskGraphData(draft, state.specPath);
+  assertReplacementTaskGraphCoversFullSpec(metadata, spec, draft);
   const preExecutedDraftTasks = draft.tasks.filter((task) => task.status !== 'todo');
   if (preExecutedDraftTasks.length) {
     throw new ValidationError(
@@ -4527,6 +4715,10 @@ function diffTasksLocked(args) {
     throw new Error(`canonical task graph already exists: ${state.taskGraphPath}; use --force to create a replacement draft`);
   }
   const { baselineSpec, baselineRef } = loadDiffBaseline(state);
+  const metadata = loadOptionalIterationMetadata(state.artifactRoot, state.activeIteration);
+  const taskDiffBaseline = isBlockedScopeReplacementMetadata(metadata)
+    ? null
+    : baselineSpec;
   const existingTaskGraph = args.force ? loadExistingTaskGraphIfPresent(state.taskGraphPath) : null;
   if (existingTaskGraph) {
     const startedTasks = existingTaskGraph.tasks.filter((task) => task.status !== 'todo');
@@ -4542,7 +4734,7 @@ function diffTasksLocked(args) {
     projectId: state.projectId,
     iterationId: state.activeIteration,
     activeSpec,
-    baselineSpec,
+    baselineSpec: taskDiffBaseline,
     baselineRef,
     existingTaskGraph,
     historicalTasks: [],
@@ -4562,6 +4754,9 @@ function diffTasksLocked(args) {
   console.log(`Plan2Agent diff task graph draft generated: ${toRelativeFromRoot(draftPath)}`);
   console.log(`- active iteration: ${state.activeIteration}`);
   console.log(`- baseline: ${baselineRef ?? 'none'}`);
+  if (isBlockedScopeReplacementMetadata(metadata)) {
+    console.log('- scope replacement: complete approved spec is treated as work until reimplemented or explicitly removed');
+  }
   console.log(`- semantic groups: ${stats.groups.join(', ')}`);
   console.log(`- rework groups: ${stats.rework}`);
   console.log(`- reused active tasks: ${stats.reused}`);
@@ -4633,6 +4828,27 @@ function baselineContractIntake(contract, iterationId, openedAt, intakeRef) {
   };
 }
 
+function replacementBaselineIntake(
+  contract,
+  activeIntake,
+  iterationId,
+  openedAt,
+  intakeRef,
+) {
+  const intake = baselineContractIntake(
+    contract,
+    iterationId,
+    openedAt,
+    intakeRef,
+  );
+  return {
+    ...intake,
+    idea: activeIntake.idea,
+    summary: `Self-contained source-intake snapshot for blocked scope replacement ${iterationId}.`,
+    clarifying_questions: cloneJson(activeIntake.clarifying_questions ?? []),
+  };
+}
+
 function contractRuleText(item) {
   return `${item.id}: ${item.rule} (${item.rationale})`;
 }
@@ -4658,7 +4874,14 @@ function baselineContractTechnologyEvidence(contract) {
   }));
 }
 
-function baselineContractSpec(contract, openedAt, intakeRef, intakeSha256, specRef) {
+function baselineContractSpec(
+  contract,
+  openedAt,
+  intakeRef,
+  intakeSha256,
+  specRef,
+  resolvedIterationConstraints = null,
+) {
   const visualScreens = (contract.visualContract?.screens ?? []).map((screen) => (
     screen.route ? `${screen.screenId}: ${screen.route}` : screen.screenId
   ));
@@ -4668,6 +4891,15 @@ function baselineContractSpec(contract, openedAt, intakeRef, intakeSha256, specR
         ...(contract.visualContract.visualInvariants ?? []),
       ]
     : [];
+  const implementationConstraints = (resolvedIterationConstraints ?? contract.iterationConstraints)
+    ? cloneJson(resolvedIterationConstraints ?? contract.iterationConstraints)
+    : {
+        architecture: contract.architecture.map(contractRuleText),
+        interfaces: [],
+        dependencies: contract.stack.map(
+          (item) => `${item.id}: ${item.choice} (${item.rationale})`,
+        ),
+      };
   return {
     schema_version: 'p2a.spec.v1',
     project_id: contract.projectId,
@@ -4691,10 +4923,10 @@ function baselineContractSpec(contract, openedAt, intakeRef, intakeSha256, specR
       ],
     },
     implementation: {
-      architecture: contract.architecture.map(contractRuleText),
-      interfaces: [],
+      architecture: implementationConstraints.architecture,
+      interfaces: implementationConstraints.interfaces,
       data_flow: [],
-      dependencies: contract.stack.map((item) => `${item.id}: ${item.choice} (${item.rationale})`),
+      dependencies: implementationConstraints.dependencies,
       edge_cases: [],
       verification: cloneJson(contract.verification),
     },
@@ -4711,25 +4943,167 @@ function baselineContractSpec(contract, openedAt, intakeRef, intakeSha256, specR
   };
 }
 
-function createOpenBaselineSnapshot(contract, artifactRoot, iterationId, openedAt) {
+function replacementBaselineSpec(
+  activeSpec,
+  intakeRef,
+  intakeSha256,
+  specRef,
+) {
+  const snapshot = cloneJson(activeSpec);
+  snapshot.source_intake = path.posix.relative(
+    path.posix.dirname(specRef),
+    intakeRef,
+  );
+  snapshot.source_intake_sha256 = intakeSha256;
+  // The bytes are an immutable snapshot of an already approved source spec,
+  // but the snapshot itself is not a new Gate B approval. Keeping it draft
+  // avoids rebinding visual approval artifacts while preserving every product,
+  // implementation, disposition, evidence, and visual field exactly.
+  snapshot.approval = 'draft';
+  delete snapshot.approval_audit;
+  return snapshot;
+}
+
+function projectConstitutionFilePath(artifactRoot) {
+  const workspaceRoot = canonicalWorkspacePathForArtifactRoot(artifactRoot);
+  const harnessRoot = path.join(workspaceRoot, '.plan2agent');
+  const workspaceRealPath = realpathSync(workspaceRoot);
+  let checkedHarnessPath = path.resolve(harnessRoot);
+  if (existsSync(harnessRoot)) {
+    assertDirectory(harnessRoot, 'project .plan2agent directory');
+    checkedHarnessPath = realpathSync(harnessRoot);
+  }
+  const relative = path.relative(workspaceRealPath, checkedHarnessPath);
+  if (
+    relative === '..'
+    || relative.startsWith(`..${path.sep}`)
+    || path.isAbsolute(relative)
+  ) {
+    throw new ValidationError('project .plan2agent directory must resolve inside the project workspace');
+  }
+  return path.join(harnessRoot, 'constitution.json');
+}
+
+function optionalRegularFileText(filePath, label) {
+  if (!existsSync(filePath)) return null;
+  if (!lstatSync(filePath).isFile()) {
+    throw new ValidationError(`${label} must be a regular file: ${filePath}`);
+  }
+  return readFileSync(filePath, 'utf8');
+}
+
+function createOpenBaselineSnapshot(
+  contract,
+  artifactRoot,
+  iterationId,
+  openedAt,
+  resumeState,
+  resolvedIterationConstraints = null,
+  options = {},
+) {
   const baselineRootRef = `iterations/${iterationId}/baseline`;
   const intakeRef = `${baselineRootRef}/gate-a-intake/intake.json`;
   const specRef = canonicalCurrentDevelopmentBaselineSpecRef(iterationId);
   const intakePath = path.join(artifactRoot, intakeRef);
   const specPath = path.join(artifactRoot, specRef);
-  const intake = baselineContractIntake(contract, iterationId, openedAt, intakeRef);
+  const currentSpecRef = `${baselineRootRef}/current-spec.json`;
+  const currentSpecPath = path.join(artifactRoot, currentSpecRef);
+  const currentDevelopmentContractRef = `${baselineRootRef}/current-development-contract.json`;
+  const currentDevelopmentContractSnapshotPath = path.join(
+    artifactRoot,
+    currentDevelopmentContractRef,
+  );
+  const constitutionRef = `${baselineRootRef}/constitution.json`;
+  const constitutionSnapshotPath = path.join(artifactRoot, constitutionRef);
+  const replacementSourceSpecRef = `${baselineRootRef}/replacement-source-spec.json`;
+  const replacementSourceSpecPath = path.join(artifactRoot, replacementSourceSpecRef);
+  const replacementSourceIntakeRef = `${baselineRootRef}/replacement-source-intake.json`;
+  const replacementSourceIntakePath = path.join(artifactRoot, replacementSourceIntakeRef);
+  const intake = options.replacementSource
+    ? replacementBaselineIntake(
+        contract,
+        options.replacementSource.intake,
+        iterationId,
+        openedAt,
+        intakeRef,
+      )
+    : baselineContractIntake(contract, iterationId, openedAt, intakeRef);
   mkdirSync(path.dirname(intakePath), { recursive: true });
   mkdirSync(path.dirname(specPath), { recursive: true });
+  if (options.replacementSource) {
+    atomicWriteText(
+      replacementSourceSpecPath,
+      readFileSync(options.replacementSource.specPath, 'utf8'),
+    );
+    atomicWriteText(
+      replacementSourceIntakePath,
+      readFileSync(options.replacementSource.intakePath, 'utf8'),
+    );
+    if (
+      fileSha256(replacementSourceSpecPath)
+      !== contract.bindings.activeSpec.sha256
+    ) {
+      throw new ValidationError(
+        'blocked scope replacement source spec snapshot must match the current development contract binding',
+      );
+    }
+  }
   writeJson(intakePath, intake);
   validateIntake(intakePath, { artifactRoot });
-  writeJson(
+  const baselineSpec = options.replacementSource
+    ? replacementBaselineSpec(
+        options.replacementSource.spec,
+        intakeRef,
+        fileSha256(intakePath),
+        specRef,
+      )
+    : baselineContractSpec(
+        contract,
+        openedAt,
+        intakeRef,
+        fileSha256(intakePath),
+        specRef,
+        resolvedIterationConstraints,
+      );
+  writeJson(specPath, baselineSpec);
+  validateSpec(
     specPath,
-    baselineContractSpec(contract, openedAt, intakeRef, fileSha256(intakePath), specRef),
+    intakePath,
+    { artifactRoot },
   );
-  validateSpec(specPath, intakePath, { artifactRoot });
+  atomicWriteText(currentSpecPath, resumeState.currentSpecText);
+  atomicWriteText(
+    currentDevelopmentContractSnapshotPath,
+    resumeState.currentDevelopmentContractText,
+  );
+  if (resumeState.constitutionText !== null) {
+    atomicWriteText(constitutionSnapshotPath, resumeState.constitutionText);
+  }
+  const resumeAuthority = {
+    current_spec_ref: currentSpecRef,
+    current_spec_sha256: fileSha256(currentSpecPath),
+    current_development_contract_ref: currentDevelopmentContractRef,
+    current_development_contract_sha256: fileSha256(currentDevelopmentContractSnapshotPath),
+    constitution: resumeState.constitutionText === null
+      ? { state: 'absent' }
+      : {
+          state: 'present',
+          ref: constitutionRef,
+          sha256: fileSha256(constitutionSnapshotPath),
+        },
+    ...(options.replacementSource ? {
+      replacement_source: {
+        spec_ref: replacementSourceSpecRef,
+        spec_sha256: fileSha256(replacementSourceSpecPath),
+        intake_ref: replacementSourceIntakeRef,
+        intake_sha256: fileSha256(replacementSourceIntakePath),
+      },
+    } : {}),
+  };
   return {
     ref: specRef,
     sha256: fileSha256(specPath),
+    resumeAuthority,
   };
 }
 
@@ -4744,22 +5118,122 @@ function pruneArchivedRunEvidenceAfterOpen(facts) {
   );
 }
 
+function generatedNextIterationId(artifactRoot, currentIterationId) {
+  const iterationsRoot = path.join(artifactRoot, 'iterations');
+  const existing = new Set(
+    readdirSync(iterationsRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name),
+  );
+  const numbered = /^(.*?)(\d+)$/u.exec(currentIterationId);
+  if (numbered) {
+    const width = numbered[2].length;
+    let number = Number.parseInt(numbered[2], 10) + 1;
+    while (Number.isSafeInteger(number)) {
+      const candidate = `${numbered[1]}${String(number).padStart(width, '0')}`;
+      if (!existing.has(candidate)) return candidate;
+      number += 1;
+    }
+  }
+  const base = `${currentIterationId}-next`;
+  if (!existing.has(base)) return base;
+  for (let suffix = 2; suffix < Number.MAX_SAFE_INTEGER; suffix += 1) {
+    const candidate = `${base}-${suffix}`;
+    if (!existing.has(candidate)) return candidate;
+  }
+  throw new Error('unable to allocate the next iteration id');
+}
+
+function readyTaskIdsForScopeReplacement(taskGraph) {
+  const doneTaskIds = new Set(
+    taskGraph.tasks
+      .filter((task) => task.status === 'done')
+      .map((task) => task.id),
+  );
+  return taskGraph.tasks
+    .filter((task) => (
+      task.status === 'todo'
+      && task.dependencies.every((dependency) => doneTaskIds.has(dependency))
+    ))
+    .map((task) => task.id);
+}
+
+function assertBlockedScopeReplacementReady(state) {
+  const startedRuns = activeIterationRunHistory(state)
+    .filter((run) => run.status === 'started');
+  if (startedRuns.length) {
+    throw new ValidationError(
+      `replace-scope requires no started run; open run(s): ${startedRuns.map((run) => run.runId).join(', ')}`,
+    );
+  }
+  const inProgressTasks = state.taskGraph.tasks
+    .filter((task) => task.status === 'in_progress')
+    .map((task) => task.id);
+  if (inProgressTasks.length) {
+    throw new ValidationError(
+      `replace-scope requires no in-progress task; task(s): ${inProgressTasks.join(', ')}`,
+    );
+  }
+  const readyTaskIds = readyTaskIdsForScopeReplacement(state.taskGraph);
+  if (readyTaskIds.length) {
+    throw new ValidationError(
+      `replace-scope is available only when no approved task can continue; ready task(s): ${readyTaskIds.join(', ')}`,
+    );
+  }
+  const blockedTaskIds = state.taskGraph.tasks
+    .filter((task) => task.status === 'blocked')
+    .map((task) => task.id);
+  if (!blockedTaskIds.length) {
+    throw new ValidationError('replace-scope requires at least one blocked task');
+  }
+  return blockedTaskIds;
+}
+
 function openLocked(args, artifactRoot, idea, options = {}) {
+  recoverPendingRunWrite(path.join(artifactRoot, 'runs'));
   const openingPointerState = resolveIterationState(artifactRoot, {
     requireReady: false,
     requireEffectiveSpec: false,
   });
   validateActiveIterationArchiveConsistency(openingPointerState);
-  if (openingPointerState.currentSpec.pending_iteration) {
+  if (openingPointerState.currentSpec.pending_iteration && !options.replaceBlockedScope) {
     throw new ValidationError(
-      'open requires no pending_iteration; finish or discard the active planning iteration first',
+      'open requires no pending_iteration; finish it or run `p2a iteration abandon --reason <text>` first',
     );
   }
   const openingState = resolveCurrentDevelopmentState(artifactRoot);
   const facts = { state: openingState, taskGraph: openingState.taskGraph };
   const currentDevelopment = openingState;
-  assertCloseReadyTasks(facts.taskGraph);
-  assertArchivedBaselineForOpen(facts.state);
+  const replacedBlockedTaskIds = options.replaceBlockedScope
+    ? assertBlockedScopeReplacementReady(openingState)
+    : null;
+  let replacedScopeIterationIds = [];
+  if (options.replaceBlockedScope) {
+    const activeMetadata = loadOptionalIterationMetadata(
+      artifactRoot,
+      facts.state.activeIteration,
+    );
+    assertActivePlanningContract(facts.state, activeMetadata);
+    const priorReplacement = facts.state.currentSpec.pending_iteration?.replacement;
+    const priorReplacedIterationIds = priorReplacement
+      ? blockedScopeReplacementAncestry(
+          new Map([[facts.state.activeIteration, { replacement: priorReplacement }]]),
+          facts.state.activeIteration,
+        )
+      : [];
+    replacedScopeIterationIds = [
+      facts.state.activeIteration,
+      ...priorReplacedIterationIds,
+    ];
+  }
+  if (!options.replaceBlockedScope) {
+    assertCloseReadyTasks(facts.taskGraph);
+    assertArchivedBaselineForOpen(facts.state);
+  }
+  if (!args.iterationIdProvided) {
+    args.iterationId = generatedNextIterationId(artifactRoot, facts.state.activeIteration);
+  }
+  assertSafeIterationId(args.iterationId);
   if (facts.state.activeIteration === args.iterationId) {
     throw new Error(`--iteration-id must differ from current active iteration ${JSON.stringify(facts.state.activeIteration)}`);
   }
@@ -4773,11 +5247,59 @@ function openLocked(args, artifactRoot, idea, options = {}) {
     ? readFileSync(statusPath, 'utf8')
     : null;
   const developmentContractPath = currentDevelopmentContractPath(artifactRoot);
-  const developmentContractBefore = existsSync(developmentContractPath)
-    ? readFileSync(developmentContractPath, 'utf8')
-    : null;
+  assertFile(developmentContractPath, 'current-development-contract.json');
+  const developmentContractBefore = readFileSync(developmentContractPath, 'utf8');
+  const constitutionPath = projectConstitutionFilePath(artifactRoot);
+  const constitutionBefore = optionalRegularFileText(
+    constitutionPath,
+    'project constitution',
+  );
   const openedAt = new Date().toISOString();
   const projectId = facts.state.projectId;
+  let replacementSource = null;
+  if (options.replaceBlockedScope) {
+    const boundSpecRef = artifactRelativePath(
+      artifactRoot,
+      currentDevelopment.specPath,
+    );
+    if (
+      normalizeDisplayPath(
+        currentDevelopment.currentDevelopmentContract.bindings.activeSpec.ref,
+      ) !== boundSpecRef
+      || fileSha256(currentDevelopment.specPath)
+        !== currentDevelopment.currentDevelopmentContract.bindings.activeSpec.sha256
+    ) {
+      throw new ValidationError(
+        'replace-scope requires the exact active Gate B spec bound by the current development contract',
+      );
+    }
+    const sourceSpecData = loadJson(currentDevelopment.specPath);
+    const sourceIntakePath = resolveSpecSourceIntake(
+      currentDevelopment.specPath,
+      sourceSpecData,
+    );
+    if (!sourceIntakePath) {
+      throw new ValidationError(
+        'replace-scope requires the source intake bound by the active Gate B spec',
+      );
+    }
+    assertFile(sourceIntakePath, 'replace-scope active Gate B source intake');
+    assertFileInsideArtifactRoot(
+      sourceIntakePath,
+      artifactRoot,
+      'replace-scope active Gate B source intake',
+    );
+    const sourceIntake = validateIntake(sourceIntakePath, { artifactRoot });
+    replacementSource = {
+      spec: validateSpec(currentDevelopment.specPath, sourceIntakePath, {
+        artifactRoot,
+        projectId,
+      }),
+      specPath: currentDevelopment.specPath,
+      intake: sourceIntake,
+      intakePath: sourceIntakePath,
+    };
+  }
   let iterationCreated = false;
   let stateWriteStarted = false;
   try {
@@ -4791,18 +5313,39 @@ function openLocked(args, artifactRoot, idea, options = {}) {
       artifactRoot,
       args.iterationId,
       openedAt,
+      {
+        currentSpecText: currentSpecBefore,
+        currentDevelopmentContractText: developmentContractBefore,
+        constitutionText: constitutionBefore,
+      },
+      currentDevelopment.executionEnvelope.iterationConstraints,
+      { replacementSource },
     );
+    const nextIterationMetadata = iterationMetadata(
+      projectId,
+      args.iterationId,
+      facts.state.activeIteration,
+      idea,
+      openedAt,
+      baseline.ref,
+      baseline.sha256,
+      baseline.resumeAuthority,
+    );
+    if (options.replaceBlockedScope) {
+      nextIterationMetadata.replacement = {
+        kind: 'blocked_scope_replan',
+        replaces_iteration: facts.state.activeIteration,
+        replaced_iteration_ids: replacedScopeIterationIds,
+        task_coverage: 'full_spec',
+        blocked_task_ids: replacedBlockedTaskIds,
+        current_development_contract_sha256:
+          baseline.resumeAuthority.current_development_contract_sha256,
+        reason: options.replacementReason,
+      };
+    }
     writeFileSync(
       path.join(iterationRoot, 'iteration.json'),
-      `${JSON.stringify(iterationMetadata(
-        projectId,
-        args.iterationId,
-        facts.state.activeIteration,
-        idea,
-        openedAt,
-        baseline.ref,
-        baseline.sha256,
-      ), null, 2)}\n`,
+      `${JSON.stringify(nextIterationMetadata, null, 2)}\n`,
       'utf8',
     );
     writeFileSync(
@@ -4821,7 +5364,20 @@ function openLocked(args, artifactRoot, idea, options = {}) {
       openedAt,
       baseline.ref,
       baseline.sha256,
+      baseline.resumeAuthority,
     );
+    if (options.replaceBlockedScope) {
+      nextCurrentSpec.pending_iteration.replacement = {
+        kind: 'blocked_scope_replan',
+        replaces_iteration: facts.state.activeIteration,
+        replaced_iteration_ids: replacedScopeIterationIds,
+        task_coverage: 'full_spec',
+        blocked_task_ids: replacedBlockedTaskIds,
+        current_development_contract_sha256:
+          baseline.resumeAuthority.current_development_contract_sha256,
+        reason: options.replacementReason,
+      };
+    }
     stateWriteStarted = true;
     atomicWriteJson(facts.state.currentSpecPath, nextCurrentSpec);
     writeIterationStatus(artifactRoot, nextCurrentSpec);
@@ -4839,6 +5395,11 @@ function openLocked(args, artifactRoot, idea, options = {}) {
     console.log(`- active iteration: ${openedState.activeIteration}`);
     console.log(`- baseline iteration: ${facts.state.activeIteration}`);
     console.log(`- idea: ${idea}`);
+    if (options.replaceBlockedScope) {
+      console.log(`- replaced blocked task(s): ${replacedBlockedTaskIds.join(', ')}`);
+      console.log(`- replacement reason: ${options.replacementReason}`);
+      console.log('- prior task graph and run evidence remain unchanged in their original iteration.');
+    }
     console.log('Skeleton created; Gate B/C artifacts are not required until planning outputs are written.');
     if (cleanup?.prunedRunIds.length) {
       console.log(`- transient run cleanup: removed ${cleanup.prunedRunIds.length} archived run(s)`);
@@ -4888,7 +5449,7 @@ function openLocked(args, artifactRoot, idea, options = {}) {
 
 function open(args) {
   const artifactRoot = normalizeArtifactPath(args.artifacts);
-  assertSafeIterationId(args.iterationId);
+  if (args.iterationIdProvided) assertSafeIterationId(args.iterationId);
   const idea = args.idea.trim();
   assertDirectory(artifactRoot, 'artifact root');
   const iterationsRoot = artifactStateLockDir(artifactRoot);
@@ -4898,9 +5459,347 @@ function open(args) {
     canonicalWorkspacePathForArtifactRoot(artifactRoot),
   ) === 'active_only';
   return withRunStoreLocks(
-    [iterationsRoot, ...(activeOnly ? [runsDir] : [])],
+    [artifactRoot, iterationsRoot, runsDir],
     () => openLocked(args, artifactRoot, idea, { pruneArchivedRuns: activeOnly }),
   );
+}
+
+function replaceScope(args) {
+  const artifactRoot = normalizeArtifactPath(args.artifacts);
+  if (args.iterationIdProvided) assertSafeIterationId(args.iterationId);
+  const idea = args.idea.trim();
+  const replacementReason = args.reason.trim();
+  assertDirectory(artifactRoot, 'artifact root');
+  const initialState = resolveIterationState(artifactRoot, {
+    requireReady: false,
+    requireEffectiveSpec: false,
+  });
+  const iterationsRoot = artifactStateLockDir(artifactRoot);
+  assertDirectory(iterationsRoot, 'iterations directory');
+  const runsDir = path.join(artifactRoot, 'runs');
+  return withRunStoreLocks(
+    [artifactRoot, iterationsRoot, path.dirname(initialState.taskGraphPath), runsDir],
+    () => {
+      const lockedState = resolveIterationState(artifactRoot, {
+        requireReady: false,
+        requireEffectiveSpec: false,
+      });
+      if (
+        lockedState.activeIteration !== initialState.activeIteration
+        || path.resolve(lockedState.taskGraphPath)
+          !== path.resolve(initialState.taskGraphPath)
+      ) {
+        throw new ValidationError(
+          'active iteration changed while replace-scope was waiting for execution locks; retry from the current Plan2Agent state',
+        );
+      }
+      return openLocked(args, artifactRoot, idea, {
+        replaceBlockedScope: true,
+        replacementReason,
+        pruneArchivedRuns: false,
+      });
+    },
+  );
+}
+
+function normalizedArtifactReference(reference) {
+  return normalizeDisplayPath(reference).replace(/^\.\//, '');
+}
+
+function readResumeSnapshot(
+  artifactRoot,
+  reference,
+  expectedSha256,
+  expectedReference,
+  label,
+) {
+  if (
+    typeof reference !== 'string'
+    || normalizedArtifactReference(reference) !== expectedReference
+    || typeof expectedSha256 !== 'string'
+    || !/^[a-f0-9]{64}$/.test(expectedSha256)
+  ) {
+    throw new ValidationError(
+      `${label} must bind the canonical snapshot ${expectedReference} with a lowercase SHA-256 value`,
+    );
+  }
+  const snapshotPath = resolveArtifactFileReference(reference, artifactRoot);
+  assertFile(snapshotPath, label);
+  assertFileInsideArtifactRoot(snapshotPath, artifactRoot, label);
+  if (path.resolve(snapshotPath) !== path.resolve(artifactRoot, expectedReference)) {
+    throw new ValidationError(`${label} must resolve to ${expectedReference}`);
+  }
+  const text = readFileSync(snapshotPath, 'utf8');
+  if (createHash('sha256').update(text).digest('hex') !== expectedSha256) {
+    throw new ValidationError(`${label} snapshot hash changed`);
+  }
+  return {
+    path: snapshotPath,
+    text,
+  };
+}
+
+function parseResumeCurrentSpec(snapshot, projectId, baselineIteration, options = {}) {
+  let restoredCurrentSpec;
+  try {
+    restoredCurrentSpec = JSON.parse(snapshot.text);
+  } catch (error) {
+    throw new ValidationError(
+      `pending iteration resume current-spec snapshot is not valid JSON: ${error.message}`,
+    );
+  }
+  const restoredPending = restoredCurrentSpec?.pending_iteration;
+  const replacementPendingIsRestorable = (
+    options.allowBlockedScopeReplan === true
+    && restoredPending
+    && typeof restoredPending === 'object'
+    && !Array.isArray(restoredPending)
+    && restoredPending.iteration_id === baselineIteration
+    && restoredPending.status === 'gate_b_approved'
+  );
+  if (
+    !restoredCurrentSpec
+    || Array.isArray(restoredCurrentSpec)
+    || restoredCurrentSpec.schema_version !== 'p2a.current_spec.v1'
+    || restoredCurrentSpec.project_id !== projectId
+    || restoredCurrentSpec.active_iteration !== baselineIteration
+    || (
+      restoredCurrentSpec.pending_iteration !== undefined
+      && !replacementPendingIsRestorable
+    )
+  ) {
+    throw new ValidationError('pending iteration resume current-spec snapshot is not the approved baseline pointer');
+  }
+  return restoredCurrentSpec;
+}
+
+function appendRestoredConstitutionAuthority(
+  artifactRoot,
+  constitutionSnapshot,
+  reason,
+) {
+  const records = readDecisions(artifactRoot);
+  const activeApproval = latestActiveConstitutionApproval(records);
+  if (!constitutionSnapshot) {
+    if (!activeApproval) return;
+    appendDecisionEventsLocked(artifactRoot, [{
+      type: 'gate.how.revoked',
+      quote: reason,
+      constitution_sha256: activeApproval.constitution_sha256,
+      ...(activeApproval.constitution_content_sha256
+        ? { constitution_content_sha256: activeApproval.constitution_content_sha256 }
+        : {}),
+      prev_seq: activeApproval.seq,
+    }]);
+    return;
+  }
+
+  const restoredConstitution = JSON.parse(constitutionSnapshot.text);
+  const restoredSha256 = createHash('sha256')
+    .update(constitutionSnapshot.text)
+    .digest('hex');
+  if (activeApproval?.constitution_sha256 === restoredSha256) return;
+
+  const restoredContentSha256 = constitutionContentSha256(restoredConstitution);
+  const previousApproval = latestConstitutionApproval(records);
+  const events = [];
+  if (
+    previousApproval?.constitution_sha256
+    && previousApproval.constitution_sha256 !== restoredSha256
+  ) {
+    events.push({
+      type: 'constitution.changed',
+      quote: reason,
+      constitution_sha256: restoredSha256,
+      constitution_content_sha256: restoredContentSha256,
+      previous_constitution_sha256: previousApproval.constitution_sha256,
+    });
+  }
+  if (activeApproval) {
+    events.push({
+      type: 'gate.how.revoked',
+      quote: reason,
+      constitution_sha256: activeApproval.constitution_sha256,
+      ...(activeApproval.constitution_content_sha256
+        ? { constitution_content_sha256: activeApproval.constitution_content_sha256 }
+        : {}),
+      prev_seq: activeApproval.seq,
+    });
+  }
+  events.push({
+    type: 'gate.how.approved',
+    quote: reason,
+    constitution_sha256: restoredSha256,
+    constitution_content_sha256: restoredContentSha256,
+  });
+  appendDecisionEventsLocked(artifactRoot, events);
+}
+
+function abandonLocked(args, artifactRoot, state = resolveIterationState(artifactRoot, { requireReady: false })) {
+  const pending = activePendingIteration(state);
+  const metadata = loadIterationMetadata(state.iterationRoot);
+  assertActivePlanningContract(state, metadata);
+  assertNoTaskGraphExecutionHistory(state, 'abandon');
+  const existingGraph = loadExistingTaskGraphIfPresent(state.taskGraphPath);
+  const startedTasks = existingGraph?.tasks.filter((task) => task.status !== 'todo') ?? [];
+  if (startedTasks.length) {
+    throw new ValidationError(
+      `abandon is limited to planning state; active task(s): ${startedTasks.map((task) => `${task.id}:${task.status}`).join(', ')}`,
+    );
+  }
+
+  const resumeAuthority = pending.resume_authority;
+  if (
+    !resumeAuthority
+    || typeof resumeAuthority !== 'object'
+    || Array.isArray(resumeAuthority)
+    || !jsonEqual(resumeAuthority, metadata.resume_authority)
+    || pending.resume_current_spec_ref !== resumeAuthority.current_spec_ref
+    || pending.resume_current_spec_sha256 !== resumeAuthority.current_spec_sha256
+  ) {
+    throw new ValidationError(
+      'this planning iteration predates safe abandon snapshots; restore the approved baseline explicitly before abandoning it',
+    );
+  }
+
+  const baselineRootRef = `iterations/${state.activeIteration}/baseline`;
+  const currentSpecSnapshot = readResumeSnapshot(
+    artifactRoot,
+    resumeAuthority.current_spec_ref,
+    resumeAuthority.current_spec_sha256,
+    `${baselineRootRef}/current-spec.json`,
+    'pending_iteration.resume_authority.current_spec_ref',
+  );
+  const contractSnapshot = readResumeSnapshot(
+    artifactRoot,
+    resumeAuthority.current_development_contract_ref,
+    resumeAuthority.current_development_contract_sha256,
+    `${baselineRootRef}/current-development-contract.json`,
+    'pending_iteration.resume_authority.current_development_contract_ref',
+  );
+  const constitutionAuthority = resumeAuthority.constitution;
+  if (
+    !constitutionAuthority
+    || typeof constitutionAuthority !== 'object'
+    || Array.isArray(constitutionAuthority)
+    || !['present', 'absent'].includes(constitutionAuthority.state)
+  ) {
+    throw new ValidationError('pending_iteration.resume_authority.constitution must record exact present or absent state');
+  }
+  let constitutionSnapshot = null;
+  if (constitutionAuthority.state === 'present') {
+    constitutionSnapshot = readResumeSnapshot(
+      artifactRoot,
+      constitutionAuthority.ref,
+      constitutionAuthority.sha256,
+      `${baselineRootRef}/constitution.json`,
+      'pending_iteration.resume_authority.constitution.ref',
+    );
+  } else if (!jsonEqual(constitutionAuthority, { state: 'absent' })) {
+    throw new ValidationError('an absent constitution resume snapshot must not contain a ref or hash');
+  }
+  const restoredCurrentSpec = parseResumeCurrentSpec(
+    currentSpecSnapshot,
+    state.projectId,
+    pending.baseline_iteration,
+    {
+      allowBlockedScopeReplan:
+        pending.replacement?.kind === 'blocked_scope_replan',
+    },
+  );
+
+  const metadataPath = path.join(state.iterationRoot, 'iteration.json');
+  const statusPath = path.join(artifactRoot, 'status.md');
+  const contractPath = currentDevelopmentContractPath(artifactRoot);
+  const constitutionPath = projectConstitutionFilePath(artifactRoot);
+  optionalRegularFileText(
+    constitutionPath,
+    'project constitution',
+  );
+  const ledgerPath = decisionLedgerPath(artifactRoot);
+  optionalRegularFileText(ledgerPath, 'decision ledger');
+  const rollback = captureRollbackFiles([
+    state.currentSpecPath,
+    statusPath,
+    contractPath,
+    constitutionPath,
+    ledgerPath,
+    metadataPath,
+  ]);
+  const abandonedAt = new Date().toISOString();
+  try {
+    atomicWriteText(state.currentSpecPath, currentSpecSnapshot.text);
+    if (constitutionSnapshot) {
+      atomicWriteText(constitutionPath, constitutionSnapshot.text);
+    } else if (existsSync(constitutionPath)) {
+      unlinkSync(constitutionPath);
+    }
+    appendRestoredConstitutionAuthority(
+      artifactRoot,
+      constitutionSnapshot,
+      args.reason.trim(),
+    );
+    writeIterationStatus(artifactRoot, restoredCurrentSpec);
+    atomicWriteText(contractPath, contractSnapshot.text);
+    const restoredState = resolveCurrentDevelopmentState(artifactRoot);
+    if (restoredCurrentSpec.pending_iteration) {
+      assertActivePlanningContract(
+        restoredState,
+        loadOptionalIterationMetadata(
+          artifactRoot,
+          restoredCurrentSpec.active_iteration,
+        ),
+      );
+    }
+    atomicWriteJson(metadataPath, {
+      ...metadata,
+      status: 'abandoned',
+      abandoned_at: abandonedAt,
+      abandon_reason: args.reason.trim(),
+      resumed_iteration: restoredCurrentSpec.active_iteration,
+    });
+  } catch (error) {
+    const rollbackFailures = restoreRollbackFiles(rollback);
+    if (rollbackFailures.length) {
+      throw new Error(
+        `${error.message}; iteration abandon rollback failed: ${rollbackFailures.join('; ')}`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+
+  console.log(`Plan2Agent planning iteration abandoned: ${state.activeIteration}`);
+  console.log(`- restored approved baseline: ${restoredCurrentSpec.active_iteration}`);
+  console.log(`- reason: ${args.reason.trim()}`);
+  console.log('- product completion was not recorded for the abandoned iteration.');
+  return 0;
+}
+
+function abandon(args) {
+  const artifactRoot = normalizeArtifactPath(args.artifacts);
+  assertDirectory(artifactRoot, 'artifact root');
+  const initialState = resolveIterationState(artifactRoot, { requireReady: false });
+  const runsDir = path.join(artifactRoot, 'runs');
+  const lockDirs = [
+    artifactRoot,
+    artifactStateLockDir(artifactRoot),
+    path.dirname(initialState.taskGraphPath),
+    runsDir,
+  ];
+  return withRunStoreLocks(lockDirs, () => {
+    recoverPendingRunWrite(runsDir);
+    const lockedState = resolveIterationState(artifactRoot, { requireReady: false });
+    if (
+      lockedState.activeIteration !== initialState.activeIteration
+      || path.resolve(lockedState.taskGraphPath) !== path.resolve(initialState.taskGraphPath)
+    ) {
+      throw new ValidationError(
+        'active iteration or task graph changed while abandon was waiting for its locks; retry the command',
+      );
+    }
+    return abandonLocked(args, artifactRoot, lockedState);
+  });
 }
 
 function gateAForceResetArtifactPaths(state, files) {
@@ -4955,15 +5854,15 @@ function invalidateGateADownstreamArtifacts(state, files) {
 function gateAScopeDraftMessages(intake) {
   const openQuestions = (intake.clarifying_questions ?? [])
     .filter((item) => item.status === 'open')
-    .map((item) => item.id);
+    .map((item) => item.question);
   const openDecisions = (intake.needs_user_decision ?? [])
     .filter((item) => item.status !== 'answered')
-    .map((item) => item.id);
+    .map((item) => item.question);
   const blockers = [...openQuestions, ...openDecisions];
   return [
     'Plan2Agent Gate A scope confirmation required.',
     blockers.length
-      ? `- Resolve ${blockers.join(', ')}, then review and explicitly approve the scope.`
+      ? `- Confirm these material points: ${blockers.join(' | ')}`
       : '- Review and explicitly approve the scope, then record approval_audit.',
   ];
 }
@@ -5126,6 +6025,9 @@ function draftWithState(args, state) {
       baselineSpec,
       baselineContext,
     });
+    if (pending.replacement) {
+      intake.baseline_context.replacement = cloneJson(pending.replacement);
+    }
     if (preflight.detected) intake = mergeFeatureRadarIntoIntake(intake, preflight);
     writeGeneratedIntake = true;
   } else if (resetGreenfieldIntake) {
@@ -5315,6 +6217,9 @@ function draft(args) {
 function composeLocked(args, artifactRoot) {
   const state = resolveIterationState(artifactRoot, { requireReady: false });
   validateActiveIterationArchiveConsistency(state);
+  if (!args.skipArchiveAudit) {
+    auditArchivedIterationArtifacts(state.currentSpec, state.artifactRoot);
+  }
   const { sources, skipped } = collectCompositionSources(artifactRoot, state.currentSpec);
   const composedCurrentSpec = buildComposedCurrentSpec(state.currentSpec, sources, skipped);
   validateCurrentSpecCompositionData(composedCurrentSpec, artifactRoot);
@@ -5421,6 +6326,8 @@ export function main(argv = process.argv.slice(2)) {
     if (args.command === 'validate') return validateIteration(args);
     if (args.command === 'close') return close(args);
     if (args.command === 'open') return open(args);
+    if (args.command === 'replace-scope') return replaceScope(args);
+    if (args.command === 'abandon') return abandon(args);
     if (args.command === 'draft') return draft(args);
     if (args.command === 'context') return context(args);
     if (args.command === 'promote-spec') return promoteSpec(args);

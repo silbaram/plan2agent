@@ -1523,6 +1523,20 @@ describe('visual experience artifacts', () => {
       writeJson(runPath, legacyStartedRun);
 
       result = runRuns(['finish', '--graph', graphPath, '--run-id', runId, '--status', 'finished']);
+      assert.notEqual(result.status, 0);
+      assert.match(`${result.stdout}\n${result.stderr}`, /current workspace revision/);
+      const stillLegacyRun = JSON.parse(readFileSync(runPath, 'utf8'));
+      assert.equal(stillLegacyRun.schema_version, 'p2a.run.v1');
+      assert.equal(stillLegacyRun.verification[0].workspaceRevisionSha256, undefined);
+
+      result = runRuns([
+        'verify',
+        '--graph', graphPath,
+        '--run-id', runId,
+        '--test-command', `${JSON.stringify(process.execPath)} -e "process.exit(0)"`,
+      ]);
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+      result = runRuns(['finish', '--graph', graphPath, '--run-id', runId, '--status', 'finished']);
       assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
       const upgradedRun = JSON.parse(readFileSync(runPath, 'utf8'));
       assert.equal(upgradedRun.schema_version, 'p2a.run.v2');
@@ -1594,21 +1608,18 @@ describe('visual experience artifacts', () => {
         '--visual-feedback-note', 'Informational early review; it is not a completion gate.',
       ]);
       assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-      const startedRun = JSON.parse(readFileSync(runPath, 'utf8'));
+      let startedRun = JSON.parse(readFileSync(runPath, 'utf8'));
       assert.deepEqual(startedRun.visualFeedback?.map((item) => item.verdict), ['concern']);
-      startedRun.verification = [{
-        type: 'test',
-        command: 'node --test',
-        status: 'passed',
-        exitCode: 0,
-        durationMs: 1,
-        startedAt: startedRun.startedAt,
-        finishedAt: startedRun.startedAt,
-        stdoutTail: 'passed',
-        stderrTail: '',
-        source: 'command',
-      }];
-      writeJson(runPath, startedRun);
+      result = runRuns([
+        'verify',
+        '--graph', graphPath,
+        '--run-id', runId,
+        '--workspace', workspacePath,
+        '--test-command', `${JSON.stringify(process.execPath)} -e "process.exit(0)"`,
+      ]);
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+      startedRun = JSON.parse(readFileSync(runPath, 'utf8'));
+      assert.match(startedRun.verification[0]?.workspaceRevisionSha256, /^[a-f0-9]{64}$/);
       result = runRuns(['finish', '--graph', graphPath, '--run-id', runId, '--status', 'finished']);
       assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
       const finishedRun = JSON.parse(readFileSync(runPath, 'utf8'));
@@ -2169,6 +2180,15 @@ describe('visual experience artifacts', () => {
       run.updatedAt = finishedAt;
       run.finishedAt = finishedAt;
       run.changedFiles = ['src/review-pane.js'];
+      const implementationRevision = workspaceRevisionSha256(
+        root,
+        workspaceRevisionExcludedPathsForRun(runsDir, run, {
+          graphPath,
+          workspacePath: root,
+        }),
+      );
+      run.workspaceRevisionSha256 = implementationRevision;
+      run.productRevisionSha256 = implementationRevision;
       run.verification = [{
         type: 'test',
         command: 'node --test',
@@ -2180,6 +2200,9 @@ describe('visual experience artifacts', () => {
         stdoutTail: 'passed',
         stderrTail: '',
         source: 'command',
+        scope: 'full',
+        workspaceRevisionSha256: implementationRevision,
+        productRevisionSha256: implementationRevision,
       }];
       writeJson(runPath, run);
       const indexPath = path.join(runsDir, 'run-index.json');

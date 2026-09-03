@@ -31,6 +31,28 @@
       "items": { "type": "string", "minLength": 1 },
       "uniqueItems": true
     },
+    "iterationConstraints": {
+      "type": "object",
+      "required": ["architecture", "interfaces", "dependencies"],
+      "additionalProperties": false,
+      "properties": {
+        "architecture": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "interfaces": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "dependencies": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        }
+      }
+    },
     "architecture": {
       "type": "array",
       "maxItems": 10,

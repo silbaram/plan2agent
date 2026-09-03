@@ -14,9 +14,15 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { captureGitState, pruneIndexedRunEvidence } from '../scripts/p2a_runs.mjs';
+import {
+  captureGitState,
+  loadRunsForArtifactRoot,
+  pruneIndexedRunEvidence,
+} from '../scripts/p2a_runs.mjs';
+import { supersededRunEvidenceAnchorIds } from '../scripts/p2a_execute.mjs';
 import { defaultRetrospectiveSignals } from '../scripts/p2a_project_config.mjs';
 import { buildRetrospectiveCandidates } from '../scripts/p2a_retrospective.mjs';
+import { classifyVerificationProfile } from '../scripts/p2a_verification_profile.mjs';
 import { validateRetrospectiveCandidateData } from '../scripts/validate_artifacts.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -150,6 +156,74 @@ test('Git metadata capture treats a spawn error as unavailable even when status 
   })), null);
 });
 
+test('superseded run cleanup preserves the minimum risk and verification anchors', () => {
+  const base = {
+    taskId: 'task-001',
+    iterationId: 'v1-mvp',
+    status: 'finished',
+    isolation: { mode: 'none' },
+    verification: [],
+  };
+  const highRisk = {
+    ...base,
+    runId: 'run-high-risk',
+    runKind: null,
+    changedFiles: ['src/auth/routes.js'],
+  };
+  const docs = {
+    ...base,
+    runId: 'run-docs',
+    runKind: null,
+    changedFiles: ['README.md'],
+  };
+  assert.deepEqual(
+    supersededRunEvidenceAnchorIds(docs, [highRisk, docs]),
+    ['run-high-risk'],
+  );
+  const failedHighRisk = {
+    ...highRisk,
+    runId: 'run-high-risk-failed',
+    status: 'failed',
+  };
+  assert.deepEqual(
+    supersededRunEvidenceAnchorIds(docs, [failedHighRisk, docs]),
+    ['run-high-risk-failed'],
+    'a failed product-risk attempt must survive a later docs-only retry',
+  );
+
+  const full = {
+    ...base,
+    runId: 'run-full',
+    runKind: 'final_verification',
+    verificationScope: 'full',
+    changedFiles: [],
+  };
+  const relevant = {
+    ...base,
+    runId: 'run-relevant',
+    runKind: 'final_verification',
+    verificationScope: 'relevant',
+    changedFiles: [],
+  };
+  assert.deepEqual(
+    supersededRunEvidenceAnchorIds(relevant, [full, relevant]),
+    ['run-full'],
+  );
+  const newerFailedFull = {
+    ...full,
+    runId: 'run-full-failed-newer',
+    status: 'failed',
+  };
+  assert.deepEqual(
+    supersededRunEvidenceAnchorIds(relevant, [full, newerFailedFull, relevant]),
+    ['run-full-failed-newer'],
+  );
+  assert.deepEqual(
+    supersededRunEvidenceAnchorIds(full, [relevant, full]),
+    [],
+  );
+});
+
 function closeCurrentIteration(artifactRoot) {
   const graphPath = path.join(
     artifactRoot,
@@ -198,6 +272,18 @@ test('active-only pruning removes selected run records and sidecars while rebuil
     writeIndex(runsDir, [oldRun, retainedRun]);
     writeEvidence(runsDir, oldRun, ['.acceptance-review.json', '.monitor-verdict.json']);
     writeEvidence(runsDir, retainedRun);
+    const envelopeSha = 'a'.repeat(64);
+    writeFileSync(
+      path.join(runsDir, oldRun.runRef),
+      `${JSON.stringify({
+        iterationId: 'v1',
+        executionEnvelopeRef: { sha256: envelopeSha },
+      })}\n`,
+      'utf8',
+    );
+    const envelopePath = path.join(runsDir, 'v1', 'envelopes', `${envelopeSha}.json`);
+    mkdirSync(path.dirname(envelopePath), { recursive: true });
+    writeFileSync(envelopePath, '{}\n', 'utf8');
 
     const result = pruneIndexedRunEvidence(runsDir, { iterationIds: ['v1'] });
 
@@ -205,6 +291,7 @@ test('active-only pruning removes selected run records and sidecars while rebuil
     assert.equal(existsSync(path.join(runsDir, oldRun.runRef)), false);
     assert.equal(existsSync(path.join(runsDir, 'v1/run-old.acceptance-review.json')), false);
     assert.equal(existsSync(path.join(runsDir, 'v1/run-old.monitor-verdict.json')), false);
+    assert.equal(existsSync(envelopePath), false);
     assert.equal(existsSync(path.join(runsDir, retainedRun.runRef)), true);
     const index = JSON.parse(readFileSync(path.join(runsDir, 'run-index.json'), 'utf8'));
     assert.deepEqual(index.runs.map((entry) => entry.runId), ['run-current']);
@@ -424,6 +511,171 @@ test('runs gc dry-run lists indexed and orphan evidence before removing it while
     assert.equal(existsSync(path.join(runsDir, indexedEnvelopeRef)), false);
     const index = JSON.parse(readFileSync(path.join(runsDir, 'run-index.json'), 'utf8'));
     assert.deepEqual(index.runs.map((entry) => entry.runId), ['run-gc-final']);
+  } finally {
+    rmSync(artifactRoot, { recursive: true, force: true });
+  }
+});
+
+test('runs gc keep-final retains a full anchor when the latest verification is relevant-only', () => {
+  const artifactRoot = initializedIterationProject('active_only');
+  try {
+    const runsDir = path.join(artifactRoot, 'runs');
+    mkdirSync(path.join(runsDir, 'v1-mvp'), { recursive: true });
+    const full = {
+      ...runEntry('run-gc-full', 'task-001', 'v1-mvp', 'finished', 'v1-mvp/run-gc-full.json'),
+      runKind: 'final_verification',
+    };
+    const failedFull = {
+      ...runEntry('run-gc-failed-full', 'task-001', 'v1-mvp', 'failed', 'v1-mvp/run-gc-failed-full.json'),
+      runKind: 'final_verification',
+    };
+    const relevant = {
+      ...runEntry('run-gc-relevant', 'task-001', 'v1-mvp', 'finished', 'v1-mvp/run-gc-relevant.json'),
+      runKind: 'final_verification',
+    };
+    writeIndex(runsDir, [full, failedFull, relevant]);
+    writeFileSync(path.join(runsDir, full.runRef), `${JSON.stringify({
+      ...full,
+      verificationScope: 'full',
+      changedFiles: [],
+      verification: [],
+    }, null, 2)}\n`, 'utf8');
+    writeFileSync(path.join(runsDir, failedFull.runRef), `${JSON.stringify({
+      ...failedFull,
+      verificationScope: 'full',
+      changedFiles: [],
+      verification: [],
+    }, null, 2)}\n`, 'utf8');
+    writeFileSync(path.join(runsDir, relevant.runRef), `${JSON.stringify({
+      ...relevant,
+      verificationScope: 'relevant',
+      changedFiles: [],
+      verification: [],
+    }, null, 2)}\n`, 'utf8');
+
+    const collected = runCli(RUNS_CLI, [
+      'gc',
+      '--artifacts', artifactRoot,
+      '--iteration', 'v1-mvp',
+      '--keep-final',
+    ]);
+    assert.equal(collected.status, 0, `${collected.stdout}${collected.stderr}`);
+    const index = JSON.parse(readFileSync(path.join(runsDir, 'run-index.json'), 'utf8'));
+    assert.deepEqual(index.runs.map((entry) => entry.runId), [failedFull.runId, relevant.runId]);
+  } finally {
+    rmSync(artifactRoot, { recursive: true, force: true });
+  }
+});
+
+test('runs gc keep-final follows terminal completion order for concurrent verification runs', () => {
+  const artifactRoot = initializedIterationProject('active_only');
+  try {
+    const runsDir = path.join(artifactRoot, 'runs');
+    mkdirSync(path.join(runsDir, 'v1-mvp'), { recursive: true });
+    const lateFailure = {
+      ...runEntry(
+        'run-gc-started-first-failed-last',
+        'task-001',
+        'v1-mvp',
+        'failed',
+        'v1-mvp/run-gc-started-first-failed-last.json',
+      ),
+      runKind: 'final_verification',
+      startedAt: '2026-08-23T00:00:00.000Z',
+      finishedAt: '2026-08-23T00:03:00.000Z',
+    };
+    const earlySuccess = {
+      ...runEntry(
+        'run-gc-started-second-finished-first',
+        'task-001',
+        'v1-mvp',
+        'finished',
+        'v1-mvp/run-gc-started-second-finished-first.json',
+      ),
+      runKind: 'final_verification',
+      startedAt: '2026-08-23T00:01:00.000Z',
+      finishedAt: '2026-08-23T00:02:00.000Z',
+    };
+    writeIndex(runsDir, [lateFailure, earlySuccess]);
+    for (const entry of [lateFailure, earlySuccess]) {
+      writeFileSync(path.join(runsDir, entry.runRef), `${JSON.stringify({
+        ...entry,
+        verificationScope: 'full',
+        changedFiles: [],
+        verification: [],
+      }, null, 2)}\n`, 'utf8');
+    }
+
+    const collected = runCli(RUNS_CLI, [
+      'gc',
+      '--artifacts', artifactRoot,
+      '--iteration', 'v1-mvp',
+      '--keep-final',
+    ]);
+    assert.equal(collected.status, 0, `${collected.stdout}${collected.stderr}`);
+    const retained = JSON.parse(readFileSync(path.join(runsDir, 'run-index.json'), 'utf8'))
+      .runs.map((entry) => entry.runId);
+    assert.deepEqual(retained, [lateFailure.runId]);
+  } finally {
+    rmSync(artifactRoot, { recursive: true, force: true });
+  }
+});
+
+test('runs gc keep-final retains failed and blocked product-risk anchors behind docs retries', () => {
+  const artifactRoot = initializedIterationProject('active_only');
+  try {
+    const runsDir = path.join(artifactRoot, 'runs');
+    mkdirSync(path.join(runsDir, 'v1-mvp'), { recursive: true });
+    const failedProduct = runEntry(
+      'run-gc-product-failed',
+      'task-001',
+      'v1-mvp',
+      'failed',
+      'v1-mvp/run-gc-product-failed.json',
+    );
+    const docsAfterFailure = runEntry(
+      'run-gc-docs-after-failure',
+      'task-001',
+      'v1-mvp',
+      'finished',
+      'v1-mvp/run-gc-docs-after-failure.json',
+    );
+    const blockedProduct = runEntry(
+      'run-gc-product-blocked',
+      'task-002',
+      'v1-mvp',
+      'blocked',
+      'v1-mvp/run-gc-product-blocked.json',
+    );
+    const docsAfterBlock = runEntry(
+      'run-gc-docs-after-block',
+      'task-002',
+      'v1-mvp',
+      'finished',
+      'v1-mvp/run-gc-docs-after-block.json',
+    );
+    const entries = [failedProduct, docsAfterFailure, blockedProduct, docsAfterBlock];
+    writeIndex(runsDir, entries);
+    for (const entry of entries) {
+      const productRisk = entry.status === 'failed' || entry.status === 'blocked';
+      writeFileSync(path.join(runsDir, entry.runRef), `${JSON.stringify({
+        ...entry,
+        isolation: { mode: 'none' },
+        changedFiles: productRisk ? ['src/auth/routes.js'] : ['README.md'],
+        verification: [],
+      }, null, 2)}\n`, 'utf8');
+    }
+
+    const collected = runCli(RUNS_CLI, [
+      'gc',
+      '--artifacts', artifactRoot,
+      '--iteration', 'v1-mvp',
+      '--keep-final',
+    ]);
+    assert.equal(collected.status, 0, `${collected.stdout}${collected.stderr}`);
+    const retained = JSON.parse(readFileSync(path.join(runsDir, 'run-index.json'), 'utf8'))
+      .runs.map((entry) => entry.runId);
+    assert.deepEqual(retained, entries.map((entry) => entry.runId));
   } finally {
     rmSync(artifactRoot, { recursive: true, force: true });
   }
@@ -725,6 +977,98 @@ test('successful task finish keeps the latest run and removes superseded same-ki
       }],
     });
     assert.doesNotMatch(JSON.stringify(finalIndex.retrospective), /behavior ok|Adjusted|Gate caught|run-superseded/);
+  } finally {
+    rmSync(artifactRoot, { recursive: true, force: true });
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('active-only finish keeps a prior product-risk anchor when the latest retry changes only docs', () => {
+  const artifactRoot = initializedIterationProject('active_only');
+  const workspace = mkdtempSync(path.join(tmpdir(), 'p2a-run-risk-anchor-workspace-'));
+  try {
+    mkdirSync(path.join(workspace, '.plan2agent'), { recursive: true });
+    writeFileSync(path.join(workspace, '.plan2agent', 'project.config.json'), `${JSON.stringify({
+      runTracking: { persistence: 'active_only' },
+    }, null, 2)}\n`, 'utf8');
+    writeFileSync(path.join(workspace, 'README.md'), '# Current docs\n', 'utf8');
+    const started = runCli(EXECUTE_CLI, [
+      'start',
+      '--artifacts', artifactRoot,
+      '--task', 'task-001',
+      '--agent-tool', 'manual',
+      '--workspace', workspace,
+    ]);
+    assert.equal(started.status, 0, `${started.stdout}${started.stderr}`);
+
+    const runsDir = path.join(artifactRoot, 'runs');
+    const indexPath = path.join(runsDir, 'run-index.json');
+    const index = JSON.parse(readFileSync(indexPath, 'utf8'));
+    const currentEntry = index.runs.at(-1);
+    const currentRun = JSON.parse(readFileSync(path.join(runsDir, currentEntry.runRef), 'utf8'));
+    const priorProductRun = {
+      ...currentRun,
+      runId: 'run-prior-product-risk',
+      status: 'finished',
+      startedAt: '2026-08-22T00:00:00.000Z',
+      updatedAt: '2026-08-22T00:01:00.000Z',
+      finishedAt: '2026-08-22T00:01:00.000Z',
+      changedFiles: ['src/auth/routes.js'],
+      verification: [{
+        type: 'custom',
+        command: 'true',
+        status: 'passed',
+        exitCode: 0,
+        durationMs: 1,
+        startedAt: '2026-08-22T00:00:00.000Z',
+        finishedAt: '2026-08-22T00:00:00.001Z',
+        stdoutTail: '',
+        stderrTail: '',
+        source: 'command',
+      }],
+    };
+    const priorEntry = {
+      ...currentEntry,
+      runId: priorProductRun.runId,
+      runRef: `${priorProductRun.iterationId}/${priorProductRun.runId}.json`,
+      status: 'finished',
+      startedAt: priorProductRun.startedAt,
+      finishedAt: priorProductRun.finishedAt,
+    };
+    writeFileSync(
+      path.join(runsDir, priorEntry.runRef),
+      `${JSON.stringify(priorProductRun, null, 2)}\n`,
+      'utf8',
+    );
+    writeIndex(runsDir, [priorEntry, currentEntry], index.projectId);
+
+    const finished = runCli(EXECUTE_CLI, [
+      'finish',
+      '--artifacts', artifactRoot,
+      '--run-id', currentEntry.runId,
+      '--changed-file', 'README.md',
+      '--related',
+      '--no-task-transition',
+    ]);
+    assert.equal(finished.status, 0, `${finished.stdout}${finished.stderr}`);
+    const recovered = runCli(EXECUTE_CLI, [
+      'finish',
+      '--artifacts', artifactRoot,
+      '--run-id', currentEntry.runId,
+    ]);
+    assert.equal(recovered.status, 0, `${recovered.stdout}${recovered.stderr}`);
+
+    const retained = JSON.parse(readFileSync(indexPath, 'utf8')).runs
+      .filter((entry) => entry.taskId === currentEntry.taskId)
+      .map((entry) => entry.runId);
+    assert.deepEqual(retained, [priorProductRun.runId, currentEntry.runId]);
+    assert.equal(existsSync(path.join(runsDir, priorEntry.runRef)), true);
+    assert.equal(
+      classifyVerificationProfile(loadRunsForArtifactRoot(artifactRoot, {
+        iterationId: currentRun.iterationId,
+      })).id,
+      'high_risk_integration',
+    );
   } finally {
     rmSync(artifactRoot, { recursive: true, force: true });
     rmSync(workspace, { recursive: true, force: true });

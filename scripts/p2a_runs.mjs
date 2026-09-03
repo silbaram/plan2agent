@@ -112,6 +112,7 @@ import {
   detectProjectCommands,
   mergeDetectedProjectConfig,
   mergeExplicitVerificationCommands,
+  projectConfigCandidatePaths,
   relatedVerificationCommands,
   releaseRunIdReservation,
   resolveRunPersistence,
@@ -137,6 +138,27 @@ import {
   parseVerifyCommand,
   verificationTypeList,
 } from './p2a_verification.mjs';
+import {
+  assertVerificationObligations,
+  configuredRelatedVerificationObligations,
+  configuredVerificationObligations,
+  executedPassedVerificationItems as latestExecutedPassedVerificationItems,
+  failedVerificationItems as latestFailedVerificationItems,
+  incompleteVerificationItems as latestIncompleteVerificationItems,
+  latestMilestoneAttempts,
+  latestVerificationAttempts,
+} from './p2a_verification_evidence.mjs';
+import {
+  missingRequiredFailureDetails,
+  structuredDetailHasValue,
+} from './p2a_failure_details.mjs';
+import {
+  classifyVerificationProfile,
+  docsMetadataFiles,
+  isDocsMetadataPath,
+  productRevisionExcludedPaths,
+} from './p2a_verification_profile.mjs';
+import { relatedFilesSha256 } from './p2a_related_files.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.projectRoot;
@@ -187,6 +209,7 @@ function usage() {
     '  --run-reservation-token <token>  Reservation owner token emitted by a failed sequential start retry.',
     '  --agent-tool <tool>     Agent/CLI tool that performed the run, such as codex, claude, gemini.',
     '  --run-kind <kind>       Structured run purpose: final_verification, final_visual_review, or final_acceptance_review.',
+    '  --verification-scope <scope>  Internal final verification scope: full or relevant.',
     '  --workspace <dir>       Workspace path for verification commands. Defaults to cwd or --worktree.',
     '  --workspace-ref <ref>   Human-readable workspace reference. Defaults to --workspace display path.',
     '  --isolation <mode>      none, branch, or worktree. Default: none.',
@@ -236,7 +259,7 @@ function usage() {
     '  --save-config           Persist detected or explicit test/lint/typecheck commands to project.config.json.',
     '  --json                  Machine-readable output for list.',
     '  --iteration <id>        Limit gc to one iteration.',
-    '  --keep-final            Keep the latest closed run for each task and run kind during gc.',
+    '  --keep-final            Keep the latest closed run plus product-risk and full-verification anchors needed for close.',
     '  --force                 Allow gc when runTracking.persistence is persistent.',
     '  --dry-run               Preview gc, index rebuild, layout migration, or schema migration without writing files.',
     '  --yes                   Confirm the selected index rebuild, layout migration, or schema migration.',
@@ -261,6 +284,7 @@ function parseArgs(argv) {
     runReservationToken: null,
     agentTool: null,
     runKind: null,
+    verificationScope: null,
     workspace: null,
     workspaceRef: null,
     isolation: 'none',
@@ -325,6 +349,12 @@ function parseArgs(argv) {
     else if (arg === '--run-kind') {
       args.runKind = requiredValue(argv, ++index, '--run-kind');
       if (!RUN_KINDS.has(args.runKind)) throw new Error('--run-kind must be final_verification, final_visual_review, or final_acceptance_review');
+    }
+    else if (arg === '--verification-scope') {
+      args.verificationScope = requiredValue(argv, ++index, '--verification-scope');
+      if (!['full', 'relevant'].includes(args.verificationScope)) {
+        throw new Error('--verification-scope must be full or relevant');
+      }
     }
     else if (arg === '--workspace') args.workspace = requiredValue(argv, ++index, '--workspace');
     else if (arg === '--workspace-ref') args.workspaceRef = requiredValue(argv, ++index, '--workspace-ref');
@@ -446,6 +476,9 @@ function parseArgs(argv) {
   }
   if (args.runKind && args.command !== 'start') {
     throw new Error('--run-kind is only supported with start');
+  }
+  if (args.verificationScope && (args.command !== 'start' || args.runKind !== 'final_verification')) {
+    throw new Error('--verification-scope is only supported when starting a final_verification run');
   }
   const hasVisualFeedbackDetails = args.visualFeedbackNote !== null || args.visualFeedbackConcerns.length > 0;
   if ((args.visualFeedbackVerdict || hasVisualFeedbackDetails) && args.command !== 'record') {
@@ -1166,6 +1199,7 @@ function pruneIndexedRunEvidenceLocked(runsDir, options = {}) {
   }
 
   const selectedIds = new Set(selected.map((entry) => entry.runId));
+  const preexistingOrphanRefs = new Set(orphanRunEvidenceRefs(runsDir, index));
   const evidencePaths = [];
   for (const entry of selected) {
     const runRef = indexedRunRef(runsDir, entry.runId, index);
@@ -1202,6 +1236,23 @@ function pruneIndexedRunEvidenceLocked(runsDir, options = {}) {
     delete nextIndex.retrospective;
   }
   writeIndex(runsDir, nextIndex);
+  for (const reference of orphanRunEvidenceRefs(runsDir, nextIndex)) {
+    if (
+      preexistingOrphanRefs.has(reference)
+      || !reference.includes('/envelopes/')
+    ) continue;
+    const envelopePath = path.resolve(runsDir, reference);
+    const relative = path.relative(path.resolve(runsDir), envelopePath);
+    if (
+      !relative
+      || relative === '..'
+      || relative.startsWith(`..${path.sep}`)
+      || path.isAbsolute(relative)
+    ) {
+      throw new Error(`execution envelope path escapes runs directory: ${JSON.stringify(reference)}`);
+    }
+    if (existsSync(envelopePath)) evidencePaths.push(envelopePath);
+  }
   const cleanupFailures = [];
   for (const evidencePath of evidencePaths) {
     try {
@@ -1274,14 +1325,88 @@ function gcProjectConfig(args, runsDir) {
   return {};
 }
 
-function gcKeepFinalRunIds(entries) {
-  const latestByTaskKind = new Map();
-  for (const entry of entries) {
-    if (entry.status === 'started') continue;
-    const key = JSON.stringify([entry.iterationId, entry.taskId, entry.runKind ?? null]);
-    latestByTaskKind.set(key, entry.runId);
+function gcRunVerificationScope(run) {
+  if (run?.verificationScope === 'full' || run?.verificationScope === 'relevant') {
+    return run.verificationScope;
   }
-  return [...latestByTaskKind.values()];
+  const scopes = new Set((run?.verification ?? []).map((item) => item.scope));
+  return scopes.has('related') && !scopes.has('full') ? 'relevant' : 'full';
+}
+
+function gcRunVerificationRisk(run) {
+  switch (classifyVerificationProfile([run]).id) {
+    case 'docs_metadata': return 0;
+    case 'isolated_code': return 1;
+    default: return 2;
+  }
+}
+
+function gcTerminalTimestamp(entry, run) {
+  const candidates = [run?.finishedAt, entry?.finishedAt, run?.updatedAt]
+    .map((value) => Date.parse(value ?? ''))
+    .filter(Number.isFinite);
+  return candidates.length ? Math.max(...candidates) : Number.NEGATIVE_INFINITY;
+}
+
+function gcKeepFinalRunIds(runsDir, index, entries) {
+  const grouped = new Map();
+  for (const [entryOrder, entry] of entries.entries()) {
+    if (entry.status === 'started') continue;
+    let run = null;
+    try {
+      run = loadJson(path.join(runsDir, indexedRunRef(runsDir, entry.runId, index)));
+    } catch {
+      // The latest index entry remains recoverable even if its record needs repair.
+    }
+    const key = JSON.stringify([entry.iterationId, entry.taskId, entry.runKind ?? null]);
+    const values = grouped.get(key) ?? [];
+    values.push({ entry, run, entryOrder });
+    grouped.set(key, values);
+  }
+
+  const keep = new Set();
+  for (const unsortedValues of grouped.values()) {
+    const values = [...unsortedValues].sort((left, right) => (
+      gcTerminalTimestamp(left.entry, left.run)
+        - gcTerminalTimestamp(right.entry, right.run)
+      || left.entryOrder - right.entryOrder
+      || left.entry.runId.localeCompare(right.entry.runId)
+    ));
+    const latest = values.at(-1);
+    keep.add(latest.entry.runId);
+    if (!latest.run) continue;
+
+    if (latest.run.runKind === 'final_verification') {
+      if (gcRunVerificationScope(latest.run) === 'relevant') {
+        const priorFull = [...values].reverse().find(({ run }) => (
+          run?.status !== 'started'
+          && gcRunVerificationScope(run) === 'full'
+        ));
+        if (priorFull) keep.add(priorFull.entry.runId);
+      }
+      continue;
+    }
+    if (latest.run.runKind) continue;
+
+    const currentRisk = latest.run.status === 'finished'
+      ? gcRunVerificationRisk(latest.run)
+      : -1;
+    let anchor = null;
+    let anchorRisk = currentRisk;
+    for (const candidate of values.slice(0, -1)) {
+      if (
+        !candidate.run
+        || !['finished', 'failed', 'blocked'].includes(candidate.run.status)
+      ) continue;
+      const candidateRisk = gcRunVerificationRisk(candidate.run);
+      if (candidateRisk >= anchorRisk && candidateRisk > currentRisk) {
+        anchor = candidate;
+        anchorRisk = candidateRisk;
+      }
+    }
+    if (anchor) keep.add(anchor.entry.runId);
+  }
+  return [...keep];
 }
 
 function gcOrphanRefs(runsDir, index, iterationId = null) {
@@ -1391,7 +1516,7 @@ function gcRunEvidence(args) {
         `cannot gc active run evidence; finish, block, or restore the index for started run(s): ${startedRunIds.join(', ')}`,
       );
     }
-    const keepRunIds = args.keepFinal ? gcKeepFinalRunIds(scoped) : [];
+    const keepRunIds = args.keepFinal ? gcKeepFinalRunIds(runsDir, index, scoped) : [];
     const keepSet = new Set(keepRunIds);
     const selectedRunIds = scoped
       .filter((entry) => !keepSet.has(entry.runId))
@@ -1521,7 +1646,7 @@ function completeRunWriteTransaction(runsDir, transaction) {
   unlinkSync(runWriteJournalPath(runsDir));
 }
 
-function recoverPendingRunWrite(runsDir) {
+export function recoverPendingRunWrite(runsDir) {
   const journalPath = runWriteJournalPath(runsDir);
   if (!existsSync(journalPath)) return false;
   completeRunWriteTransaction(runsDir, JSON.parse(readFileSync(journalPath, 'utf8')));
@@ -1859,17 +1984,22 @@ function prepareIsolation(args, workspacePath, runId, taskId) {
   return isolation;
 }
 
-function projectConfigCandidates(runsDir, run, workspacePath) {
-  return uniqueStrings([
-    path.join(path.dirname(runsDir), 'project.config.json'),
-    path.join(workspacePath, '.plan2agent', 'project.config.json'),
-    path.join(process.cwd(), '.plan2agent', 'project.config.json'),
-    path.join(path.dirname(run.taskGraphRef), '..', 'project.config.json'),
-  ]);
-}
-
-function loadProjectConfigWithPath(runsDir, run, workspacePath) {
-  const candidates = projectConfigCandidates(runsDir, run, workspacePath);
+function loadProjectConfigWithPath(runsDir, run, workspacePath, source = null) {
+  const runArtifactRoot = path.dirname(path.resolve(runsDir));
+  const referenceRoot = source?.artifactRoot ?? runArtifactRoot;
+  const graphPath = source?.graphPath ?? (
+    typeof run.taskGraphRef === 'string' && run.taskGraphRef.trim()
+      ? path.resolve(referenceRoot, run.taskGraphRef)
+      : null
+  );
+  const candidates = projectConfigCandidatePaths({
+    workspacePath,
+    projectRoot: ROOT,
+    artifactRoot: (source?.sourceLayout ?? run.sourceLayout) === 'graph'
+      ? runArtifactRoot
+      : referenceRoot,
+    graphPath,
+  });
   for (const candidate of candidates) {
     if (!existsSync(candidate)) continue;
     try {
@@ -1884,8 +2014,31 @@ function loadProjectConfigWithPath(runsDir, run, workspacePath) {
   return { config: {}, path: fallbackPath };
 }
 
+function selectedProjectConfigLocation(runsDir, run, workspacePath, source = null) {
+  const loaded = loadProjectConfigWithPath(runsDir, run, workspacePath, source);
+  if (!loaded.path || !existsSync(loaded.path) || !lstatSync(loaded.path).isFile()) {
+    return { ...loaded, workspaceRelativePath: null, outsideWorkspace: false };
+  }
+  const workspaceRoot = realpathSync(path.resolve(workspacePath));
+  const configPath = realpathSync(loaded.path);
+  const relative = path.relative(workspaceRoot, configPath);
+  const outsideWorkspace = relative === '..'
+    || relative.startsWith(`..${path.sep}`)
+    || path.isAbsolute(relative);
+  return {
+    ...loaded,
+    workspaceRelativePath: outsideWorkspace ? null : normalizePath(relative),
+    outsideWorkspace,
+  };
+}
+
 function loadStartProjectConfig(runsDir, source, workspacePath) {
-  return loadProjectConfigWithPath(runsDir, { taskGraphRef: source.taskGraphRef }, workspacePath).config;
+  return loadProjectConfigWithPath(
+    runsDir,
+    { taskGraphRef: source.taskGraphRef, sourceLayout: source.sourceLayout },
+    workspacePath,
+    source,
+  ).config;
 }
 
 function setOptionValue(argv, option, value) {
@@ -1914,16 +2067,24 @@ function commandDisplayFromArgv(argv) {
 
 function normalizedWorkspaceRelativePath(workspacePath, candidate) {
   if (typeof candidate !== 'string' || !candidate.trim()) {
-    throw new Error('related verification changed files must be non-blank workspace-relative paths');
+    throw new Error('changed files must be non-blank workspace-relative paths');
   }
   if (candidate.includes('\0')) {
-    throw new Error('related verification changed files must not contain NUL');
+    throw new Error('changed files must not contain NUL');
   }
-  if (path.isAbsolute(candidate) || path.win32.isAbsolute(candidate)) {
-    throw new Error(`related verification changed file must be workspace-relative: ${JSON.stringify(candidate)}`);
+  if (
+    path.isAbsolute(candidate)
+    || path.win32.isAbsolute(candidate)
+    || /^[A-Za-z]:/u.test(candidate)
+  ) {
+    throw new Error(`changed file must be workspace-relative: ${JSON.stringify(candidate)}`);
+  }
+  const portableCandidate = candidate.replaceAll('\\', '/');
+  if (portableCandidate.split('/').includes('..')) {
+    throw new Error(`changed file escapes the workspace because '..' is not allowed: ${JSON.stringify(candidate)}`);
   }
   const workspaceRoot = path.resolve(workspacePath);
-  const resolved = path.resolve(workspaceRoot, candidate);
+  const resolved = path.resolve(workspaceRoot, ...portableCandidate.split('/'));
   const relative = path.relative(workspaceRoot, resolved);
   if (
     !relative
@@ -1931,15 +2092,51 @@ function normalizedWorkspaceRelativePath(workspacePath, candidate) {
     || relative.startsWith(`..${path.sep}`)
     || path.isAbsolute(relative)
   ) {
-    throw new Error(`related verification changed file escapes the workspace: ${JSON.stringify(candidate)}`);
+    throw new Error(`changed file escapes the workspace: ${JSON.stringify(candidate)}`);
+  }
+  let existingAncestor = resolved;
+  while (!existsSync(existingAncestor) && path.dirname(existingAncestor) !== existingAncestor) {
+    existingAncestor = path.dirname(existingAncestor);
+  }
+  const workspaceRealPath = realpathSync(workspaceRoot);
+  const ancestorRealPath = realpathSync(existingAncestor);
+  const realRelative = path.relative(workspaceRealPath, ancestorRealPath);
+  if (
+    realRelative === '..'
+    || realRelative.startsWith(`..${path.sep}`)
+    || path.isAbsolute(realRelative)
+  ) {
+    throw new Error(`changed file resolves outside the workspace: ${JSON.stringify(candidate)}`);
   }
   return normalizePath(relative);
 }
 
-export function normalizeRelatedChangedFiles(workspacePath, changedFiles) {
-  const normalized = uniquePathStrings(
-    changedFiles.map((candidate) => normalizedWorkspaceRelativePath(workspacePath, candidate)),
+export function normalizeChangedFiles(workspacePath, changedFiles) {
+  return uniquePathStrings(
+    (Array.isArray(changedFiles) ? changedFiles : [])
+      .map((candidate) => normalizedWorkspaceRelativePath(workspacePath, candidate)),
   );
+}
+
+function normalizeWorkspaceLocalRelatedFiles(workspacePath, changedFiles) {
+  const normalized = [];
+  for (const candidate of Array.isArray(changedFiles) ? changedFiles : []) {
+    try {
+      normalized.push(normalizedWorkspaceRelativePath(workspacePath, candidate));
+    } catch (error) {
+      const portableCandidate = String(candidate ?? '').replaceAll('\\', '/').replace(/^\.\//u, '');
+      if (
+        portableCandidate.startsWith('.plan2agent/')
+        && /resolves outside the workspace/u.test(error instanceof Error ? error.message : '')
+      ) continue;
+      throw error;
+    }
+  }
+  return uniquePathStrings(normalized);
+}
+
+export function normalizeRelatedChangedFiles(workspacePath, changedFiles) {
+  const normalized = normalizeChangedFiles(workspacePath, changedFiles);
   if (!normalized.length) {
     throw new Error(
       'related verification requires at least one changed file from --changed-file, the existing run, or --collect-git; run configured full verification instead',
@@ -1970,10 +2167,33 @@ function verificationWorkspaceRevision(runsDir, run, source, workspacePath) {
   );
 }
 
-function attachVerificationRevision(results, revision) {
+function verificationProductRevision(runsDir, run, source, workspacePath) {
+  return workspaceRevisionSha256(
+    workspacePath,
+    [
+      ...workspaceRevisionExcludedPathsForRun(runsDir, run, {
+        artifactRoot: source?.artifactRoot,
+        graphPath: source?.graphPath,
+        workspacePath,
+      }),
+      ...productRevisionExcludedPaths(workspacePath),
+    ],
+  );
+}
+
+function verificationRevisions(runsDir, run, source, workspacePath) {
+  const git = captureGitState(workspacePath);
+  return {
+    workspaceRevisionSha256: verificationWorkspaceRevision(runsDir, run, source, workspacePath),
+    productRevisionSha256: verificationProductRevision(runsDir, run, source, workspacePath),
+    ...(git?.headSha ? { gitHeadSha: git.headSha } : {}),
+  };
+}
+
+function attachVerificationRevision(results, revisions) {
   return results.map((result) => ({
     ...result,
-    workspaceRevisionSha256: revision,
+    ...revisions,
   }));
 }
 
@@ -2156,9 +2376,20 @@ export function verificationSpecs(args, config, changedFiles = []) {
   if (args.related) {
     const configured = relatedVerificationCommands(config);
     if (!configured.length) {
-      throw new Error(
-        'related verification is not configured; add structured relatedVerification argv commands to .plan2agent/project.config.json or run configured full verification',
-      );
+      const argv = [
+        process.execPath,
+        path.join(P2A_PATHS.scriptsDir, 'p2a_related_files.mjs'),
+        ...changedFiles,
+      ];
+      return [{
+        type: 'custom',
+        argv,
+        command: commandDisplayFromArgv(argv),
+        source: 'command',
+        scope: 'related',
+        selectedFileCount: changedFiles.length,
+        selectedFiles: [...changedFiles],
+      }];
     }
     return configured.map((request) => {
       const argv = [
@@ -2172,6 +2403,7 @@ export function verificationSpecs(args, config, changedFiles = []) {
         source: 'config',
         scope: 'related',
         selectedFileCount: changedFiles.length,
+        selectedFiles: [...changedFiles],
       };
     });
   }
@@ -2187,19 +2419,11 @@ export function verificationSpecs(args, config, changedFiles = []) {
   return requests.map((request) => {
     const command = request.command ?? configuredCommand(config, request.type);
     if (!command) {
-      return {
-        type: request.type,
-        command: `<missing ${request.type} command>`,
-        status: 'skipped',
-        exitCode: null,
-        durationMs: null,
-        startedAt: null,
-        finishedAt: null,
-        stdoutTail: null,
-        stderrTail: `${request.type} command is not configured`,
-        source: 'config',
-        scope: 'full',
-      };
+      throw new Error(
+        `${request.type} verification was requested but no ${request.type} command is configured. `
+        + `Pass --${request.type}-command <cmd> --save-config, or omit --${request.type}. `
+        + 'No verification command was executed and no evidence was recorded.',
+      );
     }
     return { ...request, command, scope: 'full' };
   });
@@ -2228,8 +2452,8 @@ function configRequestsNeedDetection(args, config) {
   return args.verifyRequests.some((request) => request.source === 'config' && !configuredCommand(config, request.type));
 }
 
-function prepareProjectConfigForVerification(args, runsDir, run, workspacePath) {
-  const loaded = loadProjectConfigWithPath(runsDir, run, workspacePath);
+function prepareProjectConfigForVerification(args, runsDir, run, workspacePath, source = null) {
+  const loaded = loadProjectConfigWithPath(runsDir, run, workspacePath, source);
   let config = loaded.config;
   const saved = [];
 
@@ -2282,6 +2506,11 @@ export function runVerificationCommand(spec, workspacePath, timeoutMs, options =
   const stderrTail = timedOut
     ? tail([result.stderr, result.error?.message, `verification command timed out after ${timeoutMs}ms`].filter(Boolean).join('\n'))
     : tail([result.stderr, result.error?.message].filter(Boolean).join('\n'));
+  const relatedContentSha256 = spec.scope === 'related'
+    && Array.isArray(spec.selectedFiles)
+    && spec.selectedFiles.length
+    ? relatedFilesSha256(spec.selectedFiles, { workspacePath })
+    : null;
   return {
     type: spec.type,
     command,
@@ -2296,6 +2525,7 @@ export function runVerificationCommand(spec, workspacePath, timeoutMs, options =
     scope: spec.scope ?? 'full',
     ...(structuredArgv ? { argv: structuredArgv } : {}),
     ...(spec.selectedFileCount !== undefined ? { selectedFileCount: spec.selectedFileCount } : {}),
+    ...(relatedContentSha256 ? { relatedFilesSha256: relatedContentSha256 } : {}),
     ...(unavailable.status ? { failureReason: unavailable.reason, failureHint: unavailable.hint } : {}),
     ...(normalized.normalized ? { originalCommand: spec.command, normalizedCommand: command } : {}),
   };
@@ -2382,7 +2612,7 @@ export function runVerificationCommands(specs, workspacePath, timeoutMs, options
   return specs.map((spec) => runVerificationCommand(spec, workspacePath, timeoutMs, options));
 }
 
-function collectGitChangedFiles(workspacePath) {
+export function collectGitChangedFiles(workspacePath) {
   const result = gitCommandResult(['status', '--porcelain=v1', '-z', '--untracked-files=all'], workspacePath);
   if (result.status !== 0) {
     throw new Error(`git status failed while collecting changed files: ${gitResultToTail(result)}`);
@@ -2395,9 +2625,30 @@ function collectGitChangedFiles(workspacePath) {
     const status = record.slice(0, 2);
     const filePath = record.slice(3);
     if (filePath) changedFiles.push(filePath);
-    if (status.includes('R') || status.includes('C')) index += 1;
+    if (status.includes('R') || status.includes('C')) {
+      const previousPath = records[index + 1];
+      if (previousPath) changedFiles.push(previousPath);
+      index += 1;
+    }
   }
-  return changedFiles;
+  return normalizeChangedFiles(workspacePath, changedFiles);
+}
+
+export function collectGitChangedFilesSince(workspacePath, baseRef) {
+  if (typeof baseRef !== 'string' || !/^[a-f0-9]{40,64}$/u.test(baseRef)) {
+    throw new Error(`Git comparison base must be a full commit SHA, got ${JSON.stringify(baseRef)}`);
+  }
+  const result = gitCommandResult(
+    ['diff', '--name-only', '-z', '--no-renames', baseRef, 'HEAD'],
+    workspacePath,
+  );
+  if (result.status !== 0) {
+    throw new Error(`git diff failed while collecting committed changed files: ${gitResultToTail(result)}`);
+  }
+  return normalizeChangedFiles(
+    workspacePath,
+    result.stdout.split('\0').filter(Boolean),
+  );
 }
 
 function hasFailureOptions(args) {
@@ -2425,67 +2676,43 @@ function buildFailure(args, status) {
   };
 }
 
-function deriveFinishStatus(run, requestedStatus) {
+function deriveFinishStatus(run, requestedStatus, verificationOptions = {}) {
   if (requestedStatus) return requestedStatus;
-  return run.verification.some((item) => item.status === 'failed') ? 'failed' : 'finished';
+  return latestVerificationAttempts(run.verification, verificationOptions)
+    .some((item) => item.status === 'failed' || item.status === 'unavailable')
+    ? 'failed'
+    : 'finished';
 }
 
-function failedVerificationItems(run) {
-  return run.verification.filter((item) => item.status === 'failed');
-}
-
-function incompleteVerificationItems(run) {
-  return run.verification.filter((item) => item.status === 'skipped' || item.status === 'not_run' || item.status === 'unavailable');
-}
-
-function executedPassedVerificationItems(run) {
-  return run.verification.filter((item) => item.status === 'passed'
-    && (item.source === 'config' || item.source === 'command')
-    && item.exitCode === 0);
-}
-
-function executedFullVerificationItems(run, revision = null) {
-  return executedPassedVerificationItems(run).filter((item) => (
+function executedFullVerificationItems(run, verificationOptions = {}) {
+  return latestExecutedPassedVerificationItems(run.verification, verificationOptions).filter((item) => (
     item.type !== 'custom'
     && item.scope === 'full'
-    && (!revision || item.workspaceRevisionSha256 === revision)
   ));
 }
 
-function verificationCommandIdentity(item) {
-  return typeof item?.originalCommand === 'string' && item.originalCommand.trim()
-    ? item.originalCommand.trim()
-    : (typeof item?.command === 'string' ? item.command.trim() : '');
-}
-
-function configuredFullVerificationProfile(config) {
-  return ['test', 'lint', 'typecheck'].flatMap((type) => {
-    const command = configuredCommand(config, type);
-    return typeof command === 'string' && command.trim()
-      ? [{ type, command: command.trim() }]
-      : [];
-  });
-}
-
-function missingConfiguredFullVerification(run, revision, config) {
-  const passed = executedFullVerificationItems(run, revision);
-  return configuredFullVerificationProfile(config).filter((configured) => !passed.some((item) => (
-    item.type === configured.type
-    && verificationCommandIdentity(item) === configured.command
-  )));
-}
-
-function structuredDetailHasValue(detail, fields) {
-  if (!detail || typeof detail !== 'object' || Array.isArray(detail)) return false;
-  return fields.some((field) => Array.isArray(detail[field]) && detail[field].some((value) => typeof value === 'string' && value.trim()));
-}
-
-function missingRequiredFailureDetails(run) {
-  const missing = [];
-  if (!structuredDetailHasValue(run.reproduction, ['steps', 'commands', 'notes'])) missing.push('reproduction');
-  if (!structuredDetailHasValue(run.localization, ['findings', 'files'])) missing.push('localization');
-  if (!structuredDetailHasValue(run.guard, ['checks', 'notes'])) missing.push('guard');
-  return missing;
+function ensureEnvironmentFailureDetails(run) {
+  if (!['environment_failure', 'missing_dependency'].includes(run.failure?.class)) return;
+  const latestProblem = latestVerificationAttempts(run.verification)
+    .filter((item) => item.status === 'unavailable' || item.status === 'failed')
+    .at(-1);
+  if (latestProblem) {
+    run.reproduction ??= { steps: [], commands: [], notes: [] };
+    if (latestProblem.command && !run.reproduction.commands.includes(latestProblem.command)) {
+      run.reproduction.commands.push(latestProblem.command);
+    }
+    const detail = latestProblem.failureReason
+      ?? latestProblem.stderrTail
+      ?? `${latestProblem.type} verification ended ${latestProblem.status}`;
+    if (detail && !run.reproduction.notes.includes(detail)) run.reproduction.notes.push(detail);
+  }
+  if (structuredDetailHasValue(run.reproduction, ['steps', 'commands', 'notes'])) {
+    run.guard ??= { checks: [], notes: [] };
+    const retryCondition = run.failure.class === 'environment_failure'
+      ? 'Retry after the recorded command can start in the corrected execution environment.'
+      : 'Retry after the recorded dependency is available inside the approved project boundary.';
+    if (!run.guard.notes.includes(retryCondition)) run.guard.notes.push(retryCondition);
+  }
 }
 
 function assertFailedRunStructuredDetails(run, monitorResult = null) {
@@ -2497,28 +2724,158 @@ function assertFailedRunStructuredDetails(run, monitorResult = null) {
     : '';
   throw new Error([
     `${monitorContext}failed/blocked run requires structured debug detail: ${missing.join(', ')}`,
-    'Add --repro-step/--repro-command/--repro-note, --localization/--localized-file, and --guard/--guard-note before finishing.',
+    `Add only the missing detail required for failure class ${run.failure?.class ?? 'unknown'} before finishing.`,
   ].join('. '));
 }
 
-function assertFinishedRunGuard(run) {
+function assertFinishedRunGuard(run, verificationOptions = {}, configuredObligations = []) {
   if (run.status !== 'finished') return;
   if (run.verification.length === 0) {
     throw new Error('finished run requires verification evidence. Record a passed verification or finish as failed/blocked with --failure-class.');
   }
-  const failed = failedVerificationItems(run);
+  const failed = latestFailedVerificationItems(run.verification, verificationOptions);
   if (failed.length) {
     const summary = failed.map((item) => `${item.type}:${item.command}`).join(', ');
-    throw new Error(`finished run cannot include failed verification: ${summary}. Finish this run as failed/blocked with --failure-class, or start a new run with passed verification evidence.`);
+    throw new Error(`finished run has unresolved latest verification failure: ${summary}. Correct the problem and rerun the same command in this run, or explicitly finish as failed/blocked.`);
   }
-  const incomplete = incompleteVerificationItems(run);
+  const incomplete = latestIncompleteVerificationItems(run.verification, verificationOptions);
   if (incomplete.length) {
     const summary = incomplete.map((item) => `${item.type}:${item.status}`).join(', ');
-    throw new Error(`finished run cannot include incomplete verification: ${summary}. Finish this run as failed/blocked with --failure-class, or start a new run with passed verification evidence.`);
+    throw new Error(`finished run has unresolved latest incomplete verification: ${summary}. Correct the environment and rerun the same command in this run, or explicitly finish as failed/blocked.`);
   }
-  if (executedPassedVerificationItems(run).length === 0) {
-    throw new Error('finished run requires at least one executed passed verification with source config|command and exitCode 0. Manual verification records are not sufficient.');
+  if (latestExecutedPassedVerificationItems(run.verification, verificationOptions).length === 0) {
+    throw new Error('finished run requires at least one executed passed verification for the current workspace revision with source config|command and exitCode 0. Manual or stale verification records are not sufficient.');
   }
+  assertVerificationObligations(run.verification, configuredObligations, verificationOptions);
+}
+
+function verificationProfileForRun(source, run) {
+  const prospectiveRun = { ...run, status: 'finished' };
+  if (!run.runKind || !source?.artifactRoot || source.sourceLayout !== 'iteration') {
+    return classifyVerificationProfile([prospectiveRun]);
+  }
+  const currentRuns = loadRunsForArtifactRoot(source.artifactRoot, {
+    iterationId: run.iterationId,
+  }).filter((candidate) => candidate.runId !== run.runId);
+  currentRuns.push(prospectiveRun);
+  return classifyVerificationProfile(currentRuns);
+}
+
+export function finalRunRelatedChangedFiles(source, run, workspacePath) {
+  if (!run.runKind || !source?.artifactRoot || source.sourceLayout !== 'iteration') return [];
+  if (run.verificationScope === 'relevant') {
+    const currentRuns = loadRunsForArtifactRoot(source.artifactRoot, {
+      iterationId: run.iterationId,
+    });
+    const recordedDocs = currentRuns
+      .filter((candidate) => (
+        !candidate.runKind
+        && candidate.status === 'finished'
+        && runMatchesSourceContext(candidate, source)
+      ))
+      .flatMap((candidate) => candidate.changedFiles)
+      .filter(isDocsMetadataPath);
+    let gitDocs = [];
+    let gitStatusAvailable = false;
+    try {
+      gitDocs = collectGitChangedFiles(workspacePath).filter(isDocsMetadataPath);
+      gitStatusAvailable = true;
+    } catch {
+      // Non-Git workspaces fall back to the bounded documentation file scan.
+    }
+    let committedDocs = [];
+    const currentWorkspaceRevision = verificationWorkspaceRevision(
+      source.runsDir,
+      run,
+      source,
+      workspacePath,
+    );
+    const currentProductRevision = verificationProductRevision(
+      source.runsDir,
+      run,
+      source,
+      workspacePath,
+    );
+    const fullEvidence = [...currentRuns].reverse().flatMap((candidate) => (
+      candidate.status === 'finished'
+      && runMatchesSourceContext(candidate, source)
+        ? [...(candidate.verification ?? [])].reverse().map((item) => ({ candidate, item }))
+        : []
+    )).find(({ candidate, item }) => (
+      item.scope === 'full'
+      && item.type !== 'custom'
+      && item.status === 'passed'
+      && item.exitCode === 0
+      && (item.source === 'config' || item.source === 'command')
+      && (
+        item.workspaceRevisionSha256 === currentWorkspaceRevision
+        || item.productRevisionSha256 === currentProductRevision
+      )
+    ));
+    const implementationBaselineRun = [...currentRuns].reverse().find((candidate) => (
+      !candidate.runKind
+      && candidate.status === 'finished'
+      && runMatchesSourceContext(candidate, source)
+      && candidate.git?.headSha
+    ));
+    const baselineGitHeadSha = fullEvidence?.item.gitHeadSha
+      ?? fullEvidence?.candidate.git?.headSha
+      ?? implementationBaselineRun?.git?.headSha
+      ?? null;
+    let gitHistoryAvailable = false;
+    if (baselineGitHeadSha) {
+      try {
+        committedDocs = collectGitChangedFilesSince(
+          workspacePath,
+          baselineGitHeadSha,
+        ).filter(isDocsMetadataPath);
+        gitHistoryAvailable = true;
+      } catch {
+        // Missing Git history is handled by recorded paths or the bounded scan.
+      }
+    }
+    const selected = [
+      ...recordedDocs,
+      ...gitDocs,
+      ...committedDocs,
+      ...(fullEvidence?.candidate.docsMetadataBaseline ?? []),
+    ];
+    const selectedConfig = selectedProjectConfigLocation(
+      source.runsDir,
+      run,
+      workspacePath,
+      source,
+    );
+    if (selectedConfig.workspaceRelativePath) {
+      selected.push(selectedConfig.workspaceRelativePath);
+    }
+    if (!gitStatusAvailable || !gitHistoryAvailable) {
+      selected.push(...docsMetadataFiles(workspacePath));
+    }
+    return normalizeWorkspaceLocalRelatedFiles(
+      workspacePath,
+      selected.length ? selected : docsMetadataFiles(workspacePath),
+    );
+  }
+  return normalizeChangedFiles(
+    workspacePath,
+    loadRunsForArtifactRoot(source.artifactRoot, { iterationId: run.iterationId })
+      .filter((candidate) => (
+        !candidate.runKind
+        && candidate.status === 'finished'
+        && runMatchesSourceContext(candidate, source)
+      ))
+      .flatMap((candidate) => candidate.changedFiles),
+  );
+}
+
+function verificationOptionsForProfile(profile, workspaceRevision, productRevision) {
+  return profile.id !== 'docs_metadata'
+    ? {
+        workspaceRevisionSha256: workspaceRevision,
+        productRevisionSha256: productRevision,
+      }
+    : { workspaceRevisionSha256: workspaceRevision };
 }
 
 function executionStrategy(source, runKind = null) {
@@ -2714,6 +3071,7 @@ function startRun(args) {
       currentDevelopmentContractSha256: source.currentDevelopmentContractSha256,
     } : {}),
     ...(args.runKind ? { runKind: args.runKind } : {}),
+    ...(args.verificationScope ? { verificationScope: args.verificationScope } : {}),
     taskContractSha256: taskContractSha256(task),
     mode: strategy.mode,
     selectionRationale: strategy.selectionRationale,
@@ -2731,7 +3089,7 @@ function startRun(args) {
     startedAt: now.toISOString(),
     updatedAt: now.toISOString(),
     finishedAt: null,
-    changedFiles: uniquePathStrings(args.changedFiles),
+    changedFiles: normalizeChangedFiles(workspacePath, args.changedFiles),
     verification: args.manualVerification,
     notes: uniqueStrings(args.notes),
     usage: [],
@@ -2740,6 +3098,12 @@ function startRun(args) {
     ...(visualReview ? { visualReview } : {}),
     ...(acceptanceReview ? { acceptanceReview } : {}),
   };
+  run.startProductRevisionSha256 = verificationProductRevision(
+    runsDir,
+    run,
+    source,
+    workspacePath,
+  );
   withRunStoreLocks([runsDir], () => {
     assertNoPendingRunMigration(runsDir);
     if (allocation.reservationToken
@@ -2798,7 +3162,11 @@ function recordRun(args) {
   const runsDir = source?.runsDir ?? resolveRunsDir(args);
   const { run, expectedRun } = readRunForUpdate(runsDir, args.runId);
   if (source) assertRunMatchesSourceContext(run, source);
-  run.changedFiles = uniquePathStrings([...run.changedFiles, ...args.changedFiles]);
+  if (args.changedFiles.length) {
+    const workspacePath = path.resolve(args.workspace ?? run.workspacePath);
+    assertDirectory(workspacePath, 'run workspace');
+    run.changedFiles = normalizeChangedFiles(workspacePath, [...run.changedFiles, ...args.changedFiles]);
+  }
   run.verification.push(...args.manualVerification);
   run.notes = uniqueStrings([...run.notes, ...args.notes]);
   appendRunTelemetry(run, args);
@@ -2837,36 +3205,87 @@ function verifyRun(args) {
   }
   const workspacePath = args.workspace ? path.resolve(args.workspace) : path.resolve(run.workspacePath);
   assertDirectory(workspacePath, 'run workspace');
-  let relatedChangedFiles = [];
-  if (args.related) {
-    const requestedChangedFiles = [
-      ...run.changedFiles,
-      ...args.changedFiles,
-      ...(args.collectGit ? collectGitChangedFiles(workspacePath) : []),
-    ];
-    relatedChangedFiles = normalizeRelatedChangedFiles(workspacePath, requestedChangedFiles);
-    run.changedFiles = relatedChangedFiles;
+  if (run.runKind && (args.changedFiles.length || args.collectGit)) {
+    throw new Error(`${run.runKind} verification is evidence-only and does not allow changed-file attribution`);
   }
-  const configUpdate = prepareProjectConfigForVerification(args, runsDir, run, workspacePath);
+  const currentProductRevision = verificationProductRevision(
+    runsDir,
+    run,
+    source,
+    workspacePath,
+  );
+  const detectedProductChange = !run.runKind
+    && (
+      typeof run.startProductRevisionSha256 !== 'string'
+      || run.startProductRevisionSha256 !== currentProductRevision
+    );
+  if (detectedProductChange) run.productChangeDetected = true;
+  let relatedRequested = args.related && !detectedProductChange;
+  const requestedChangedFiles = run.runKind && relatedRequested
+    ? finalRunRelatedChangedFiles(source, run, workspacePath)
+    : [
+        ...run.changedFiles,
+        ...args.changedFiles,
+        ...(args.collectGit ? collectGitChangedFiles(workspacePath) : []),
+      ];
+  if (!run.runKind) {
+    run.changedFiles = normalizeChangedFiles(workspacePath, requestedChangedFiles);
+  }
+  let relatedChangedFiles = [];
+  let externalConfigPromotedToFull = false;
+  if (relatedRequested) {
+    const selectedConfig = requestedChangedFiles.length === 0
+      ? selectedProjectConfigLocation(runsDir, run, workspacePath, source)
+      : null;
+    externalConfigPromotedToFull = Boolean(
+      run.runKind === 'final_verification'
+      && run.verificationScope === 'relevant'
+      && selectedConfig?.outsideWorkspace,
+    );
+    if (externalConfigPromotedToFull) {
+      relatedRequested = false;
+      run.verificationScope = 'full';
+    } else {
+      relatedChangedFiles = normalizeRelatedChangedFiles(workspacePath, requestedChangedFiles);
+    }
+  }
+  const verificationArgs = relatedRequested === args.related
+    ? args
+    : { ...args, related: false };
+  const configUpdate = prepareProjectConfigForVerification(
+    verificationArgs,
+    runsDir,
+    run,
+    workspacePath,
+    source,
+  );
   const config = configUpdate.config;
-  const specs = verificationSpecs(args, config, relatedChangedFiles);
+  const specs = verificationSpecs(verificationArgs, config, relatedChangedFiles);
   const timeoutMs = verificationTimeoutMs(config);
-  const revision = verificationWorkspaceRevision(runsDir, run, source, workspacePath);
+  if (specs.some((spec) => spec.scope === 'full' && spec.type !== 'custom')) {
+    // Bind deletion fallback to the files that existed at the evidence point,
+    // not to an earlier run-start snapshot that may predate implementation.
+    run.docsMetadataBaseline = docsMetadataFiles(workspacePath);
+  }
+  const revisions = verificationRevisions(runsDir, run, source, workspacePath);
   const executedResults = runVerificationCommands(specs, workspacePath, timeoutMs);
-  const results = attachVerificationRevision(executedResults, revision);
+  const results = attachVerificationRevision(executedResults, revisions);
   run.verification.push(...results);
   run.updatedAt = new Date().toISOString();
   writeRun(runsDir, run, { expectedRun });
   console.log(`Plan2Agent run verification recorded: ${run.runId}`);
+  if (detectedProductChange && args.related) {
+    console.log('- verification scope promoted to full because the product revision changed or its start baseline is unavailable');
+  }
+  if (externalConfigPromotedToFull) {
+    console.log('- verification scope promoted to full because the active project config is outside the workspace and no related files are available');
+  }
   for (const saved of configUpdate.saved) {
     console.log(`- projectConfig: saved ${saved.source} ${saved.keys.join(',')} to ${displayPath(saved.path)}`);
   }
   for (const result of results) {
     console.log(`- ${result.type}:${verificationEvidenceClass(result)}: ${result.status} (${result.command})`);
     if (result.normalizedCommand) console.log(`  normalized: ${result.originalCommand} -> ${result.normalizedCommand}`);
-    if (result.status === 'skipped' && result.source === 'config') {
-      console.log(`  hint: pass --${result.type}-command <cmd> --save-config to store a project-specific command`);
-    }
     if (result.status === 'unavailable') {
       console.log(`  hint: verification command was not started; check the command, launcher path, current directory, and environment. ${result.failureHint ?? ''}`.trim());
     }
@@ -2940,16 +3359,6 @@ function checkpointRun(args) {
     console.log(`Plan2Agent checkpoint already verified: ${milestone.id}`);
     return 0;
   }
-  const previousFailure = run.verification.find((item) => (
-    item.milestoneId === milestone.id
-    && (item.status === 'failed' || item.status === 'unavailable')
-  ));
-  if (previousFailure) {
-    throw new Error(
-      `checkpoint ${milestone.id} already recorded immutable ${previousFailure.status} evidence; `
-      + 'finish this run as failed or blocked, then start a new retry run',
-    );
-  }
   const previousPending = run.milestones.slice(0, milestoneIndex).find((candidate) => candidate.status !== 'verified');
   if (previousPending) {
     throw new Error(`checkpoint ${milestone.id} is out of order; verify ${previousPending.id} first`);
@@ -2957,9 +3366,9 @@ function checkpointRun(args) {
 
   const workspacePath = args.workspace ? path.resolve(args.workspace) : path.resolve(run.workspacePath);
   assertDirectory(workspacePath, 'run workspace');
-  const config = loadProjectConfigWithPath(runsDir, run, workspacePath).config;
+  const config = loadProjectConfigWithPath(runsDir, run, workspacePath, source).config;
   const timeoutMs = verificationTimeoutMs(config);
-  const revision = verificationWorkspaceRevision(runsDir, run, source, workspacePath);
+  const revisions = verificationRevisions(runsDir, run, source, workspacePath);
   const executedResults = runVerificationCommands(
     milestone.verification.map((command) => ({
       type: 'custom',
@@ -2970,9 +3379,11 @@ function checkpointRun(args) {
     workspacePath,
     timeoutMs,
   ).map((result) => ({ ...result, milestoneId: milestone.id }));
-  const results = attachVerificationRevision(executedResults, revision);
+  const results = attachVerificationRevision(executedResults, revisions);
   run.verification.push(...results);
-  const passed = results.every((result) => result.status === 'passed');
+  const passed = latestMilestoneAttempts(run.verification, milestone.id, {
+    ...revisions,
+  }).every((result) => result.status === 'passed');
   if (passed) {
     const verifiedAt = new Date().toISOString();
     milestone.status = 'verified';
@@ -3002,7 +3413,8 @@ function finishRun(args) {
   const taskSource = source ?? runOnlyTaskSource(runsDir, run);
   const task = requireTask(taskSource.graph, run.taskId);
   const currentContractSha256 = taskContractSha256(task);
-  if (run.taskContractSha256 === undefined && run.schema_version === 'p2a.run.v1') {
+  const upgradingLegacyV1 = run.taskContractSha256 === undefined && run.schema_version === 'p2a.run.v1';
+  if (upgradingLegacyV1) {
     run.schema_version = 'p2a.run.v2';
     run.taskContractSha256 = currentContractSha256;
   } else if (run.taskContractSha256 !== currentContractSha256) {
@@ -3017,14 +3429,67 @@ function finishRun(args) {
   const git = captureGitState(workspacePath);
   if (git) run.git = git;
   else delete run.git;
+  if (run.runKind && (args.changedFiles.length || args.collectGit)) {
+    throw new Error(`${run.runKind} finish is evidence-only and does not allow changed-file attribution`);
+  }
   const changedFiles = [...args.changedFiles];
   if (args.collectGit) changedFiles.push(...collectGitChangedFiles(workspacePath));
-  run.changedFiles = uniquePathStrings([...run.changedFiles, ...changedFiles]);
+  run.changedFiles = normalizeChangedFiles(workspacePath, [...run.changedFiles, ...changedFiles]);
   run.verification.push(...args.manualVerification);
   run.notes = uniqueStrings([...run.notes, ...args.notes]);
   appendRunTelemetry(run, args);
   mergeStructuredRunDetails(run, args);
-  const requestedStatus = deriveFinishStatus(run, args.status);
+  const currentVerificationRevision = verificationWorkspaceRevision(
+    runsDir,
+    run,
+    source,
+    workspacePath,
+  );
+  const currentProductRevision = verificationProductRevision(
+    runsDir,
+    run,
+    source,
+    workspacePath,
+  );
+  if (
+    !run.runKind
+    && (
+      typeof run.startProductRevisionSha256 !== 'string'
+      || run.startProductRevisionSha256 !== currentProductRevision
+    )
+  ) {
+    run.productChangeDetected = true;
+  }
+  const verificationProfile = verificationProfileForRun(source, run);
+  const relevantFinalVerification = run.runKind === 'final_verification'
+    && (
+      run.verificationScope === 'relevant'
+      || (run.verificationScope === undefined && verificationProfile.id === 'docs_metadata')
+    );
+  const verificationOptions = relevantFinalVerification
+    ? { workspaceRevisionSha256: currentVerificationRevision }
+    : verificationOptionsForProfile(
+        verificationProfile,
+        currentVerificationRevision,
+        currentProductRevision,
+      );
+  const verificationConfig = loadProjectConfigWithPath(
+    runsDir,
+    run,
+    workspacePath,
+    source ?? taskSource,
+  ).config;
+  const relevantVerification = relevantFinalVerification
+    || (verificationProfile.id === 'docs_metadata' && !run.runKind);
+  const configuredObligations = relevantVerification
+    ? configuredRelatedVerificationObligations(
+        relatedVerificationCommands(verificationConfig),
+        relevantFinalVerification
+          ? finalRunRelatedChangedFiles(source, run, workspacePath)
+          : run.changedFiles,
+      )
+    : configuredVerificationObligations(verificationConfig);
+  const requestedStatus = deriveFinishStatus(run, args.status, verificationOptions);
   const monitorSidecar = readOrchestrationSidecar(runsDir, run.runId);
   assertRunMonitorGateBinding(run, monitorSidecar);
   const monitorResult = applyMonitorGate(
@@ -3039,9 +3504,9 @@ function finishRun(args) {
   if (monitorResult) run.monitorVerdictEvidenceSha256 = monitorResult.evidenceSha256;
   if (requestedStatus === 'finished' && monitorResult && !monitorResult.accepted) {
     console.error(`monitor gate blocked finish: verdict=${monitorResult.rawVerdict ?? monitorResult.verdict}; signal=${monitorResult.verdict}; failureClass=${monitorResult.failureClass}; concerns=${monitorResult.concerns}`);
-    console.error('blocked monitor finish requires structured detail: add --repro-*/--localization*/--guard* before finishing.');
+    console.error('blocked monitor finish requires the failure class-specific --repro-*/--localization*/--guard* detail before finishing.');
   }
-  const finalStatus = deriveFinishStatus(run, args.status);
+  const finalStatus = deriveFinishStatus(run, args.status, verificationOptions);
   if (finalStatus === 'finished' && run.mode === 'planned' && run.milestones) {
     const pending = run.milestones.find((milestone) => milestone.status !== 'verified');
     if (pending) {
@@ -3053,7 +3518,7 @@ function finishRun(args) {
     : null;
   const visualReviewCutoff = new Date().toISOString();
   if (finalStatus === 'finished') {
-    let workspaceRevision = null;
+    let workspaceRevision = currentVerificationRevision;
     if (
       run.runKind === 'final_verification'
       || run.visualReview?.required
@@ -3064,39 +3529,22 @@ function finishRun(args) {
           `run ${run.runId} final review evidence must be finalized in its recorded workspacePath`,
         );
       }
-      workspaceRevision = workspaceRevisionSha256(
-        workspacePath,
-        workspaceRevisionExcludedPathsForRun(
-          runsDir,
-          run,
-          {
-            artifactRoot: taskSource.artifactRoot,
-            graphPath: taskSource.graphPath,
-            workspacePath,
-          },
-        ),
-      );
+      workspaceRevision = currentVerificationRevision;
     }
     if (
       run.runKind === 'final_verification'
-      && executedFullVerificationItems(run, workspaceRevision).length === 0
+      && (
+        relevantFinalVerification
+          ? latestExecutedPassedVerificationItems(run.verification, verificationOptions)
+              .filter((item) => item.scope === 'related').length === 0
+          : executedFullVerificationItems(run, verificationOptions).length === 0
+      )
     ) {
       throw new Error(
-        `final verification run ${run.runId} requires at least one passed configured full test/lint/typecheck command bound to the current workspace revision`,
+        relevantFinalVerification
+          ? `final verification run ${run.runId} requires at least one passed relevant command bound to the current docs/metadata workspace revision`
+          : `final verification run ${run.runId} requires at least one passed configured full test/lint/typecheck command bound to the current workspace revision`,
       );
-    }
-    if (run.runKind === 'final_verification') {
-      const config = loadProjectConfigWithPath(runsDir, run, workspacePath).config;
-      const missingConfigured = missingConfiguredFullVerification(
-        run,
-        workspaceRevision,
-        config,
-      );
-      if (missingConfigured.length) {
-        throw new Error(
-          `final verification run ${run.runId} is missing current configured full verification: ${missingConfigured.map(({ type, command }) => `${type}:${command}`).join(', ')}`,
-        );
-      }
     }
     const visualReviewEvidence = readRequiredVisualReviewEvidence(
       runsDir,
@@ -3115,7 +3563,8 @@ function finishRun(args) {
         `run ${run.runId} visual review workspace revision does not match the current workspace; recapture the evidence`,
       );
     }
-    if (workspaceRevision) run.workspaceRevisionSha256 = workspaceRevision;
+    run.workspaceRevisionSha256 = workspaceRevision;
+    run.productRevisionSha256 = currentProductRevision;
     if (visualReviewEvidence) {
       run.visualReviewEvidenceSha256 = visualReviewEvidence.reviewSha256;
     }
@@ -3125,11 +3574,18 @@ function finishRun(args) {
     }
   }
   run.status = finalStatus;
-  assertFinishedRunGuard(run);
   const failure = buildFailure(args, run.status);
-  assertFailedRunStructuredDetails(run, monitorResult);
   if (failure) run.failure = failure;
   else delete run.failure;
+  ensureEnvironmentFailureDetails(run);
+  assertFinishedRunGuard(run, verificationOptions, configuredObligations);
+  assertFailedRunStructuredDetails(run, monitorResult);
+  if (run.status === 'finished') {
+    // A successful finish may intentionally verify an integrated workspace
+    // supplied with --workspace. Persist that exact location so later direct
+    // task completion rechecks the same tree instead of the start worktree.
+    run.workspacePath = workspacePath;
+  }
   const finishedAt = new Date().toISOString();
   run.updatedAt = finishedAt;
   run.finishedAt = finishedAt;

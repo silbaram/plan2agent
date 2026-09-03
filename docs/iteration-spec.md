@@ -26,6 +26,7 @@
 | 반복 close | `p2a iteration close` | current development contract와 현재 task/run 증거만으로 close-ready를 판정해 active 반복을 `archived` metadata로 표시하고 `current-spec.json.closed_iterations`에 기록한다. 과거 composition source의 존재 여부는 close를 차단하지 않는다. |
 | archived 감사 | `p2a iteration validate` | close 시 기록한 artifact 존재 여부/hash와 현재 파일 상태를 기본 검증으로 비교한다. legacy/migration 상황은 `--skip-archive-audit`로 우회한다. |
 | 다음 반복 open | `p2a iteration open` | archived current iteration의 `current-development-contract.json`을 작은 baseline spec으로 materialize하고 새 active 반복 skeleton과 `pending_iteration`을 생성한다. legacy composition source의 존재나 정합성은 일반 open을 차단하지 않는다. |
+| 막힌 범위 교체 | `p2a iteration replace-scope` | 계속할 ready task와 started run이 없는 blocked 상태에서만 사용자 승인으로 새 planning 반복을 연다. 이전 task graph/run은 변경하거나 완료 처리하지 않고, 원본 승인 spec/intake를 새 반복의 감사 가능한 baseline snapshot으로 고정하며, 새 task graph가 승인 spec 전체를 다루도록 강제한다. 완료된 replacement를 compose할 때는 교체된 미완료 반복을 과거 Gate 문서 hydration 전에 제외한다. |
 | Gate A/B draft | `p2a iteration draft` | Gate A-only 초기 반복은 승인된 scope intake로 Gate B 초안을 만들고, baseline이 있는 반복은 먼저 delta scope를 확인받은 뒤 delta Gate B를 생성한다. |
 | Gate B 승인 반영 | `p2a iteration promote-spec` | approved active spec을 기록하고, 초기 반복처럼 baseline이 없던 경우 `effective_spec_ref`를 설정한다. |
 | agent 저작 Gate C backbone | `p2a iteration context`, `validate --stage gate-c-draft`, `promote-tasks` | task 작성용 context JSON 출력, draft task graph 검증, validator 통과 후 canonical task graph 승격을 제공한다. 상세 계약은 §10이다. |
@@ -297,9 +298,9 @@ p2a iteration validate \
   --require-close-ready
 ```
 
-`--require-close-ready`는 모든 active iteration task가 `done`인지 추가로 확인한다. 또한 canonical workspace에서 현재 `workspaceRevisionSha256`과 일치하는 configured full test/lint/typecheck 성공 증거가 있어야 한다. 변경 없는 final run의 증거뿐 아니라 canonical workspace·isolation 없음·완료 task에 결합된 일반 구현 run의 증거도 현재 `project.config.json` command identity와 정확히 같으면 재사용한다. `scope: related`, Gate supplemental `custom`, command identity 변경, 이후 source 변경으로 stale해진 증거는 거부한다. `visualImpact` task가 있으면 `p2a execute review`가 연 iteration당 하나의 canonical, 변경 없는 review-only run을 요구한다. 비UI iteration의 acceptance 기본값은 `opt_in`이다. 사용자가 `p2a execute accept`를 시작했거나 정책이 `on`이면 `final_acceptance_review` run과 실제 실행 verification에 결합된 `confirm_behavior` sidecar를 요구한다. 시작된 opt-in review는 완료될 때까지 gate로 유지된다. `off`는 이 추가 gate를 비활성화하며, 명시적 검수를 허용하려면 `opt_in`을 사용한다. 두 review 모두 canonical workspace revision과 exact sidecar digest를 봉인하며, acceptance는 각 command/source/exitCode/stdoutTail의 run evidence 일치도 재검증한다. 재사용 가능한 configured full 증거가 없을 때만 `p2a execute verify-final`이 별도 final verification run을 연다.
+`--require-close-ready`는 모든 active iteration task가 `done`인지 추가로 확인하고 변경 경로를 공통 verification profile로 분류한다. Docs/metadata는 현재 문서 revision의 관련 실행 증거를 요구한다. 단일 canonical isolated-code task는 현재 `productRevisionSha256`에 묶인 implementation full evidence를 재사용한다. 다중 product task, worktree 통합, high-risk 경로 또는 full 검증 뒤 제품 코드 변경은 현재 `workspaceRevisionSha256`의 별도 canonical final full run을 요구한다. `visualImpact` task가 있으면 `p2a execute review`가 연 iteration당 하나의 canonical, 변경 없는 review-only run을 요구한다. 비UI iteration의 acceptance 기본값은 `opt_in`이며, 사용자가 시작했거나 정책이 `on`일 때만 `confirm_behavior` sidecar를 요구한다. 시작된 review와 실제 제품 실패는 계속 fail closed한다.
 
-Close-ready는 자동 archive 권한이 아니다. 모든 필수 검증이 끝난 뒤 v2 `p2a next`는 `iteration_review_or_close_required` approval action과 구조화된 `review`/`retrospective`/`close` 옵션을 반환한다. `review`는 active iteration을 유지하고 finding 발생 시 owning done task를 reopen하는 remediation command template을 제공한다. `retrospective`는 기존 bounded 후보를 짧게 보고하고, 후보가 없으면 사용자에게 P2A 지연·오류·오라우팅·불필요한 절차가 있었는지 한 번만 묻는다. 사용자가 회고 진행을 별도로 승인하면 `action.report.path`에 관찰된 문제·사용자 영향·개선 제안·간단한 근거만 한 번 기록하며, proposal mining은 다시 별도 승인이다. 수정 run이 끝나거나 리뷰·회고가 끝나면 같은 결정으로 돌아온다. `close` 옵션 안의 정확한 close command는 사용자가 그 옵션을 명시적으로 선택한 경우에만 실행한다. 마지막 maintenance task 완료는 `p2a execute finish --maintenance` 출력에서 같은 review/retrospective/finish 선택을 한 번 제공하되, 상시 maintenance 레인에 별도 close 상태를 만들지는 않는다.
+Close-ready는 자동 archive 권한이 아니다. 모든 필수 검증이 끝난 뒤 v2 `p2a next`는 `review`/`retrospective`/`close` 옵션을 반환한다. Evidence가 최신이고 자동 신호가 없으면 close를 권장한다. `review` finding은 owning done task를 reopen하지만, 깨끗한 review는 메뉴를 반복하지 않고 종료할지 한 번만 묻는다. Retrospective와 proposal mining은 각각 별도 승인이고 건너뛰어도 close를 막지 않는다.
 
 ```bash
 p2a iteration validate \
@@ -335,11 +336,10 @@ p2a iteration close \
 ```bash
 p2a iteration open \
   --artifacts .plan2agent/artifacts/<project_id> \
-  --iteration-id <next-iter-id> \
   --idea "<change idea>"
 ```
 
-`open`은 현재 active 반복이 `close`로 archived 되었고 `current-spec.json.closed_iterations`/`last_closed_iteration`에 기록된 경우에만 새 반복 skeleton을 생성한다. `compose`는 필요하지 않다. 직전 `current-development-contract.json`에서 새 반복의 `baseline/gate-a-intake/intake.json`과 `baseline/gate-b-spec/spec.json`을 materialize하고 SHA-256을 pending state와 iteration metadata에 기록한다. 새 contract는 승인된 WEB 근거를 최대 10개까지 보존하고, 이전 contract는 stack evidence에 포함된 공식 URL만 bounded하게 복원한다. 과거 Gate 문서나 archived hash를 baseline 입력으로 읽지 않는다. 새 반복에는 `iteration.json`, `README.md`, Gate A-C 디렉터리, Gate A/B 작성 위치 안내가 생기며, `current-spec.json`은 새 active iteration과 baseline spec만 가리킨다. Gate B/C 정본이 생기기 전까지 기본 `validate`는 실패한다.
+`open`은 현재 active 반복이 `close`로 archived 되었고 `current-spec.json.closed_iterations`/`last_closed_iteration`에 기록된 경우에만 새 반복 skeleton을 생성한다. 다음 iteration id는 active id의 숫자 suffix를 증가시켜 자동 할당하고, 숫자 suffix가 없으면 `<current>-next`를 사용한다. 관리 목적으로 특정 id가 필요할 때만 `--iteration-id`를 명시한다. `compose`는 필요하지 않다. 직전 `current-development-contract.json`에서 새 반복의 `baseline/gate-a-intake/intake.json`과 `baseline/gate-b-spec/spec.json`을 materialize하고 SHA-256을 pending state와 iteration metadata에 기록한다. 새 contract는 승인된 WEB 근거를 최대 10개까지 보존하고, 이전 contract는 stack evidence에 포함된 공식 URL만 bounded하게 복원한다. 과거 Gate 문서나 archived hash를 baseline 입력으로 읽지 않는다. 새 반복에는 `iteration.json`, `README.md`, Gate A-C 디렉터리, Gate A/B 작성 위치 안내가 생기며, `current-spec.json`은 새 active iteration과 baseline spec만 가리킨다. Gate B/C 정본이 생기기 전까지 기본 `validate`는 실패한다.
 
 ```bash
 p2a iteration draft \
@@ -398,6 +398,7 @@ p2a iteration compose \
 ```
 
 `compose`는 명시적 감사·마이그레이션용 관리 명령이다. 반복 디렉터리들을 순서대로 읽어 approved + close-ready 상태인 반복을 조합하지만, 그 결과는 정상 `next/open/draft/execute`의 권한이나 선행 조건이 아니다.
+기본 실행은 close 시 기록한 archive hash를 검증해 변경된 과거 artifact를 차단한다. hash 기록이 생기기 전의 legacy 프로젝트를 관리 목적으로 조합할 때만 `--skip-archive-audit`를 명시적으로 사용할 수 있다.
 
 - `gate-b-spec/spec.json`이 존재하고 `approval: "approved"`이며 `open_decisions`가 비어 있다.
 - `gate-c-task-graph/task-graph.json`이 존재하고 모든 task가 `done`이다.

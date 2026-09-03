@@ -22,6 +22,11 @@ const RUN_ID_PATTERN = /^run-[A-Za-z0-9._-]+$/;
 const RUN_PARTITION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const UNSCOPED_RUN_PARTITION = 'unscoped';
+export const P2A_VERIFICATION_METADATA_REFS = Object.freeze([
+  '.plan2agent/constitution.json',
+  '.plan2agent/manifest.json',
+  '.plan2agent/project.config.json',
+]);
 export const RUN_SIDECAR_SUFFIXES = [
   '.orchestration.json',
   '.orchestration-runtime.json',
@@ -194,6 +199,71 @@ function hashFileInChunks(hash, filePath) {
   }
 }
 
+function workspaceVerificationMetadataPaths(workspaceRoot, requestedExclusions) {
+  const workspaceMetadataRoot = resolvedRealPath(path.join(workspaceRoot, '.plan2agent'));
+  if (requestedExclusions.some((candidate) => pathIsInside(candidate, workspaceMetadataRoot))) {
+    return [];
+  }
+  return P2A_VERIFICATION_METADATA_REFS.map((role) => ({
+    filePath: path.join(workspaceRoot, ...role.split('/')),
+    role,
+  })).filter(({ filePath }) => existsSync(filePath) && lstatSync(filePath).isFile());
+}
+
+function fallbackVerificationConfigPaths(workspaceRoot, requestedExclusions) {
+  const workspaceConfigPath = path.join(workspaceRoot, '.plan2agent', 'project.config.json');
+  if (existsSync(workspaceConfigPath) && lstatSync(workspaceConfigPath).isFile()) return [];
+  const workspaceMetadataRoot = resolvedRealPath(path.join(workspaceRoot, '.plan2agent'));
+  if (requestedExclusions.some((candidate) => pathIsInside(candidate, workspaceMetadataRoot))) {
+    return [];
+  }
+
+  const exclusionSet = new Set(requestedExclusions);
+  const iterationRoots = requestedExclusions.filter((candidate) => (
+    path.basename(path.dirname(candidate)) === 'iterations'
+  ));
+  const artifactRoots = new Set();
+  for (const candidate of requestedExclusions) {
+    if (candidate === workspaceRoot) continue;
+    if (exclusionSet.has(resolvedRealPath(path.join(candidate, 'runs')))) {
+      artifactRoots.add(candidate);
+    }
+  }
+  for (const iterationRoot of iterationRoots) {
+    const artifactRoot = path.dirname(path.dirname(iterationRoot));
+    if (exclusionSet.has(artifactRoot)) artifactRoots.add(artifactRoot);
+  }
+
+  const candidates = [];
+  for (const artifactRoot of artifactRoots) {
+    const hasBroaderExclusion = requestedExclusions.some((candidate) => (
+      candidate !== artifactRoot && pathIsInside(candidate, artifactRoot)
+    ));
+    if (hasBroaderExclusion) continue;
+    const artifactConfigPath = path.join(artifactRoot, 'project.config.json');
+    if (existsSync(artifactConfigPath) && lstatSync(artifactConfigPath).isFile()) {
+      candidates.push({
+        configPath: artifactConfigPath,
+        role: 'artifact-project-config',
+      });
+      continue;
+    }
+    const iterationConfigPath = iterationRoots
+      .filter((iterationRoot) => path.dirname(path.dirname(iterationRoot)) === artifactRoot)
+      .map((iterationRoot) => path.join(iterationRoot, 'project.config.json'))
+      .find((candidatePath) => (
+        existsSync(candidatePath) && lstatSync(candidatePath).isFile()
+      ));
+    if (iterationConfigPath) {
+      candidates.push({
+        configPath: iterationConfigPath,
+        role: 'iteration-project-config',
+      });
+    }
+  }
+  return candidates.sort((left, right) => left.role.localeCompare(right.role));
+}
+
 export function workspaceRevisionSha256(workspacePath, excludedPaths = []) {
   const workspaceRoot = realpathSync(path.resolve(workspacePath));
   const requestedExclusions = excludedPaths
@@ -222,9 +292,32 @@ export function workspaceRevisionSha256(workspacePath, excludedPaths = []) {
     'proposals',
   ]);
   const ignoredEntryNames = new Set(['.git', '.plan2agent', 'node_modules']);
-  const legacyRootControlEntries = new Set(['current-spec.json', 'status.md', 'iteration.json']);
+  const legacyRootControlEntries = new Set([
+    'current-spec.json',
+    'decisions.jsonl',
+    'status.md',
+    'iteration.json',
+  ]);
   const hash = createHash('sha256');
   hash.update('p2a.workspace_revision.v1\0');
+  for (const { filePath, role } of workspaceVerificationMetadataPaths(
+    workspaceRoot,
+    requestedExclusions,
+  )) {
+    const stat = lstatSync(filePath);
+    hash.update(`verification-metadata\0${role}\0${stat.mode & 0o111}\0${stat.size}\0`);
+    hashFileInChunks(hash, filePath);
+    hash.update('\0');
+  }
+  for (const { configPath, role } of fallbackVerificationConfigPaths(
+    workspaceRoot,
+    requestedExclusions,
+  )) {
+    const stat = lstatSync(configPath);
+    hash.update(`verification-config\0${role}\0${stat.mode & 0o111}\0${stat.size}\0`);
+    hashFileInChunks(hash, configPath);
+    hash.update('\0');
+  }
 
   function excludedWorkspacePath(candidatePath) {
     if (excludedRoots.some((excludedRoot) => pathIsInside(excludedRoot, candidatePath))) {
@@ -353,6 +446,9 @@ export function workspaceRevisionExcludedPathsForRun(
         ?? (path.isAbsolute(run?.taskGraphRef ?? '') ? run.taskGraphRef : null)
       );
   const workspacePath = options.workspacePath ?? run?.workspacePath ?? null;
+  const iterationRoot = managedLayout && typeof run?.iterationId === 'string' && run.iterationId
+    ? path.join(artifactRoot, 'iterations', run.iterationId)
+    : null;
   return [
     ...workspaceRevisionExcludedPaths(
       runsDir,
@@ -360,6 +456,7 @@ export function workspaceRevisionExcludedPathsForRun(
       graphPath,
       workspacePath,
     ),
+    iterationRoot,
     workspacePath ? retrospectiveReportExclusion(run, workspacePath) : null,
   ];
 }

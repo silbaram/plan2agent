@@ -95,7 +95,7 @@ If a CLI cannot spawn subagents automatically, the active model executes the sam
 Gate A/②/B/C의 상세 통과·차단 규칙은 `p2a-harness` skill이 유일한 정본이다. 정본: [`.agents/skills/p2a-harness/SKILL.md`](../.agents/skills/p2a-harness/SKILL.md#approval-gates).
 
 - **Gate A:** entry document에서 범위, 사용자, 결과, 제약, 제외 항목을 정리해 compact 이해 요약을 제시한다. 신규 문서 기반 intake는 사용자의 실제 발화와 원본 `--entry`를 받은 `p2a decide --quote ... --entry ...`가 entry·reference snapshot을 검증하고 Gate ① 결정을 원장에 append하며 `intake.approval_audit` 사본을 기록하기 전에는 Gate B로 넘어가지 않는다.
-- **Gate ②:** 신규 project constitution은 `p2a shape approve --quote ...`로 승인한다. 승인·철회와 내용 변경 재승인은 같은 결정 원장에 append하며 정상 feature/maintenance 반복에서는 기존 승인을 재사용한다.
+- **Gate ②:** 되돌리기 어려운 architecture/stack 선택이나 hard prohibition이 필요한 경우에만 신규 project constitution을 제안하고 `p2a shape approve --quote ...`로 승인한다. Constitution이 없으면 repository convention을 advisory로 사용하고 이 Gate를 생략한다. 승인·철회와 material 내용 변경 재승인은 같은 결정 원장에 append하며 정상 feature/maintenance 반복에서는 기존 승인을 재사용한다.
 - **Gate B:** 모든 open decision 해소, `CQ-n` disposition, 필요한 기술 조사 근거를 갖춘 spec을 사용자에게 검토받고 `p2a decide --quote ...`로 승인해야 실행 준비로 넘어간다. `full + current_iteration`이면 사용자가 선택·승인한 hash-bound offline HTML prototype과 experience contract도 필요하다. 이후 mode 선택과 synthetic compatibility work item에는 별도 사용자 승인을 요구하지 않는다.
 - **Gate C:** 공통 Gate·hash·acceptance·verification·visual readiness와 mode metadata를 검증한다. Planned는 2~5개 ordered milestone을, Orchestrated는 task dependency, cycle, ownership과 source spec reference를 추가 검사한다. Direct/Planned compatibility record 준비와 validator-clean Orchestrated draft 승격에는 별도 사람 승인 audit이 없다.
 

@@ -41,7 +41,9 @@
   },
   "scripts": {
     "test": "node --test tests/index.test.mjs",
+    "test:all": "npm test && npm run test:full && npm run test:package",
+    "test:compat": "node --test tests/schema-fixtures.test.mjs tests/e2e-artifact-root.test.mjs tests/npm-package.test.mjs tests/upgrade-command.test.mjs",
     "test:full": "node scripts/run_fixtures.mjs",
-    "test:package": "node --test tests/npm-package.test.mjs"
+    "test:package": "node --test tests/npm-package.test.mjs tests/upgrade-command.test.mjs"
   }
 }

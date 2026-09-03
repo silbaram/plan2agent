@@ -30,9 +30,9 @@ Plan2Agent planning 하네스는 짧은 제품 문서를 바로 코드로 구현
 파이프라인은 다음 순서로 진행된다.
 
 ```text
-짧은 Markdown 또는 text 진입 문서
+한 문장 아이디어 또는 짧은 Markdown/text 문서
   -> Entry document scope confirmation(Gate A)
-  -> Project constitution approval(Gate ②)
+  -> Material project constitution approval(Gate ②, 필요한 경우만)
   -> Product spec + Implementation plan(Gate B)
   -> Execution readiness(Gate C: Direct, Planned, Orchestrated)
   -> 별도 개발 세션에서 승인된 목표 실행
@@ -41,7 +41,7 @@ Plan2Agent planning 하네스는 짧은 제품 문서를 바로 코드로 구현
 | 단계 | 담당 skill | 주요 역할 | 산출물 |
 | --- | --- | --- | --- |
 | 1. Scope + Intake | `p2a-harness` | 진입 문서를 해석하고 이해 요약을 Gate A에서 확인한다. | `intake_json` |
-| 2. Project shape | `p2a-harness` | 프로젝트 전역 architecture, stack, prohibitions, style을 Gate ②에서 승인한다. | `.plan2agent/constitution.json` |
+| 2. Material project shape | `p2a-harness` | 되돌리기 어려운 architecture/stack 선택이나 hard prohibition이 있을 때만 Gate ②에서 승인한다. | 선택적 `.plan2agent/constitution.json` |
 | 3. Product spec | `p2a-spec` | 답변된 intake를 제품 목표, 범위, 사용자 흐름, 성공 기준으로 정리한다. | `spec_json.product` |
 | 4. Implementation plan | `p2a-spec` | 승인 가능한 제품 명세를 아키텍처, 인터페이스, 데이터 흐름, 검증 계획으로 바꾼다. | `spec_json.implementation` |
 | 5. Execution readiness | `p2a-next` → `p2a-dev-execution` 또는 `p2a-task-breakdown` | Direct/Planned를 준비하거나 필요할 때만 Orchestrated task로 분해한다. | synthetic work item 또는 `task_graph_json` |
@@ -74,17 +74,17 @@ Gate A/B/C의 상세 통과·차단 규칙은 `p2a-harness` skill이 유일한 �
 
 ### Gate A
 
-새 하네스는 `p2a next --entry <path>`가 검증한 Markdown 또는 text 문서에서만 시작한다. 하네스는 원문 전체를 읽고 무엇을 만들지, 대상 사용자, 기대 결과, 포함·제외 범위, 하드 제약, 중요한 가정을 compact Gate A 요약으로 제시한다. 안전하게 추론할 수 없고 범위를 실질적으로 바꾸는 내용만 물으며 고정 질문 수나 대화 turn 제한은 없다.
+새 하네스는 `p2a next --idea "<아이디어>"`가 저장한 provisional entry 또는 `p2a next --entry <path>`가 검증한 Markdown/text 문서에서 시작한다. 하네스는 원문 전체를 읽고 무엇을 만들지, 대상 사용자, 기대 결과, 포함·제외 범위, 하드 제약, 중요한 가정을 compact Gate A 요약으로 제시한다. 안전하게 추론할 수 없고 범위를 실질적으로 바꾸는 내용만 물으며 질문이 0개일 수도 있다.
 
 Feature Radar가 추천을 제공했다면 승격된 각 후보를 Gate A에서 `selected`, `rejected`, `deferred` 중 하나로 처분하고 이유를 요약한다. 사용자는 요약을 자유롭게 교정할 수 있고, 수정된 범위를 다시 확인한다. 원문 존재, 침묵, “개발해” 같은 포괄 지시는 승인이 아니다.
 
-사용자가 해석된 범위를 명시적으로 확인한 뒤 `p2a decide --quote "<사용자 발화>" --entry <원본-entry> --artifacts <artifact-root>`를 실행한다. 명령은 entry와 reference snapshot binding을 다시 검증하고 `decisions.jsonl`에 Gate ① 결정을 append하며 `intake_json`의 `status: ready_for_spec`와 `approval_audit` 사본을 함께 기록한다. `gate-a-intake/intake.md`는 사용자가 명시적으로 요청할 때만 생성하며 첫 줄에 `<!-- plan2agent:intake-md-export=explicit -->` marker를 둔다. Gate A 확인 뒤 신규 프로젝트는 Gate ②로 이어진다.
+사용자가 해석된 범위를 명시적으로 확인한 뒤 `p2a decide --quote "<사용자 발화>" --entry <원본-entry> --artifacts <artifact-root>`를 실행한다. 명령은 entry와 reference snapshot binding을 다시 검증하고 `decisions.jsonl`에 Gate ① 결정을 append하며 `intake_json`의 `status: ready_for_spec`와 `approval_audit` 사본을 함께 기록한다. `gate-a-intake/intake.md`는 사용자가 명시적으로 요청할 때만 생성하며 첫 줄에 `<!-- plan2agent:intake-md-export=explicit -->` marker를 둔다. Gate A 확인 뒤에는 기존 constitution을 재사용하고, material Gate ② 결정이 있을 때만 별도 승인한다.
 
-### Gate ② — Project Shape
+### Gate ② — Material Project Shape (조건부)
 
-`.plan2agent/constitution.json`은 architecture, stack, prohibitions, style을 프로젝트 수명 동안 유지한다. 하네스는 각 목록을 최대 10개로 간결하게 제안하고 중요한 대안과 trade-off를 설명한다. `enforcement` 기본값은 `advisory`다. `validator` 금지는 `targets`와 `forbidden_terms`를 가져야 하며 spec/task graph의 실제 선택·도입 계획에서 차단된다. `No ...`, `... 사용 금지`, 제거 작업처럼 금지를 선언하거나 준수하는 문장은 위반으로 보지 않는다.
+`.plan2agent/constitution.json`이 있으면 material architecture, stack, prohibitions, style 결정을 프로젝트 수명 동안 유지한다. 없으면 repository evidence에서 읽은 일반 convention을 Gate B advisory 입력으로 사용하고 별도 승인을 강제하지 않는다. 되돌리기 어려운 stack/architecture 선택이나 hard prohibition이 필요할 때만 하네스가 compact constitution draft와 중요한 trade-off를 제시한다. `enforcement` 기본값은 `advisory`이며, `validator` 금지는 구체적인 `targets`와 `forbidden_terms`가 있을 때만 사용한다.
 
-승인은 반드시 사용자의 실제 발화를 보존한다. Draft를 검토한 뒤 `p2a shape approve --quote "<사용자 발화>"`를 실행하며 quote가 없으면 실패한다. 명령은 `gate.how.approved`를 결정 원장에 append하고 constitution `approval_audit`을 사본으로 유지한다. 승인 constitution은 반복 iteration에서 재사용하고, Gate A 변경이 아키텍처·기반 stack·프로젝트 금지 규칙·style 정책을 바꾸는 경우에만 focused Gate ② diff와 재승인을 진행한다. 기존 `.plan2agent/style.md` 프로젝트는 migration 없이 동작하며 `p2a shape migrate-style`은 선택적인 승인 전 draft만 만든다.
+Constitution을 만들었다면 승인은 반드시 사용자의 실제 발화를 보존한다. Draft를 검토한 뒤 `p2a shape approve --quote "<사용자 발화>"`를 실행하며 quote가 없으면 실패한다. 승인 constitution은 반복 iteration에서 재사용하고 material 내용이 바뀔 때만 focused Gate ② diff와 재승인을 진행한다. 기존 `.plan2agent/style.md`는 advisory 호환 자료로 읽을 수 있으며 migration을 강제하지 않는다.
 
 ### 결정 원장
 
@@ -255,7 +255,7 @@ Intake와 spec artifact는 `evidence` 배열을 가진다. 이 배열은 결정�
 
 canonical 산출물이 있으면 가장 이른 미완료 또는 invalid 단계부터 재개한다. 기존 intake의 optional `interview` object는 opaque 호환 데이터로 보존하지만 상태 판단, 질문 생성, 라우팅에는 사용하지 않는다. 사용자가 질문이나 결정을 답하면 같은 ledger item의 answer/status를 갱신하고 새 id로 중복 생성하지 않는다. explicit-export marker가 있는 `intake.md`는 JSON에서 다시 생성하고 marker가 없는 이전 자동 view는 제거한다.
 
-사용자가 Gate A 이해 요약을 확인하면 신규 문서 기반 intake는 `p2a decide --quote "<사용자 발화>" --entry <원본-entry> --artifacts <root>`로 entry provenance, `status: ready_for_spec`, 결정 원장과 `approval_audit` 사본을 함께 기록하고 같은 대화에서 Gate ②를 확립하거나 재사용한 뒤 Gate B synthesis로 이어간다. baseline-aware 반복에서는 entry 없는 호환 승인 경로로 `baseline_context`의 관련 답변을 재사용하고, 충돌이 있을 때만 현재 반복 decision으로 override를 기록한다.
+사용자가 Gate A 이해 요약을 확인하면 신규 문서 기반 intake는 `p2a decide --quote "<사용자 발화>" --entry <원본-entry> --artifacts <root>`로 entry provenance, `status: ready_for_spec`, 결정 원장과 `approval_audit` 사본을 함께 기록한다. 기존 Gate ②가 있으면 재사용하고, 되돌리기 어려운 project-shape 결정이나 hard prohibition이 새로 필요할 때만 같은 대화에서 focused Gate ② 승인을 받은 뒤 Gate B synthesis로 이어간다. 그 외에는 repository convention을 advisory로 사용해 바로 Gate B로 간다. baseline-aware 반복에서는 entry 없는 호환 승인 경로로 `baseline_context`의 관련 답변을 재사용하고, 충돌이 있을 때만 현재 반복 decision으로 override를 기록한다.
 
 재개는 입력이 바뀐 가장 이른 단계부터 다시 생성한다.
 
@@ -441,9 +441,9 @@ p2a iteration init \
 4. Launcher prompt는 envelope를 먼저 보여 주고 task는 실행/재개 경계로만 제시한다. 별도 확인이 필요하면 `p2a tasks prompt --artifacts .plan2agent/artifacts/<project_id> <task-id>`로 같은 계약을 다시 볼 수 있다.
 5. Direct와 일반 단일-owner Planned는 현재 write-capable owner가 현재 workspace에서 직접 구현하고 기본 isolation `none`을 사용한다. Orchestrated/batch, 동시 write owner, 명시 정책 또는 구체적인 rollback 위험이 있을 때만 별도 implementer와 worktree를 만든다. Planned는 각 outcome 뒤 `p2a runs checkpoint --milestone <id>`로 선언된 명령을 순서대로 실행하며 `resume`은 다음 pending checkpoint를 보여 준다. Gemini CLI는 현재 review/monitor 같은 read-only 보조로만 사용한다.
 6. UI task의 `visualImpact`는 구현 중 확인할 screen/state 범위만 알려 준다. 일반 구현 run에는 visual sidecar를 만들지 않으며, 승인 prototype은 구현 방향으로 사용하되 구현 증거로 재사용하지 않는다. 구현 뒤에는 run을 열어 둔 채 실행 owner가 영향 route/state/viewport를 렌더링하고 drift를 수정해 통과할 때까지 반복한다. 사용자에게 task별 UI 승인을 요청하지 않는다. 이 비게이팅·무기록 루프는 추가 run, sidecar, hash, verdict를 만들지 않는다.
-7. Owner 시각 확인과 acceptance criteria 및 필요한 테스트가 통과하면 related 명령을 구성한 프로젝트에서는 `p2a execute finish --artifacts .plan2agent/artifacts/<project_id> --run-id <run-id> --related --collect-git`로 변경 파일 검증, run closeout, task done/block 전이를 한 번에 기록한다. Related 명령을 구성하지 않은 프로젝트는 기존 `--test --lint --typecheck` full 명령을 계속 사용한다. Planned는 모든 checkpoint가 verified여야 한다. `finish`는 task 구현·검증 완료 지점이며 별도 사용자 UI 승인이 아니다. `done`은 최신 run이 현재 iteration/task graph에 속하고 실행된 verification(`source: config|command`, `exitCode: 0`)이 있는 경우만 허용한다. Related 결과는 task 피드백일 뿐 close-ready 증거가 아니므로 모든 task가 끝난 뒤 8번의 full 검증을 거친다. 막히면 failed/blocked finish에 `--failure-class`, `--repro-step`, `--localization`, `--guard`를 함께 기록한다. `finish` 이후 시각 문제를 발견한 경우에만 `p2a tasks todo <id> --reopen --note <reason>`으로 task를 다시 연다. 이후 다시 `ready`를 확인해 다음 task를 진행한다.
-8. 모든 task를 완료하고 canonical workspace에 통합한 뒤 필요한 최종 no-change run을 연다. 승인 experience가 visual review를 요구하면 `reviewPasses.visual` 값과 무관하게 `p2a execute review`로 실제 앱 matrix와 접근성 evidence를 봉인한다. 필수 visual contract가 없는 iteration의 acceptance 기본값은 `opt_in`이며, 사용자가 독립 기능 검수를 요청해 `p2a execute accept`를 시작했거나 정책이 `on`일 때만 실제 동작 evidence를 추가로 봉인한다. 필요한 review가 끝난 뒤 현재 revision·현재 configured command identity의 full test/lint/typecheck 증거가 아직 없으면 `p2a execute verify-final`에서 한 번 실행한다. Canonical workspace에서 isolation 없이 끝난 구현 run이나 acceptance/visual run이 같은 증거를 이미 기록했다면 별도 verify-final run을 만들지 않고 재사용한다. `scope: related`와 Gate supplemental `custom` evidence는 이 종료 조건을 만족하지 않는다.
-9. 완료 상태에서 `p2a next`는 `iteration_review_or_close_required`와 구조화된 `review`/`retrospective`/`close` 옵션을 반환한다. 기본 process 신호나 설정된 성능 임계치를 넘은 현재 iteration 신호가 있으면 v2 응답의 `retrospective`에 안전한 수치 후보를 함께 표시한다. 후보가 없으면 P2A 지연·오류·오라우팅·불필요한 절차가 있었는지 한 번만 묻고, 없으면 아무것도 생성하지 않는다. 회고 진행을 별도로 승인하면 반환된 경로에 관찰된 문제·사용자 영향·개선 제안·간단한 근거만 기록한다. Proposal 저장은 다시 별도 승인이 필요하다. `review` finding이 있으면 remediation command의 placeholder를 owning task id와 finding note로 바꿔 task를 reopen한다. 이후 `next`가 반환한 정상 lifecycle로 수정하고 다시 완료 결정으로 돌아온다. 깨끗한 리뷰, 회고 건너뛰기, proposal 저장 거절 모두 같은 결정으로 돌아오며, 사용자가 `close`를 명시적으로 선택한 경우에만 중첩 close 명령을 실행한다. 마지막 maintenance task가 끝나면 `p2a execute finish --maintenance`가 같은 review/retrospective/finish 선택을 한 번 출력하되 별도 maintenance close 상태는 만들지 않는다.
+7. Owner 시각 확인과 acceptance criteria가 충족되면 `p2a execute finish --artifacts .plan2agent/artifacts/<project_id> --run-id <run-id> --collect-git`를 실행한다. 플래그를 생략하면 docs/metadata 작업은 관련 검사만 자동 선택하고, 코드 작업은 현재 프로젝트에 실제 설정된 test/lint/typecheck를 실행한다. 없는 선택 검사는 evidence를 만들지 않는다. Related 명령을 구성한 프로젝트는 그 명령을 사용하고, 없으면 P2A의 최소 파일 무결성 검사를 사용한다. Planned checkpoint 또는 일반 verification이 실패하면 증거는 append-only로 남기되 run을 열어 둔 채 수정하고 같은 검사를 다시 실행할 수 있으며, 현재 revision의 같은 검사에서 가장 최신 결과가 완료를 결정한다. Failed/blocked로 닫아야 할 때는 failure class에 필요한 최소 detail만 기록한다.
+8. 모든 task가 완료되면 공통 verification profile을 적용한다. Docs/metadata는 현재 문서 revision의 관련 검사만 요구한다. 단일 canonical isolated-code task는 현재 product revision에 묶인 implementation full evidence를 재사용한다. 다중 product task, worktree 통합, high-risk 경로 또는 검증 후 제품 코드 변경이 있을 때만 `p2a execute verify-final`로 별도 canonical full run을 연다. 필수 visual contract와 명시적으로 시작했거나 정책이 `on`인 acceptance review는 기존 안전 경계대로 추가한다. Child-process preflight가 실행 환경 거부를 감지한 final run은 `p2a execute retry --artifacts <root> --run-id <run-id>` 한 명령으로 immutable 환경 실패를 닫고 replacement를 시작한다.
+9. 완료 상태에서 `p2a next`는 `review`/`retrospective`/`close`를 반환한다. 현재 evidence가 최신이고 자동 회고 신호가 없으면 close를 권장한다. Review finding이 있으면 owning task를 reopen해 정상 검증 lifecycle로 수정한다. 깨끗한 review는 같은 메뉴를 반복하지 않고 “문제 없음, 종료할까요?”를 한 번 묻는다. 회고와 proposal write는 계속 별도 승인이고, 사용자가 close를 선택한 경우에만 iteration을 닫는다.
 
 이미 승인 산출물을 별도 대상 프로젝트로 복사한 legacy handoff 프로젝트에서는 `.plan2agent/project.config.json.taskGraph`가 가리키는 flat graph를 `--graph`로 명시할 수 있다.
 
@@ -453,7 +453,7 @@ p2a iteration init \
 
 검증 스크립트는 JSON schema subset 검사와 procedural gate 검사를 함께 수행한다. 모든 명령은 저장소 루트에서 실행한다.
 
-실행 run을 `finished`로 닫거나 task를 `done`으로 전이하려면 verification evidence가 모두 `passed`여야 한다. `skipped`, `not_run`, `unavailable` 또는 failed verification이 있는 run은 성공 완료 근거가 될 수 없다. 프로젝트 설정이나 검증 명령을 고친 뒤 새 run에서 실제 실행된 `config|command` verification을 `passed`로 남기거나, run을 `failed`/`blocked`로 닫는다.
+실행 run을 `finished`로 닫거나 task를 `done`으로 전이하려면 현재 revision에서 요구되는 verification evidence가 모두 `passed`여야 한다. `skipped`, `not_run`, `unavailable` 또는 failed verification은 성공 완료 근거가 될 수 없다. 프로젝트 설정이나 검증 명령을 고친 뒤 열려 있는 같은 run에서 해당 검사를 다시 실행해 최신 `config|command` verification을 `passed`로 남긴다. 즉시 재시도할 수 없어 run을 닫아야 할 때만 `failed`/`blocked`로 기록한다.
 
 ### 8.1 단일 artifact 검증
 
@@ -548,7 +548,7 @@ node scripts/sync_cli_assets.mjs
 | status.md 최소 구조 | `--status`로 명시한 generated status 문서의 최소 heading을 검사한다. Artifact root 검증의 정본 조건은 아니다. | `status.md missing Progress line`, `status.md missing Gate A section` |
 | artifact root bundle | `--artifact-root`는 Gate A-C의 JSON 정본 파일을 검증한다. 승인된 Gate B spec은 `spec.approval_audit`를 가져야 한다. | `Gate B is incomplete; missing ...`, `Gate C cannot be validated before Gate B spec exists`, `spec.approval_audit is required when spec.approval is approved` |
 | handoff readiness | `--require-handoff-ready`는 artifact root가 Gate A confirmed, Gate B approved, Gate C valid인지 확인한다. | `artifact root is not handoff-ready: ...` |
-| 미해결 결정 차단 | `needs_user_decision.status`가 `open` 또는 `deferred`이면 intake status는 `blocked_on_user`여야 한다. 모두 닫히면 `ready_for_spec`이어야 한다. | `intake.status must be ... when unresolved decisions are ...` |
+| 미해결 결정 차단 | `needs_user_decision.status`가 `open` 또는 `deferred`이면 intake status는 `blocked_on_user`여야 한다. 모두 닫혀도 Gate A 승인 전에는 blocked이며, 승인 audit이 기록될 때만 `ready_for_spec`이 된다. | `intake.status must be ... when unresolved decisions are ...` |
 | Gate A scope readiness | `ready_for_spec`은 open CQ, open/deferred ND가 없어야 하며 `approval_audit`가 `gate-a-intake/intake.json`을 포함해야 한다. 레거시 `interview` object는 opaque compatibility content로만 허용한다. | `ready_for_spec intake contains unresolved items`, `ready_for_spec intake requires approval_audit` |
 | decision answer/status 일관성 | `answered` decision은 `answer`가 있어야 한다. 단, baseline supersession은 answered 상태와 non-blank `current_resolution`이 필요하다. `open`/`deferred` decision은 `answer`나 `current_resolution`을 가지면 안 된다. `--intake-md`를 명시하면 generated `intake.md`의 명백한 answered-vs-open 불일치도 실패한다. | `ND-1 is answered but has no answer`, `ND-1 baseline supersession requires a non-blank current_resolution`, `ND-1 is unresolved but has an answer or current_resolution` |
 | baseline supersession 적용 | `superseded_by_*` decision은 immutable baseline에서 current resolution과 같은 capability를 제한하던 항목을 제거해야 한다. 안전한 match가 없거나 current spec이 원래 항목을 유지하면 Gate B 검증에 실패한다. | `baseline supersession merge is unresolved`, `spec baseline supersession ND-5 is not applied` |
@@ -568,7 +568,7 @@ node scripts/sync_cli_assets.mjs
 | 증상/메시지 | 원인 | 해결 |
 | --- | --- | --- |
 | Gate A가 넘어가지 않는다. | `needs_user_decision`에 `open` 또는 `deferred` 항목이 남아 있다. | 사용자에게 해당 `ND-n` 질문을 근거/추천과 함께 다시 제시하고, 답변을 `answer`에 기록한 뒤 status를 `answered`로 바꾼다. |
-| `intake.status must be ...` | decision status와 top-level `status`가 맞지 않는다. | `open`/`deferred`가 하나라도 있으면 `blocked_on_user`, 모두 `answered`면 `ready_for_spec`로 맞춘다. |
+| `intake.status must be ...` | decision status와 top-level `status`가 맞지 않는다. | `open`/`deferred`가 하나라도 있거나 Gate A 승인 전이면 `blocked_on_user`, 모두 해소되고 approval audit이 기록되면 `ready_for_spec`로 맞춘다. |
 | `ND-1 is answered but has no answer` | decision을 `answered`로 표시했지만 실제 답변 문자열이 없다. | 사용자의 선택 또는 명시적 override를 `answer`에 적는다. |
 | `ND-1 is unresolved but has an answer` | `open`/`deferred` 상태인데 `answer`가 들어 있다. | 답변을 인정하려면 status를 `answered`로 바꾸고, 아직 미결이면 `answer`를 제거한다. |
 | `baseline supersession merge is unresolved` | `superseded_by_*` decision에 exact baseline target이 없거나 target이 immutable baseline과 일치하지 않는다. | `supersedes[]`에 제거할 `field_ref`와 exact `baseline_value`를 기록하고 Gate A 승인을 다시 확인한다. |

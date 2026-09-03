@@ -32,8 +32,12 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           package-manager-cache: false
-      - name: Run test suite
+      - name: Run core test suite
+        if: matrix.node == 24
         run: npm test
+      - name: Run compatibility smoke tests
+        if: matrix.node != 24
+        run: npm run test:compat
 
   full-fixtures:
     name: Full fixture gate
@@ -69,4 +73,4 @@ jobs:
           node-version: 24
           package-manager-cache: false
       - name: Run package and upgrade smoke tests
-        run: node --test tests/npm-package.test.mjs tests/upgrade-command.test.mjs
+        run: npm run test:package

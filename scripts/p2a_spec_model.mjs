@@ -23,6 +23,23 @@ export const IMPLEMENTATION_FIELDS = [
   'verification',
 ];
 
+export function fullSpecTaskRefs(spec) {
+  return [
+    ...PRODUCT_FIELDS.map((field) => `product.${field}`),
+    ...IMPLEMENTATION_FIELDS.map((field) => `implementation.${field}`),
+    ...((spec?.clarifying_question_disposition ?? []).length
+      ? ['clarifying_question_disposition']
+      : []),
+    ...(
+      spec?.visual_experience?.has_visual_interface === true
+      && ['reuse', 'full'].includes(spec.visual_experience.design_scope)
+      && spec.visual_experience.design_timing === 'current_iteration'
+        ? ['visual_experience']
+        : []
+    ),
+  ];
+}
+
 export function cloneJson(value) {
   return JSON.parse(JSON.stringify(value));
 }
@@ -122,6 +139,9 @@ const CONTRADICTION_CAPABILITY_TOKENS = new Set([
   'search',
 ]);
 const RESTRICTIVE_TEXT_PATTERN = /(?:\b(?:defer(?:red|s|ring)?|disallow(?:ed|s)?|exclude(?:d|s)?|forbid(?:den|s)?|must\s+not|never|no|not|only|out\s+of\s+scope|unsupported|without)\b|범위\s*밖|비목표|미지원|지원하지|제외|금지|후속\s*(?:반복|iteration))/i;
+const MATERIAL_BOUNDARY_SUPERSESSION_SIGNAL = /\b(?:change|convert|delete|disable|drop|migrat(?:e|ed|es|ing|ion)|remove|replace|stop\s+using|switch)\b|\b(?:instead\s+of|no\s+longer\s+use)\b|교체|대체|대신|삭제|제거|폐기|전환|중단|변경|바꾸|사용하지\s*않/u;
+const MATERIAL_BOUNDARY_RETENTION_SIGNAL = /\b(?:(?:do\s+not|don't|never|must\s+not|mustn't)\s+(?:change|convert|delete|disable|drop|migrat(?:e|ed|es|ing)?|remove|replace|stop\s+using|switch)|keep\b.{0,48}\bunchanged|no\s+change|preserv(?:e|ed|es)|retain(?:ed|s)?|unchanged)\b|(?:변경|교체|대체|삭제|제거|폐기|전환|중단|마이그레이션)하지\s*(?:않|말)|바꾸지\s*(?:않|말)|건드리지\s*(?:않|말)|그대로\s*유지|유지하/u;
+const MATERIAL_BOUNDARY_ANSWER_SEPARATOR = /[,;.!?\n]|\b(?:and|but|while)\b|그리고|그러나|반면|하고|하며|하되|다만|지만/u;
 const CAPABILITY_QUALIFIER_RULES = [
   {
     dimension: 'scope',
@@ -359,7 +379,7 @@ function explicitSupersessionCandidates(baselineSpec, decision) {
   const invalidTargets = [];
   for (const target of targets) {
     const match = stringEntriesForField(baselineSpec, target.field_ref)
-      .find((entry) => entry.text === target.baseline_value && isRestrictiveEntry(entry));
+      .find((entry) => entry.text === target.baseline_value);
     if (!match) {
       invalidTargets.push(target);
       continue;
@@ -372,8 +392,163 @@ function explicitSupersessionCandidates(baselineSpec, decision) {
   return { targets, candidates, invalidTargets };
 }
 
+function normalizedSupersessionText(value) {
+  return String(value ?? '').trim().toLowerCase().replace(/\s+/gu, ' ');
+}
+
+const BOUNDARY_MENTION_STOP_WORDS = new Set([
+  'approved',
+  'change',
+  'changed',
+  'changes',
+  'changing',
+  'current',
+  'existing',
+  'instead',
+  'keep',
+  'kept',
+  'method',
+  'model',
+  'new',
+  'replace',
+  'replaced',
+  'replacing',
+  'structure',
+  'using',
+  '기존',
+  '구조',
+  '기반',
+  '대신',
+  '방식',
+  '변경된',
+  '변경',
+  '변경한다',
+  '새로운',
+  '승인된',
+  '현재',
+  '유지',
+  '유지한다',
+]);
+
+function normalizedKoreanBoundaryToken(token) {
+  const withoutParticle = token.replace(
+    /(?:에게서|으로부터|에서|에게|한테|께서|까지|부터|처럼|보다|으로|은|는|이|가|을|를|의|에|로|과|와|도|만)$/u,
+    '',
+  );
+  return withoutParticle.length >= 2 ? withoutParticle : token;
+}
+
+function boundaryMentionTokens(text) {
+  const normalized = normalizedSupersessionText(text)
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2');
+  const englishTokens = normalized.match(/[a-z][a-z0-9._-]{1,}/g) ?? [];
+  const koreanTokens = normalized.match(/[가-힣]{2,}/gu) ?? [];
+  return [...new Set([
+    ...capabilityTokens(text),
+    ...englishTokens.flatMap((token) => [token, ...token.split(/[._-]+/u)]),
+    ...koreanTokens.map(normalizedKoreanBoundaryToken),
+  ].filter((token) => token.length >= 2 && !BOUNDARY_MENTION_STOP_WORDS.has(token)))];
+}
+
+const COMPOUND_BOUNDARY_ENTRY_SIGNAL = /\b(?:and|but|while)\b|그리고|그러나|반면|하며|하고|하되|다만|지만/u;
+
+function compoundBoundaryEntryHasUnmentionedTerms(entryText, answer) {
+  if (!COMPOUND_BOUNDARY_ENTRY_SIGNAL.test(normalizedSupersessionText(entryText))) {
+    return false;
+  }
+  const answerTokens = new Set(boundaryMentionTokens(answer));
+  return boundaryMentionTokens(entryText).some((token) => !answerTokens.has(token));
+}
+
+function explicitBoundaryTargetTokens(answer) {
+  const text = normalizedSupersessionText(answer);
+  const targetPatterns = [
+    /\bfrom\s+(.+?)\s+to\b/u,
+    /\breplace\s+(.+?)\s+with\b/u,
+    /\binstead\s+of\s+(.+)$/u,
+    /\b(?:delete|disable|drop|remove|stop\s+using)\s+(.+)$/u,
+    /^(?:change|convert|replace|switch)\s+(.+?)(?:\s+(?:to|with)\b|$)/u,
+    /^(.+?)\s*대신(?:\s|$)/u,
+    /^(.+?)에서\s+.+?(?:으로|로)\s*(?:변경|교체|전환|바꾸)/u,
+    /^(.+?)(?:을|를)\s+.+?(?:으로|로)\s*(?:변경|교체|전환|바꾸)/u,
+    /^(.+?)(?:을|를)\s*(?:삭제|제거|폐기|중단|변경|교체|전환|바꾸)/u,
+  ];
+  for (const pattern of targetPatterns) {
+    const match = pattern.exec(text);
+    if (!match?.[1]) continue;
+    const tokens = boundaryMentionTokens(match[1]);
+    if (tokens.length) return tokens;
+  }
+  return [];
+}
+
+function explicitlyMentionedBoundaryEntries(baselineSpec, fieldRef, answer) {
+  const entries = stringEntriesForField(baselineSpec, fieldRef);
+  const exact = entries.filter((entry) => (
+    normalizedSupersessionText(answer).includes(normalizedSupersessionText(entry.text))
+  ));
+  if (exact.length) return exact;
+
+  const targetTokens = explicitBoundaryTargetTokens(answer);
+  if (!targetTokens.length) return [];
+  const matches = entries.filter((entry) => {
+    const entryTokens = new Set(boundaryMentionTokens(entry.text));
+    return targetTokens.every((token) => entryTokens.has(token))
+      && !compoundBoundaryEntryHasUnmentionedTerms(entry.text, answer);
+  });
+  return matches.length === 1 ? matches : [];
+}
+
+function answeredBoundarySupersessionDecisions(baselineSpec, intake) {
+  const decisions = [];
+  for (const question of intake?.clarifying_questions ?? []) {
+    if (
+      question.decision_kind !== 'material_boundary'
+      || question.status !== 'answered'
+      || typeof question.answer !== 'string'
+    ) continue;
+    const supersedingClauses = question.answer
+      .toLowerCase()
+      .split(MATERIAL_BOUNDARY_ANSWER_SEPARATOR)
+      .map(normalizedSupersessionText)
+      .filter((clause) => (
+        clause
+        && MATERIAL_BOUNDARY_SUPERSESSION_SIGNAL.test(clause)
+        && !MATERIAL_BOUNDARY_RETENTION_SIGNAL.test(clause)
+      ));
+    if (!supersedingClauses.length) continue;
+    const affectedFields = decisionAffectedSpecRefs(question);
+    const supersedes = [];
+    const seenTargets = new Set();
+    for (const fieldRef of affectedFields) {
+      for (const clause of supersedingClauses) {
+        for (const entry of explicitlyMentionedBoundaryEntries(baselineSpec, fieldRef, clause)) {
+          const key = `${entry.fieldRef}\0${entry.text}`;
+          if (seenTargets.has(key)) continue;
+          seenTargets.add(key);
+          supersedes.push({
+            field_ref: entry.fieldRef,
+            baseline_value: entry.text,
+          });
+        }
+      }
+    }
+    decisions.push({
+      id: question.id,
+      disposition: 'superseded_by_boundary_answer',
+      current_resolution: question.answer.trim(),
+      affected_fields: affectedFields,
+      ...(supersedes.length ? { supersedes } : {}),
+    });
+  }
+  return decisions;
+}
+
 export function planBaselineSupersessions(baselineSpec, intake) {
-  const decisions = (intake?.needs_user_decision ?? []).filter(isSupersedingDecision);
+  const decisions = [
+    ...(intake?.needs_user_decision ?? []).filter(isSupersedingDecision),
+    ...answeredBoundarySupersessionDecisions(baselineSpec, intake),
+  ];
   const plans = decisions.map((decision) => {
     const explicit = explicitSupersessionCandidates(baselineSpec, decision);
     const hasExplicitTargets = explicit.targets.length > 0;
@@ -614,6 +789,62 @@ function compositionBaselineRef(source) {
   return compositionBaselineRefs(source)[0] ?? null;
 }
 
+function blockedScopeReplacementLineageError(source) {
+  const metadataReplacement = source.metadata?.replacement ?? null;
+  const intakeReplacement = source.source_intake?.baseline_context?.replacement ?? null;
+  if (!metadataReplacement && !intakeReplacement) return null;
+  if (!metadataReplacement || !intakeReplacement || !jsonEqual(metadataReplacement, intakeReplacement)) {
+    return `source ${source.iteration_id} blocked scope replacement lineage must match between iteration metadata and source intake`;
+  }
+  if (
+    metadataReplacement.kind !== 'blocked_scope_replan'
+    || metadataReplacement.replaces_iteration !== source.metadata?.baseline?.iteration_id
+    || metadataReplacement.task_coverage !== 'full_spec'
+  ) {
+    return `source ${source.iteration_id} blocked scope replacement lineage must identify its baseline iteration`;
+  }
+  const contractSha256 = metadataReplacement.current_development_contract_sha256;
+  if (
+    typeof contractSha256 !== 'string'
+    || !/^[a-f0-9]{64}$/u.test(contractSha256)
+    || contractSha256
+      !== source.metadata?.resume_authority?.current_development_contract_sha256
+  ) {
+    return `source ${source.iteration_id} blocked scope replacement lineage must bind its resume current development contract`;
+  }
+  return null;
+}
+
+function blockedScopeReplacementCoverageError(source) {
+  if (!source.metadata?.replacement) return null;
+  const taskGraph = source.task_graph;
+  if (!taskGraph || !Array.isArray(taskGraph.tasks) || !taskGraph.tasks.length) {
+    return `source ${source.iteration_id} blocked scope replacement requires its complete task graph`;
+  }
+  const incompleteTasks = taskGraph.tasks
+    .filter((task) => task.status !== 'done')
+    .map((task) => `${task.id}:${task.status}`);
+  if (incompleteTasks.length) {
+    return `source ${source.iteration_id} blocked scope replacement tasks are not complete: ${incompleteTasks.join(', ')}`;
+  }
+  const requiredRefs = fullSpecTaskRefs(source.spec);
+  const coveredRefs = new Set(
+    taskGraph.tasks.flatMap((task) => (
+      Array.isArray(task.sourceSpecRefs) ? task.sourceSpecRefs : []
+    )),
+  );
+  const missingRefs = requiredRefs.filter((ref) => !coveredRefs.has(ref));
+  return missingRefs.length
+    ? `source ${source.iteration_id} blocked scope replacement task graph is missing full-spec refs: ${missingRefs.join(', ')}`
+    : null;
+}
+
+function isBlockedScopeReplacementSource(source) {
+  return Boolean(source.metadata?.replacement)
+    && blockedScopeReplacementLineageError(source) === null
+    && blockedScopeReplacementCoverageError(source) === null;
+}
+
 export function compositionSourceContractError(sources) {
   if (!Array.isArray(sources) || sources.length === 0) {
     return 'composition requires at least one source';
@@ -633,6 +864,10 @@ export function compositionSourceContractError(sources) {
   }
 
   for (const [index, source] of sources.entries()) {
+    const replacementLineageError = blockedScopeReplacementLineageError(source);
+    if (replacementLineageError) return replacementLineageError;
+    const replacementCoverageError = blockedScopeReplacementCoverageError(source);
+    if (replacementCoverageError) return replacementCoverageError;
     const lineageRefs = compositionBaselineRefs(source);
     const distinctLineageRefs = [...new Set(lineageRefs)];
     if (distinctLineageRefs.length > 1) {
@@ -649,7 +884,10 @@ export function compositionSourceContractError(sources) {
         const baselineIterationIndex = sources.findIndex(
           (candidate) => candidate.iteration_id === baselineIterationId,
         );
-        if (baselineIterationIndex === -1 || baselineIterationIndex >= index) {
+        if (
+          (baselineIterationIndex === -1 || baselineIterationIndex >= index)
+          && !isBlockedScopeReplacementSource(source)
+        ) {
           return `source ${source.iteration_id} current development baseline iteration ${baselineIterationId} must precede it in composition order`;
         }
         precedingBaselineRefs.push(baselineRef);
@@ -735,6 +973,12 @@ function hasStaleCompositionBaseline(source, appliedSources) {
     isComposedBaselineReference(baselineRef)
     || isCurrentDevelopmentBaselineReference(baselineRef)
   ) {
+    if (
+      isCurrentDevelopmentBaselineReference(baselineRef)
+      && isBlockedScopeReplacementSource(source)
+    ) {
+      return false;
+    }
     const baselineIterationId = source.metadata?.baseline?.iteration_id;
     return (
       typeof baselineIterationId === 'string'
