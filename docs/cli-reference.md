@@ -367,9 +367,11 @@ p2a iteration maintenance add \
 
 `--visual-experience`, `--visual-prototype`, `--visual-review`는 Gate B의 screen composition, prototype 디렉터리의 모든 regular file이 manifest 해시 집합에 포함된 passive offline HTML/CSS bundle, 실제 PNG·접근성 JSON의 해시와 capture metadata를 포함한 iteration 최종 verdict를 개별 검증한다. Full mode는 최소 두 후보를 요구하고, 각 screen state는 진입점에서 구조적으로 활성인 local anchor로 도달 가능한 HTML/fragment에 매핑되어야 한다. Core artifact validator는 CSS cascade·specificity로 렌더링 visibility를 추정하지 않으며 실제 표시 상태는 브라우저 캡처 기반 최종 review가 판정한다. Prototype은 `script-src 'none'` CSP를 사용하며 executable JavaScript, inline event handler, 외부 navigation을 허용하지 않는다. Prototype manifest와 각 선언 파일은 해시·parse 전에 25MiB 상한을 적용하고, PNG chunk ordering·palette·scanline 검증은 별도 media validator가 담당한다. `--runs-dir`는 새 `p2a.run.v2` finished run을 원본 task graph와 승인 spec에 다시 결합해 run-start `taskContractSha256`을 확인한다. 일반 `visualImpact` 구현 run은 sidecar를 요구하지 않는다. 실행 owner의 task-level render/drift 수정 반복은 기록하지 않으며, `p2a runs record --visual-feedback note|concern ...`은 사용자가 별도의 비차단 진단 기록을 명시적으로 요청한 경우에만 쓰는 독립 기능이다. `runKind: final_visual_review` run만 Gate B에서 파생한 전체 `visualReview` 계약, `iteration_id` 귀속 sidecar, workspace identity/revision, 봉인된 `visualReviewEvidenceSha256`, evidence-backed `confirm_ui`를 검증한다. Graph mode에서는 `--runs`가 원본 graph와 다른 디렉터리를 가리키거나 graph가 project-relative source spec을 참조해도 실제로 해석된 spec의 artifact root에서 provenance를 검증하며, 성공 finish 전에 같은 검사를 수행한다. `p2a runs validate --run-id`도 schema-only shortcut을 사용하지 않고 run store 전체의 index와 provenance를 함께 검증한다. 기존 `p2a.run.v1` non-visual 이력은 digest 없이도 계속 읽을 수 있으며 진행 중 v1 run은 finish 시 v2로 승격된다.
 
-`--acceptance-review`는 `p2a.acceptance_review.v1` sidecar를 검증한다. `--runs-dir`와 함께 검증하면 각 case가 run에서 실제 실행된 command/source/exitCode/stdoutTail과 일치하는지, baseline에 이미 있던 동작을 제외한 현재 반복의 Gate B 기준이 모두 포함됐는지, exact sidecar digest와 `confirm_behavior`가 봉인됐는지까지 확인한다. 이전 버전이 만든 누적 Gate B 기준 계약도 읽기 호환으로 검증한다. `--run`, `--run-index`, `--runs-dir`는 `p2a runs`가 만든 run log와 index의 schema 및 상호 참조를 검증한다. 이 중 `--runs-dir`는 run 본문에 결합된 monitor gate sidecar의 존재와 contract hash, 완료 판정에 사용한 monitor verdict 원문 바이트의 `monitorVerdictEvidenceSha256`도 함께 검사한다. `--skill-proposal`, `--proposal-review`, `--proposal-curation`, `--proposal-patch-draft`, `--proposal-draft-approval`, `--proposals-dir`는 Hermes식 proposal queue/review/curation/patch draft/approval artifact를 검증한다.
+`--acceptance-review`는 `p2a.acceptance_review.v1` sidecar를 검증한다. `--runs-dir`와 함께 검증하면 각 case가 run에서 실제 실행된 command/source/exitCode/stdoutTail과 일치하는지, baseline에 이미 있던 동작을 제외한 현재 반복의 Gate B 기준이 모두 포함됐는지, exact sidecar digest와 `confirm_behavior`가 봉인됐는지까지 확인한다. 이전 버전이 만든 누적 Gate B 기준 계약도 읽기 호환으로 검증한다. `--run`, `--run-index`, `--runs-dir`는 `p2a runs`가 만든 run log와 index의 schema 및 상호 참조를 검증한다. Retrospective summary의 새 기록은 `scope: pruned_run_history`로 live `runs[]`와 구분되며, reason/status 합계가 `runCount`와, verification status 합계가 `verificationCount`와 정확히 일치해야 하고 duration 표본 수도 함께 검증한다. 이 중 `--runs-dir`는 run 본문에 결합된 monitor gate sidecar의 존재와 contract hash, 완료 판정에 사용한 monitor verdict 원문 바이트의 `monitorVerdictEvidenceSha256`도 함께 검사한다. `--skill-proposal`, `--proposal-review`, `--proposal-curation`, `--proposal-patch-draft`, `--proposal-draft-approval`, `--proposals-dir`는 Hermes식 proposal queue/review/curation/patch draft/approval artifact를 검증한다.
 
 Git workspace에서 시작한 run은 시작 시점의 `headSha`/`branch`/`dirty`를 기록하고 finish 때 현재 값으로 갱신하므로 `p2a runs show`가 Git 이력의 얇은 index 역할도 한다. `p2a runs gc [--dry-run] [--iteration <id>] [--keep-final] [--force]`는 기존 index-first prune 엔진으로 닫힌 run과 sidecar를 정리하고 crash 뒤 남은 미인덱스 orphan 파일도 함께 스윕한다. `--keep-final`은 최신 닫힌 run과 함께 현재 iteration의 누적 제품 위험도 및 `full`/`relevant` 검증 판단에 필요한 최소 anchor를 보존한다. index 안이나 crash orphan에 `started` run이 있으면 거부하며 `persistent` 모드는 `--force` 없이는 정리하지 않는다. doctor는 orphan을 warning과 gc dry-run 안내로 노출한다.
+
+`p2a runs rebuild-index --runs <dir> --dry-run`은 canonical run 파일에서 live `runs`/`tasks` projection을 다시 계산한다. 검토 뒤 `--yes`로 적용하면 새 index 전체를 검증하고 실패 시 원본 index로 rollback한다. 기존 retrospective summary가 내부 합계 검증을 통과하면 보존하고, 손상된 summary는 재구성할 원본 run이 이미 삭제됐을 수 있으므로 명시적 rebuild에서만 버린다고 출력한다.
 
 새 run은 Gate B에서 파생한 실행 계약을 `runs/<iterationId>/envelopes/<sha256>.json`에 내용 주소화하고 본문에는 `executionEnvelopeRef.sha256`과 `executionEnvelopeSha256`만 기록한다. resolver는 사용 시점마다 파일 존재, 중간 symbolic-link가 없는 regular-file 경계, 본문 hash, 승인된 Gate B 계약 일치를 다시 검사한다. 구형 인라인 `executionEnvelope` run도 계속 유효하며 `p2a runs migrate-schema`가 동일 hash를 dedup해 참조형으로 바꾼다. `migrate-layout`과 portable handoff도 참조된 envelope 파일을 run과 함께 이동·복사한다.
 
@@ -588,7 +590,7 @@ p2a execute accept \
   --agent-tool gemini
 ```
 
-`start`는 승인 spec에서 objective, source Gate hash, scope, `mustPreserve`, non-goal, acceptance, verification, authority, 필요한 visual contract를 파생해 run과 prompt에 한 번만 싣고 graph의 mode와 선택 근거도 기록한다. Claude Code 또는 Codex owner는 이 envelope 안에서 repository 조사, 구현 선택, 실패 수정을 자율적으로 반복한다. `verify-final`은 다중 product task/worktree 통합, high-risk 경로, 또는 검증 후 제품 변경처럼 별도 canonical full evidence가 필요한 경우에만 사용한다. Docs/metadata는 관련 증거를, isolated code는 현재 product revision의 implementation full 증거를 재사용한다. 유효한 product full 이후 비제품 파일만 바뀌면 `p2a execute verify-final --scope relevant --artifacts <root>`가 프로젝트별 관련 명령 또는 내장 무결성 검사를 실행해 현재 workspace revision의 `scope: related` 증거만 추가한다. 필수 visual/acceptance review 안전 경계는 유지한다.
+`start`는 승인 spec에서 objective, source Gate hash, scope, `mustPreserve`, non-goal, acceptance, verification, authority, 필요한 visual contract를 파생해 run과 prompt에 한 번만 싣고 graph의 mode와 선택 근거도 기록한다. Claude Code 또는 Codex owner는 이 envelope 안에서 repository 조사, 구현 선택, 실패 수정을 자율적으로 반복한다. `verify-final`은 다중 product task/worktree 통합, high-risk 경로, 또는 검증 후 제품 변경처럼 별도 canonical full evidence가 필요한 경우에만 사용한다. Docs/metadata는 관련 증거를, isolated code는 현재 product revision의 implementation full 증거를 재사용한다. 유효한 product full 이후 비제품 파일만 바뀌면 `p2a execute verify-final --scope relevant --artifacts <root>`가 프로젝트별 관련 명령 또는 내장 무결성 검사를 실행해 현재 workspace revision의 `scope: related` 증거만 추가한다. 필수 visual/acceptance review 안전 경계는 유지한다. 환경 preflight가 child-process 실행 거부를 감지한 final run은 `p2a execute retry --artifacts <root> --run-id <run-id>`로 immutable 실패를 닫고 같은 task와 canonical workspace에 묶인 replacement를 시작한다.
 
 `p2a execute start --require-monitor`는 run과 같은 `runs/<iterationId>/`에 `<run-id>.monitor-gate.json` sidecar를 만들고, 해당 run은 연결된 `.monitor-verdict.json` 없이는 `finished`로 닫을 수 없다. 새 sidecar는 승인 constitution 또는 legacy style의 ref/SHA-256과 enforceable rule ID를 `ruleContract`에 고정하고 `rule_concerns`를 포함한 필수 verdict 배열을 선언한다. Run 본문은 정규화된 sidecar의 SHA-256을 함께 보존하므로 sidecar 삭제·완화·경로 변경도 거부한다. Monitor는 실제 changed file을 architecture, stack, enforceable prohibition, style과 대조하고 모든 ID를 `rules_reviewed`로 반환해야 한다. Finish는 규칙 원문의 SHA-256을 다시 계산하며 원본 drift, 필수 배열의 malformed 값, ID coverage 누락을 거부한다. 판정에 사용한 verdict의 exact-byte SHA-256은 `monitorVerdictEvidenceSha256`으로 run에 봉인되며 이후 파일 변경은 `p2a runs validate`, task 완료, eval과 proposal mining에서 거부된다. Run-side binding이 없는 과거 monitor sidecar와 verdict는 기존 형식으로 계속 읽는다. monitor gate가 필요하지 않은 단일 task에는 이 옵션을 붙이지 않는다.
 
@@ -627,6 +629,12 @@ node scripts/run_fixtures.mjs
 
 `mine`은 기록된 run log와 monitor sidecar를 읽어 회고 후보만 만든다. provider CLI나 재시도 run을 자동으로 시작하지 않으며, blocked run의 `retry`, `ask_user`, `stop` 결정과 후속 실행은 owner가 별도로 기록·수행한다.
 
+네 H2 섹션(`Observed issue`, `User impact`, `Suggested improvement`, `Evidence`)으로 작성한 짧은
+P2A 회고는 공개 GitHub 이슈 초안으로 변환할 수 있다. `issue-preview`는 GitHub를 호출하지
+않고 제목과 본문을 출력한다. `publish-issue`는 같은 Markdown을 다시 읽고 `--yes` 확인 후
+`github.com/silbaram/plan2agent`에 게시한다. 같은 marker가 있는 열린·닫힌 이슈는 다시 만들지
+않으며 별도 draft, schema, receipt artifact는 생성하지 않는다.
+
 ```bash
 p2a proposals mine \
   --graph .plan2agent/artifacts/<project_id>/gate-c-task-graph/task-graph.json
@@ -649,6 +657,15 @@ p2a proposals approve-draft \
   --artifacts .plan2agent/artifacts/<project_id> \
   --approved-by <name>
 
+p2a proposals issue-preview \
+  --retrospective docs/retrospective/<project_id>-v<N>.md \
+  --target-area Execution
+
+p2a proposals publish-issue \
+  --retrospective docs/retrospective/<project_id>-v<N>.md \
+  --target-area Execution \
+  --yes
+
 p2a validate \
   --proposals-dir .plan2agent/proposals
 
@@ -663,9 +680,10 @@ p2a validate \
 
 p2a validate \
   --proposal-draft-approval .plan2agent/proposals/approvals/proposal-draft-approval-<hash>.json
+
 ```
 
-`digest` 결과는 빠른 현황 요약이고, `review`/`curate`/`draft-patch`/`approve-draft` 결과는 승인 판단과 후속 task 연결용 artifact다. 적용은 자동으로 하지 않고, 승인된 maintenance task를 별도 실행해서 반영한다.
+`digest` 결과는 빠른 현황 요약이고, `review`/`curate`/`draft-patch`/`approve-draft` 결과는 승인 판단과 후속 task 연결용 artifact다. `issue-preview`/`publish-issue`는 회고를 외부 backlog에 전달할 뿐 proposal 승인이나 구현 적용을 대신하지 않는다. 적용은 자동으로 하지 않고, 승인된 maintenance task를 별도 실행해서 반영한다.
 
 ### 워크플로우 E — 반복 열기와 Gate A 범위 확인/Gate B 초안 생성
 

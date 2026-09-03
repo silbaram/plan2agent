@@ -12,6 +12,7 @@ import {
   validateRunTaskContract,
   validateRunsDir,
 } from '../scripts/validate_artifacts.mjs';
+import { main as executeMain } from '../scripts/p2a_execute.mjs';
 import { validateCloseReadyAcceptanceEvidence } from '../scripts/p2a_iteration.mjs';
 import { runFilePath, runSidecarPath } from '../scripts/p2a_run_paths.mjs';
 import { FIXTURE_ROOT, runExecute, runIteration, runP2a, runRuns } from './helpers/fixtures.mjs';
@@ -529,6 +530,7 @@ test('a blocking acceptance verdict overrides unrelated unavailable environment 
       '--verify-command', 'custom:/definitely/missing-p2a-environment-command',
     ]);
     assert.notEqual(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.doesNotMatch(result.stdout, /recovery: .*execute retry/);
 
     result = runExecute([
       'finish',
@@ -628,17 +630,20 @@ test('environment-only acceptance failure keeps the task done for a final-review
       '--verify-command', 'custom:/definitely/missing-p2a-environment-command',
     ]);
     assert.notEqual(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.match(
+      result.stdout,
+      new RegExp(`recovery: .*execute retry .*--run-id ${runId}`),
+    );
 
     result = runExecute([
-      'finish',
+      'retry',
       '--artifacts', fixture.artifactRoot,
       '--run-id', runId,
-      '--status', 'failed',
     ]);
-    assert.notEqual(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
     assert.match(result.stdout, /classified as environment_failure/);
     assert.match(result.stdout, /remains done after final acceptance environment failure/);
-    assert.match(result.stdout, /Retry only the final acceptance run/);
+    assert.match(result.stdout, /Starting replacement final evidence/);
 
     const failedRun = JSON.parse(readFileSync(
       runFilePath(path.join(fixture.artifactRoot, 'runs'), runId),
@@ -653,16 +658,231 @@ test('environment-only acceptance failure keeps the task done for a final-review
     let graph = JSON.parse(readFileSync(fixture.graphPath, 'utf8'));
     assert.equal(graph.tasks.find((task) => task.id === 'task-001').status, 'done');
 
-    result = runExecute([
+    const runIndex = JSON.parse(readFileSync(
+      path.join(fixture.artifactRoot, 'runs', 'run-index.json'),
+      'utf8',
+    ));
+    const replacement = runIndex.runs.find((entry) => (
+      entry.runId !== runId
+      && entry.runKind === 'final_acceptance_review'
+      && entry.status === 'started'
+    ));
+    assert.ok(replacement, 'one-step retry should create a replacement final acceptance run');
+    graph = JSON.parse(readFileSync(fixture.graphPath, 'utf8'));
+    assert.equal(graph.tasks.find((task) => task.id === 'task-001').status, 'done');
+  } finally {
+    rmSync(fixture.workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test('invalid final-review sidecars fail closed for finish and environment retry', () => {
+  const fixture = managedNonUiIteration();
+  try {
+    const runId = 'run-invalid-environment-acceptance-sidecar';
+    let result = runExecute([
       'accept',
       '--artifacts', fixture.artifactRoot,
       '--task', 'task-001',
-      '--run-id', 'run-environment-acceptance-retry',
+      '--run-id', runId,
       '--agent-tool', 'codex',
     ]);
     assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    graph = JSON.parse(readFileSync(fixture.graphPath, 'utf8'));
-    assert.equal(graph.tasks.find((task) => task.id === 'task-001').status, 'done');
+
+    const runsDir = path.join(fixture.artifactRoot, 'runs');
+    const runPath = runFilePath(runsDir, runId);
+    result = runRuns([
+      'verify',
+      '--artifacts', fixture.artifactRoot,
+      '--run-id', runId,
+      '--verify-command', 'custom:/definitely/missing-p2a-environment-command',
+    ]);
+    assert.notEqual(result.status, 0, `${result.stdout}\n${result.stderr}`);
+
+    const sidecarPath = runSidecarPath(runsDir, runId, '.acceptance-review.json');
+    writeFileSync(sidecarPath, '{ invalid json\n', 'utf8');
+    result = runExecute([
+      'retry',
+      '--artifacts', fixture.artifactRoot,
+      '--run-id', runId,
+    ]);
+    assert.notEqual(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stderr, /final acceptance review sidecar validation failed/);
+
+    writeJson(sidecarPath, {});
+    result = runExecute([
+      'retry',
+      '--artifacts', fixture.artifactRoot,
+      '--run-id', runId,
+    ]);
+    assert.notEqual(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stderr, /schema_version/);
+
+    const run = JSON.parse(readFileSync(runPath, 'utf8'));
+    const contractMismatch = acceptanceSidecar(run, run.verification.at(-1));
+    contractMismatch.iteration_id = 'iter-wrong';
+    writeJson(sidecarPath, contractMismatch);
+    result = runExecute([
+      'retry',
+      '--artifacts', fixture.artifactRoot,
+      '--run-id', runId,
+    ]);
+    assert.notEqual(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stderr, /acceptance review iteration_id must be/);
+
+    rmSync(sidecarPath);
+    mkdirSync(sidecarPath);
+    result = runExecute([
+      'finish',
+      '--artifacts', fixture.artifactRoot,
+      '--run-id', runId,
+    ]);
+    assert.notEqual(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stderr, /final acceptance review sidecar must be a file/);
+
+    const unchanged = JSON.parse(readFileSync(runPath, 'utf8'));
+    assert.equal(unchanged.status, 'started');
+    assert.deepEqual(unchanged.verification, run.verification);
+    const runIndex = JSON.parse(readFileSync(path.join(runsDir, 'run-index.json'), 'utf8'));
+    assert.deepEqual(runIndex.runs.map((entry) => entry.runId), [runId]);
+    assert.equal(
+      JSON.parse(readFileSync(fixture.graphPath, 'utf8')).tasks
+        .find((task) => task.id === 'task-001').status,
+      'done',
+    );
+  } finally {
+    rmSync(fixture.workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test('implementation finish preflight failure stays retryable without unavailable evidence', () => {
+  const fixture = managedNonUiIteration();
+  try {
+    const graph = JSON.parse(readFileSync(fixture.graphPath, 'utf8'));
+    graph.tasks.find((task) => task.id === 'task-001').status = 'todo';
+    writeJson(fixture.graphPath, graph);
+
+    const runId = 'run-retryable-implementation-finish-preflight';
+    let result = runExecute([
+      'start',
+      '--artifacts', fixture.artifactRoot,
+      '--task', 'task-001',
+      '--run-id', runId,
+      '--agent-tool', 'codex',
+      '--workspace', fixture.workspaceRoot,
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    result = runRuns([
+      'verify',
+      '--artifacts', fixture.artifactRoot,
+      '--run-id', runId,
+      '--verify-command', 'custom:node -e "process.exit(0)"',
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+
+    const runPath = runFilePath(path.join(fixture.artifactRoot, 'runs'), runId);
+    const before = JSON.parse(readFileSync(runPath, 'utf8'));
+    const errors = [];
+    const originalConsoleError = console.error;
+    console.error = (...values) => errors.push(values.join(' '));
+    let status;
+    try {
+      status = executeMain([
+        'finish',
+        '--artifacts', fixture.artifactRoot,
+        '--run-id', runId,
+      ], {
+        preflightLifecycleChildProcess: () => ({
+          reason: 'environment_spawn_denied',
+          hint: 'child-process execution was denied by the environment (EPERM)',
+        }),
+      });
+    } finally {
+      console.error = originalConsoleError;
+    }
+    assert.equal(status, 1);
+    assert.match(errors.join('\n'), /finish environment_failure: environment_spawn_denied/);
+    assert.match(errors.join('\n'), /Retry this finish command/);
+
+    const afterFailure = JSON.parse(readFileSync(runPath, 'utf8'));
+    assert.equal(afterFailure.status, 'started');
+    assert.deepEqual(afterFailure.verification, before.verification);
+    assert.equal(afterFailure.verification.some((item) => item.status === 'unavailable'), false);
+
+    result = runExecute([
+      'finish',
+      '--artifacts', fixture.artifactRoot,
+      '--run-id', runId,
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    const finished = JSON.parse(readFileSync(runPath, 'utf8'));
+    assert.equal(finished.status, 'finished');
+  } finally {
+    rmSync(fixture.workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test('final evidence finish preflight failure remains immutable and offers one-step retry', () => {
+  const fixture = managedNonUiIteration();
+  try {
+    const runId = 'run-final-finish-preflight-environment-failure';
+    let result = runExecute([
+      'accept',
+      '--artifacts', fixture.artifactRoot,
+      '--task', 'task-001',
+      '--run-id', runId,
+      '--agent-tool', 'codex',
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+
+    const errors = [];
+    const originalConsoleError = console.error;
+    console.error = (...values) => errors.push(values.join(' '));
+    let status;
+    try {
+      status = executeMain([
+        'finish',
+        '--artifacts', fixture.artifactRoot,
+        '--run-id', runId,
+      ], {
+        preflightLifecycleChildProcess: () => ({
+          reason: 'environment_spawn_denied',
+          hint: 'child-process execution was denied by the environment (EPERM)',
+        }),
+      });
+    } finally {
+      console.error = originalConsoleError;
+    }
+    assert.equal(status, 1);
+    assert.match(
+      errors.join('\n'),
+      new RegExp(`recovery: .*execute retry .*--run-id ${runId}`),
+    );
+
+    const runsDir = path.join(fixture.artifactRoot, 'runs');
+    const runPath = runFilePath(runsDir, runId);
+    let run = JSON.parse(readFileSync(runPath, 'utf8'));
+    assert.equal(run.status, 'started');
+    assert.equal(run.verification.length, 1);
+    assert.equal(run.verification[0].status, 'unavailable');
+    assert.equal(run.verification[0].failureReason, 'environment_spawn_denied');
+
+    result = runExecute([
+      'retry',
+      '--artifacts', fixture.artifactRoot,
+      '--run-id', runId,
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    run = JSON.parse(readFileSync(runPath, 'utf8'));
+    assert.equal(run.status, 'failed');
+    assert.equal(run.failure.class, 'environment_failure');
+    assert.equal(run.verification.length, 1);
+
+    const runIndex = JSON.parse(readFileSync(path.join(runsDir, 'run-index.json'), 'utf8'));
+    assert.ok(runIndex.runs.some((entry) => (
+      entry.runId !== runId
+      && entry.runKind === 'final_acceptance_review'
+      && entry.status === 'started'
+    )));
   } finally {
     rmSync(fixture.workspaceRoot, { recursive: true, force: true });
   }

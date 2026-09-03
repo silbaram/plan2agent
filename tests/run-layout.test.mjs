@@ -267,6 +267,60 @@ describe('iteration-partitioned run layout', () => {
     }
   });
 
+  test('run-index rebuild derives live entries from canonical run files and drops inconsistent summaries', () => {
+    const tempRoot = mkdtempSync(path.join(tmpdir(), 'p2a-run-index-rebuild-'));
+    try {
+      const runsDir = path.join(tempRoot, 'runs');
+      const first = startedRun('run-rebuild-001');
+      const second = {
+        ...startedRun('run-rebuild-002'),
+        startedAt: '2026-07-18T00:01:00.000Z',
+        updatedAt: '2026-07-18T00:01:00.000Z',
+      };
+      writeJson(path.join(runsDir, canonicalRunRef(first)), first);
+      writeJson(path.join(runsDir, canonicalRunRef(second)), second);
+      const inconsistent = runIndex(first, canonicalRunRef(first));
+      inconsistent.runs[0].status = 'failed';
+      inconsistent.retrospective = {
+        iterations: [{
+          iterationId: ITERATION_ID,
+          runCount: 1,
+          reasonCounts: { superseded: 1, completed_maintenance: 0 },
+          statusCounts: { finished: 1, failed: 1, blocked: 0 },
+          verificationCount: 0,
+          verificationDuration: { sampleCount: 0, totalMs: 0, maxMs: 0 },
+          verificationStatusCounts: { passed: 0, failed: 0, skipped: 0, not_run: 0, unavailable: 0 },
+          interruptionCounts: {
+            implementation_decision: 0,
+            user_correction: 0,
+            gate_return_valid: 0,
+            gate_return_invalid: 0,
+          },
+        }],
+      };
+      writeJson(path.join(runsDir, 'run-index.json'), inconsistent);
+
+      assert.throws(
+        () => validateRunIndexData(inconsistent),
+        /statusCounts total must equal runCount/,
+      );
+      const preview = runRuns(['rebuild-index', '--runs', runsDir, '--dry-run']);
+      assert.equal(preview.status, 0, preview.stderr);
+      assert.match(preview.stdout, /invalid summary will be dropped/);
+      assert.deepEqual(JSON.parse(readFileSync(path.join(runsDir, 'run-index.json'), 'utf8')), inconsistent);
+
+      const rebuilt = runRuns(['rebuild-index', '--runs', runsDir, '--yes']);
+      assert.equal(rebuilt.status, 0, `${rebuilt.stdout}${rebuilt.stderr}`);
+      const index = validateRunsDir(runsDir);
+      assert.deepEqual(index.runs.map((entry) => entry.runId), [first.runId, second.runId]);
+      assert.deepEqual(index.runs.map((entry) => entry.status), ['started', 'started']);
+      assert.deepEqual(index.tasks[0].runIds, [first.runId, second.runId]);
+      assert.equal(Object.hasOwn(index, 'retrospective'), false);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   test('execution envelope storage rejects an intermediate directory symbolic link', (context) => {
     const tempRoot = mkdtempSync(path.join(tmpdir(), 'p2a-run-envelope-symlink-'));
     const outsideRoot = mkdtempSync(path.join(tmpdir(), 'p2a-run-envelope-outside-'));
@@ -1073,6 +1127,7 @@ describe('iteration-partitioned run layout', () => {
       assert.deepEqual(index.retrospective, {
         iterations: [{
           iterationId: 'iter-archived',
+          scope: 'pruned_run_history',
           runCount: 3,
           reasonCounts: { superseded: 1, completed_maintenance: 2 },
           statusCounts: { finished: 1, failed: 2, blocked: 0 },

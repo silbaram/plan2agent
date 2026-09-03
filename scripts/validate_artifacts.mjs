@@ -4610,6 +4610,37 @@ export function validateRun(filePath) {
 
 export function validateRunIndexData(data) {
   validateSchema(data, loadJson(SCHEMA_PATHS.run_index));
+  const retrospectiveIterations = data.retrospective?.iterations ?? [];
+  const retrospectiveIterationIds = retrospectiveIterations.map((summary) => summary.iterationId);
+  if (retrospectiveIterationIds.length !== new Set(retrospectiveIterationIds).size) {
+    throw new ValidationError('run-index retrospective.iterations[].iterationId values must be unique');
+  }
+  for (const summary of retrospectiveIterations) {
+    const label = `run-index retrospective ${summary.iterationId ?? 'null'}`;
+    const reasonCount = Object.values(summary.reasonCounts).reduce((total, count) => total + count, 0);
+    if (reasonCount !== summary.runCount) {
+      throw new ValidationError(`${label} reasonCounts total must equal runCount`);
+    }
+    const statusCount = Object.values(summary.statusCounts).reduce((total, count) => total + count, 0);
+    if (statusCount !== summary.runCount) {
+      throw new ValidationError(`${label} statusCounts total must equal runCount`);
+    }
+    const verificationStatusCount = Object.values(summary.verificationStatusCounts)
+      .reduce((total, count) => total + count, 0);
+    if (verificationStatusCount !== summary.verificationCount) {
+      throw new ValidationError(`${label} verificationStatusCounts total must equal verificationCount`);
+    }
+    const duration = summary.verificationDuration;
+    if (duration.sampleCount > summary.verificationCount) {
+      throw new ValidationError(`${label} verificationDuration.sampleCount cannot exceed verificationCount`);
+    }
+    if (duration.sampleCount === 0 && (duration.totalMs !== 0 || duration.maxMs !== 0)) {
+      throw new ValidationError(`${label} verificationDuration must be zero when sampleCount is zero`);
+    }
+    if (duration.sampleCount > 0 && duration.maxMs > duration.totalMs) {
+      throw new ValidationError(`${label} verificationDuration totalMs/maxMs are inconsistent with sampleCount`);
+    }
+  }
   const runIds = data.runs.map((run) => run.runId);
   if (runIds.length !== new Set(runIds).size) {
     throw new ValidationError('run-index runs[].runId values must be unique');

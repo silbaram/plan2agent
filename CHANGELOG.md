@@ -6,6 +6,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.5.20] - 2026-09-02
+
+### Added
+
+- Add simple GitHub issue preview and explicit publication commands for four-section P2A retrospective Markdown, with a github.com-pinned target, secret/path rejection, and marker-based duplicate detection.
+
+### Changed
+
+- Reuse current-revision configured full verification from eligible canonical implementation runs instead of always repeating it in a final verification run.
+- Distinguish configured full verification from Gate and repository supplemental checks in CLI output and documentation.
+
+### Fixed
+
+- Classify sandbox child-process denial as an environment failure and provide one-step final-evidence retry without deleting immutable failure history.
+- Validate retrospective run-index aggregates and provide an atomic `p2a runs rebuild-index` recovery command.
+
 ## [0.5.19] - 2026-08-28
 
 ### Changed
@@ -314,7 +330,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Add package-runtime project initialization, managed provider assets, artifact validation, handoff, supervised execution, evaluation, and proposal workflows.
 - Ship canonical and generated integrations for Codex, Claude Code, and Gemini CLI.
 
-[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.5.19...HEAD
+[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.5.20...HEAD
+[0.5.20]: https://github.com/silbaram/plan2agent/compare/v0.5.19...v0.5.20
 [0.5.19]: https://github.com/silbaram/plan2agent/compare/v0.5.18...v0.5.19
 [0.5.18]: https://github.com/silbaram/plan2agent/compare/v0.5.17...v0.5.18
 [0.5.17]: https://github.com/silbaram/plan2agent/compare/v0.5.16...v0.5.17

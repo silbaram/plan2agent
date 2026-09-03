@@ -961,6 +961,7 @@ test('successful task finish keeps the latest run and removes superseded same-ki
     assert.deepEqual(finalIndex.retrospective, {
       iterations: [{
         iterationId: currentEntry.iterationId,
+        scope: 'pruned_run_history',
         runCount: 1,
         reasonCounts: { superseded: 1, completed_maintenance: 0 },
         statusCounts: { finished: 1, failed: 0, blocked: 0 },

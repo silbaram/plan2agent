@@ -67,7 +67,7 @@ function usage() {
     '  p2a eval <grade|compare|analyze|generate|digest> [options]',
     '  p2a buildlore <status|sync|check|search|context|compile|query> [options]',
     '  p2a reference snapshot --entry <path> --artifacts <dir> [--target <dir>] [--json]',
-    '  p2a execute <prepare|plan|start|review|accept|resume|status|finish> [options]',
+    '  p2a execute <prepare|plan|start|review|accept|retry|resume|status|finish> [options]',
     '  p2a context show --artifacts <dir> (--continuation <id>|--phase <phase>) --provider <provider> [options]',
     '  p2a tasks|runs|iteration|proposals|validate ...',
     '',

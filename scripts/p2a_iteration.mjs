@@ -3628,7 +3628,7 @@ export function validateCloseReadyFullVerificationEvidence({
   const runsDir = path.join(path.resolve(artifactRoot), 'runs');
   if (!existsSync(runsDir)) {
     throw new ValidationError(
-      `close-ready full verification failed: runs directory is missing. Run p2a execute verify-final --artifacts ${artifactRoot}.`,
+      `close-ready configured full verification failed: runs directory is missing. Run p2a execute verify-final --artifacts ${artifactRoot}.`,
     );
   }
   validateRunsDir(runsDir, { iterationId: activeIteration });
@@ -3642,7 +3642,7 @@ export function validateCloseReadyFullVerificationEvidence({
   const activeRuns = currentRuns.filter((run) => run.status === 'started');
   if (activeRuns.length) {
     throw new ValidationError(
-      `close-ready full verification requires no active run(s): ${activeRuns.map((run) => run.runId).join(', ')}`,
+      `close-ready configured full verification requires no active run(s): ${activeRuns.map((run) => run.runId).join(', ')}`,
     );
   }
   try {
@@ -3655,7 +3655,7 @@ export function validateCloseReadyFullVerificationEvidence({
     });
   } catch (error) {
     throw new ValidationError(
-      `close-ready full verification failed: ${error.message}. Run p2a execute verify-final --artifacts ${artifactRoot}.`,
+      `close-ready configured full verification failed: ${error.message}. Run p2a execute verify-final --artifacts ${artifactRoot}.`,
     );
   }
   return 1;

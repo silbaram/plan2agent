@@ -21,7 +21,7 @@ p2a runs verify --run-id <id> --artifacts <dir> \
 
 Do not invent verification labels or use `source: manual`/`exitCode: null` as a substitute for execution. Every attempt is append-only. After correcting code or the environment at the same revision, rerun the same check in the same started run; its latest decisive result controls completion while the earlier failure remains visible. After the workspace revision changes, an older failed command remains history but is not a current obligation unless that command is still configured or fails again at the current revision.
 
-When a final verification or review command cannot start and the run cannot remain open for an immediate retry, finish that final run as `environment_failure`. The implementation task remains done and only final evidence is retried. Reopen implementation only when executed product behavior fails or the review finds a product defect.
+When a final verification or review command could not start because of the execution environment, preserve its unavailable evidence and run the exact `p2a execute retry --artifacts <root> --run-id <run-id>` recovery command. It finishes the old final run as `environment_failure` and starts a replacement bound to the same task and canonical workspace. The implementation task remains done. Reopen implementation only when executed product behavior fails or the review finds a product defect.
 
 A child-process spawn error is an environment failure even if the runtime reports exit status zero. Conversely, an executed verification recorded as `failed` always reopens implementation and must not be hidden by an `environment_failure` label.
 

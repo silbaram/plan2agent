@@ -62,6 +62,7 @@ import {
   workspaceRevisionSha256,
 } from './p2a_run_paths.mjs';
 import {
+  appendEnvironmentFailureEvidence,
   collectGitChangedFiles,
   finalRunRelatedChangedFiles,
   loadRunsForArtifactRoot,
@@ -117,7 +118,7 @@ import { fullSpecTaskRefs } from './p2a_spec_model.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.projectRoot;
-const COMMANDS = new Set(['prepare', 'plan', 'start', 'verify-final', 'review', 'accept', 'resume', 'status', 'finish']);
+const COMMANDS = new Set(['prepare', 'plan', 'start', 'verify-final', 'review', 'accept', 'retry', 'resume', 'status', 'finish']);
 const PREPARE_MODES = new Set(['direct', 'planned']);
 const FINISH_STATUSES = new Set(['finished', 'failed', 'blocked']);
 const FAILURE_SOURCES = new Set(['owner', 'monitor', 'implementer']);
@@ -153,6 +154,7 @@ function usage() {
     '  p2a execute start (--artifacts <dir>|--graph <path>) [--task <task-id>] [options]',
     '  p2a execute review (--artifacts <dir>|--graph <path>) [--task <task-id>] [options]',
     '  p2a execute accept --artifacts <dir> [--task <task-id>] [options]',
+    '  p2a execute retry --artifacts <dir> --run-id <run-id>',
     '  p2a execute resume (--artifacts <dir>|--graph <path>) --run-id <run-id>',
     '  p2a execute status (--artifacts <dir>|--graph <path>) [--task <task-id>] [--run-id <run-id>]',
     '  p2a execute finish (--artifacts <dir>|--graph <path>) --run-id <run-id> [options]',
@@ -163,6 +165,7 @@ function usage() {
     '  start                Create a run, mark the task in_progress, and print the manual launcher prompt.',
     '  review               Start the single no-change pre-close visual review run for the iteration.',
     '  accept               Start the single no-change functional acceptance review run for a non-UI iteration.',
+    '  retry                Close environment-only final evidence and start its replacement in one command.',
     '  resume               Reprint the selected run context and manual launcher prompt without changing files.',
     '  status               Show task status and the latest or requested run log summary.',
     '  finish               Optionally verify, finish the run, then mark the task done or blocked.',
@@ -424,10 +427,10 @@ function parseArgs(argv) {
   }
   if (args.maintenance && !args.artifacts) throw new Error('--maintenance is only supported with --artifacts');
   if (args.graph) assertNotUninitializedScaffoldGraph(args.graph);
-  if (args.graph && ['start', 'review', 'accept', 'finish'].includes(args.command)) {
+  if (args.graph && ['start', 'review', 'accept', 'retry', 'finish'].includes(args.command)) {
     assertUnmanagedGraphMutation(args.graph, `p2a execute ${args.command}`);
   }
-  if (['finish', 'resume'].includes(args.command) && !args.runId) throw new Error(`--run-id is required for ${args.command}`);
+  if (['finish', 'retry', 'resume'].includes(args.command) && !args.runId) throw new Error(`--run-id is required for ${args.command}`);
   if (args.runReservationToken && (!['start', 'verify-final', 'review', 'accept'].includes(args.command) || !args.runId)) {
     throw new Error('--run-reservation-token requires start, verify-final, review, or accept with --run-id');
   }
@@ -438,7 +441,7 @@ function parseArgs(argv) {
   if (['plan', 'start'].includes(args.command) && !IMPLEMENTER_AGENT_TOOLS.has(args.agentTool)) {
     throw new Error('--agent-tool for implementation must be one of codex, claude, or manual; Gemini is read-only and may only be used as a reviewer/monitor');
   }
-  if (['verify-final', 'review', 'accept'].includes(args.command) && !REVIEWER_AGENT_TOOLS.has(args.agentTool)) {
+  if (['verify-final', 'review', 'accept', 'retry'].includes(args.command) && !REVIEWER_AGENT_TOOLS.has(args.agentTool)) {
     throw new Error('--agent-tool for final verification/review must be one of codex, claude, gemini, or manual');
   }
   if (args.command !== 'finish' && args.verifyOptions.length) {
@@ -1121,6 +1124,40 @@ function commandLine(scriptName, args) {
   return sharedCommandLine(P2A_PATHS, scriptName, args);
 }
 
+const LIFECYCLE_PREFLIGHT_TIMEOUT_MS = 10000;
+
+export function preflightLifecycleChildProcess(options = {}) {
+  const spawn = options.spawnSync ?? spawnSync;
+  const result = spawn(
+    process.execPath,
+    ['--eval', 'process.exit(0)'],
+    {
+      cwd: options.cwd ?? process.cwd(),
+      shell: false,
+      encoding: 'utf8',
+      timeout: options.timeoutMs ?? LIFECYCLE_PREFLIGHT_TIMEOUT_MS,
+    },
+  );
+  if (!result.error && result.status === 0) return null;
+  const code = typeof result.error?.code === 'string'
+    ? result.error.code.trim().toUpperCase()
+    : null;
+  const denied = code === 'EPERM' || code === 'EACCES';
+  const detail = code ?? (result.signal ? `signal ${result.signal}` : `exit ${result.status ?? 'unknown'}`);
+  return {
+    reason: denied ? 'environment_spawn_denied' : 'environment_preflight_failed',
+    hint: denied
+      ? `child-process execution was denied by the environment (${detail})`
+      : `child-process preflight could not complete (${detail})`,
+  };
+}
+
+function assertLifecycleChildProcessAvailable(label, cwd = process.cwd()) {
+  const failure = preflightLifecycleChildProcess({ cwd });
+  if (!failure) return;
+  throw new Error(`${label} environment_failure: ${failure.reason}: ${failure.hint}`);
+}
+
 function promptArgs(source, taskId) {
   const args = ['prompt', ...source.sourceArgs];
   if (!source.artifactRoot && source.specPath) args.push('--spec', source.specPath);
@@ -1206,28 +1243,38 @@ function blockingFinalReviewEvidence(source, run) {
     return null;
   }
   const sidecarPath = runSidecarPath(source.runsDir, run.runId, suffix);
-  if (!existsSync(sidecarPath) || !lstatSync(sidecarPath).isFile()) return null;
+  let sidecarStat;
+  try {
+    sidecarStat = lstatSync(sidecarPath);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    throw error;
+  }
+  if (!sidecarStat.isFile()) {
+    throw new ValidationError(`final ${label} review sidecar must be a file: ${sidecarPath}`);
+  }
+  let review;
   try {
     const artifactRoot = path.dirname(path.resolve(source.runsDir));
     const validatedSource = validateRunTaskContract(run, artifactRoot, {
       runsDir: source.runsDir,
     });
-    const review = run.runKind === 'final_acceptance_review'
+    review = run.runKind === 'final_acceptance_review'
       ? validateAcceptanceReview(sidecarPath, expectedAcceptanceReviewContract(run))
       : validateVisualReview(sidecarPath, expectedVisualReviewContract(run), {
           artifactRoot,
           sourceArtifactRoot: validatedSource.sourceArtifactRoot,
         });
-    if (review.verdict !== 'block') return null;
-    return {
-      label,
-      findings: run.runKind === 'final_acceptance_review'
-        ? review.unmet
-        : review.concerns,
-    };
-  } catch {
-    return null;
+  } catch (error) {
+    throw new ValidationError(`final ${label} review sidecar validation failed: ${error.message}`);
   }
+  if (review.verdict !== 'block') return null;
+  return {
+    label,
+    findings: run.runKind === 'final_acceptance_review'
+      ? review.unmet
+      : review.concerns,
+  };
 }
 
 function addUnavailableEnvironmentFailureDetails(args, unavailable) {
@@ -1627,7 +1674,7 @@ function printFinalVerificationInstructions(source, task, run, workspacePath) {
   console.log('');
   console.log(relevantOnly
     ? 'Plan2Agent final relevant verification'
-    : 'Plan2Agent final full verification');
+    : 'Plan2Agent final configured full verification');
   console.log(`- iteration: ${source.iterationId}`);
   console.log(`- remediation owner: ${task.id} - ${humanTaskOutcome(task)}`);
   console.log(`- runId: ${run.runId}`);
@@ -1675,7 +1722,7 @@ function printFinalAcceptanceReviewInstructions(source, task, run, workspacePath
   console.log('');
   console.log('Next:');
   console.log(`1. Record configured full verification for this canonical revision: ${commandLine('p2a_runs.mjs', ['verify', ...source.sourceArgs, '--run-id', runId])}`);
-  console.log(`2. Run each Gate B behavior case as owner-recorded evidence: ${commandLine('p2a_runs.mjs', ['verify', ...source.sourceArgs, '--run-id', runId, '--verify-command', 'custom:<behavior-command>'])}`);
+  console.log(`2. Run each Gate B behavior case as owner-recorded supplemental evidence: ${commandLine('p2a_runs.mjs', ['verify', ...source.sourceArgs, '--run-id', runId, '--verify-command', 'custom:<behavior-command>'])}`);
   console.log(`3. Preflight the exact ${criteriaCount}-criterion current-iteration run contract. Do not substitute the cumulative product spec or a summarized subset; map every criterion ref to relevant verbatim command evidence.`);
   console.log('4. If any criterion lacks relevant evidence, record more behavior evidence or block the run without invoking the acceptance reviewer.');
   console.log('5. Only after the preflight passes, give the exact run contract and recorded verification output to the read-only acceptance reviewer; write <runId>.acceptance-review.json beside the run.');
@@ -2116,6 +2163,7 @@ function runPlan(args) {
 
 function runStart(args) {
   const initialSource = resolveSource(args);
+  assertLifecycleChildProcessAvailable('run start preflight');
   return withRunStoreLocks([path.dirname(initialSource.graphPath)], () => {
     const source = currentStartSource(args, initialSource);
     const approvalLink = resolveApprovalSelection(args, source);
@@ -2180,6 +2228,7 @@ function runStart(args) {
 
 function runVerifyFinal(args) {
   const initialSource = resolveSource(args);
+  assertLifecycleChildProcessAvailable('final verification start preflight');
   return withRunStoreLocks([path.dirname(initialSource.graphPath)], () => {
     const source = currentSourceGraph(initialSource);
     if (!args.artifacts || args.approval || args.maintenance || source.sourceLayout !== 'iteration') {
@@ -2259,6 +2308,7 @@ function runVerifyFinal(args) {
 
 function runReview(args) {
   const initialSource = resolveSource(args);
+  assertLifecycleChildProcessAvailable('final visual review start preflight');
   return withRunStoreLocks([path.dirname(initialSource.graphPath)], () => {
     const source = currentSourceGraph(initialSource);
     if (args.approval || args.maintenance) {
@@ -2318,6 +2368,7 @@ function runReview(args) {
 
 function runAccept(args) {
   const initialSource = resolveSource(args);
+  assertLifecycleChildProcessAvailable('final acceptance review start preflight');
   return withRunStoreLocks([path.dirname(initialSource.graphPath)], () => {
     const source = currentSourceGraph(initialSource);
     if (!args.artifacts || args.approval || args.maintenance || source.sourceLayout !== 'iteration') {
@@ -2373,6 +2424,76 @@ function runAccept(args) {
     recordExecutionResult(args, 'accept', startedRun);
     return 0;
   });
+}
+
+function replacementArgsForEnvironmentRetry(args, run) {
+  return {
+    ...args,
+    command: run.runKind === 'final_verification'
+      ? 'verify-final'
+      : (run.runKind === 'final_visual_review' ? 'review' : 'accept'),
+    taskId: run.taskId,
+    runId: null,
+    runReservationToken: null,
+    agentTool: run.agentTool,
+    workspace: run.workspacePath,
+    workspaceRef: run.workspaceRef,
+    isolation: 'none',
+    branch: null,
+    worktree: null,
+    createIsolation: false,
+    notes: [],
+    status: null,
+    failureClass: null,
+    retryable: null,
+    needsUserDecision: null,
+    failureSource: null,
+    reproductionSteps: [],
+    reproductionCommands: [],
+    reproductionNotes: [],
+    localizationFindings: [],
+    localizedFiles: [],
+    fixSummaries: [],
+    fixFiles: [],
+    guardChecks: [],
+    guardNotes: [],
+    noTaskTransition: false,
+  };
+}
+
+function runEnvironmentRetry(args) {
+  if (!args.artifacts || args.graph || args.maintenance || args.approval) {
+    throw new Error('environment retry requires --artifacts for a feature iteration');
+  }
+  const source = resolveSource(args);
+  let run = readRun(source.runsDir, args.runId);
+  assertRunMatchesSourceContext(run, source);
+  if (!FINAL_EVIDENCE_RUN_KINDS.has(run.runKind)) {
+    throw new Error(`run ${run.runId} is not final verification/review evidence; retry it through the normal task lifecycle`);
+  }
+  if (run.verification.some((item) => item.status === 'failed') || blockingFinalReviewEvidence(source, run)) {
+    throw new Error(`run ${run.runId} contains a product or review failure; remediate the owning task instead of using environment retry`);
+  }
+  if (run.status === 'started') {
+    const currentAttempts = currentVerificationAttemptsForExecuteRun(source, run);
+    if (!hasOnlyUnavailableFinalEvidence(run, currentAttempts)) {
+      throw new Error(`run ${run.runId} has no unavailable final evidence to retry`);
+    }
+    console.log(`Closing immutable environment-only evidence: ${run.runId}`);
+    runFinish({ ...args, command: 'finish' });
+    run = readRun(source.runsDir, args.runId);
+  }
+  if (!isEnvironmentOnlyFinalReviewFailure(source, run)) {
+    throw new Error(
+      `run ${run.runId} must be a failed environment-only final run; current status is ${run.status}`,
+    );
+  }
+
+  const replacementArgs = replacementArgsForEnvironmentRetry(args, run);
+  console.log(`Starting replacement final evidence for ${run.runId} on the same task and workspace...`);
+  if (run.runKind === 'final_verification') return runVerifyFinal(replacementArgs);
+  if (run.runKind === 'final_visual_review') return runReview(replacementArgs);
+  return runAccept(replacementArgs);
 }
 
 function runResume(args) {
@@ -2492,7 +2613,7 @@ function runStatus(args) {
   return 0;
 }
 
-function runFinish(args) {
+function runFinish(args, dependencies = {}) {
   const source = resolveSource(args);
   const approvalLink = resolveApprovalSelection(args, source);
   const existingRun = readRun(source.runsDir, args.runId);
@@ -2508,6 +2629,36 @@ function runFinish(args) {
     }
   }
   if (existingRun.status !== 'started') return recoverAfterClosedRun(args, source, existingRun);
+  const lifecyclePreflightFailure = (
+    dependencies.preflightLifecycleChildProcess ?? preflightLifecycleChildProcess
+  )();
+  if (lifecyclePreflightFailure) {
+    const hasProductFailure = existingRun.verification.some((item) => item.status === 'failed');
+    const blockingReview = blockingFinalReviewEvidence(source, existingRun);
+    const retryableFinalEnvironmentFailure = (
+      FINAL_EVIDENCE_RUN_KINDS.has(existingRun.runKind)
+      && !hasProductFailure
+      && !blockingReview
+    );
+    if (retryableFinalEnvironmentFailure) {
+      appendEnvironmentFailureEvidence(source.runsDir, existingRun.runId, {
+        command: 'Plan2Agent lifecycle child-process preflight',
+        reason: lifecyclePreflightFailure.reason,
+        hint: lifecyclePreflightFailure.hint,
+      });
+    }
+    console.error(`finish environment_failure: ${lifecyclePreflightFailure.reason}: ${lifecyclePreflightFailure.hint}`);
+    if (retryableFinalEnvironmentFailure) {
+      console.error(`recovery: ${commandLine('p2a_execute.mjs', [
+        'retry',
+        ...source.sourceArgs,
+        '--run-id', existingRun.runId,
+      ])}`);
+    } else {
+      console.error('Retry this finish command after child-process execution is available.');
+    }
+    return 1;
+  }
   const closedRuntime = closedOrchestrationRuntimeForRun(source, args.runId);
   if (closedRuntime) {
     console.log(`Orchestration runtime already closed: ${displayPath(closedRuntime.filePath)}`);
@@ -2664,7 +2815,7 @@ function runFinish(args) {
   return status;
 }
 
-export function main(argv = process.argv.slice(2)) {
+export function main(argv = process.argv.slice(2), dependencies = {}) {
   let restoreConsoleLog = null;
   try {
     const args = parseArgs(argv);
@@ -2687,9 +2838,10 @@ export function main(argv = process.argv.slice(2)) {
     else if (args.command === 'verify-final') status = runVerifyFinal(args);
     else if (args.command === 'review') status = runReview(args);
     else if (args.command === 'accept') status = runAccept(args);
+    else if (args.command === 'retry') status = runEnvironmentRetry(args);
     else if (args.command === 'resume') status = runResume(args);
     else if (args.command === 'status') status = runStatus(args);
-    else if (args.command === 'finish') status = runFinish(args);
+    else if (args.command === 'finish') status = runFinish(args, dependencies);
     else throw new Error(`unknown command: ${args.command}`);
     restoreConsoleLog?.();
     if (args.json && status === 0) {

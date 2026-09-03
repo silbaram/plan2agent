@@ -11,6 +11,7 @@ import './runtime-context-fixture.test.mjs';
 import './runtime-routing-performance.test.mjs';
 import './current-development-first.test.mjs';
 import './retrospective-candidates.test.mjs';
+import './github-issue-publication.test.mjs';
 import './harness-update-style-contract.test.mjs';
 import './handoff-portability.test.mjs';
 import './buildlore-integration.test.mjs';

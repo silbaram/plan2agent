@@ -733,6 +733,74 @@ function writeFinalVerification(root, artifactRoot, iterationId) {
   }]);
 }
 
+function writeReusableImplementationVerification(root, artifactRoot, iterationId) {
+  const workspacePath = root;
+  const graphPath = join(
+    artifactRoot,
+    'iterations',
+    iterationId,
+    'gate-c-task-graph',
+    'task-graph.json',
+  );
+  const runsDir = join(artifactRoot, 'runs');
+  writeJson(join(root, '.plan2agent', 'project.config.json'), {
+    testCommand: 'npm test',
+  });
+  mkdirSync(join(root, 'src'), { recursive: true });
+  writeFileSync(join(root, 'src', 'reusable-verification.js'), 'export const verified = true;\n', 'utf8');
+  const revisionRun = {
+    projectId: currentProjectId(artifactRoot),
+    iterationId,
+    sourceLayout: 'iteration',
+    workspacePath,
+  };
+  const revision = workspaceRevisionSha256(
+    workspacePath,
+    workspaceRevisionExcludedPathsForRun(runsDir, revisionRun, {
+      artifactRoot,
+      graphPath,
+      workspacePath,
+    }),
+  );
+  const productRevision = workspaceRevisionSha256(
+    workspacePath,
+    [
+      ...workspaceRevisionExcludedPathsForRun(runsDir, revisionRun, {
+        artifactRoot,
+        graphPath,
+        workspacePath,
+      }),
+      ...productRevisionExcludedPaths(workspacePath),
+    ],
+  );
+  writeRuns(artifactRoot, [{
+    runId: 'run-reusable-implementation-verification',
+    taskId: 'task-001',
+    iterationId,
+    status: 'finished',
+    workspaceRef: '.',
+    workspacePath,
+    workspaceRevisionSha256: revision,
+    productRevisionSha256: productRevision,
+    changedFiles: ['src/reusable-verification.js'],
+    verification: [{
+      type: 'test',
+      command: 'npm test',
+      status: 'passed',
+      exitCode: 0,
+      durationMs: 1,
+      startedAt: '2026-07-31T00:00:00.000Z',
+      finishedAt: '2026-07-31T00:00:00.001Z',
+      stdoutTail: 'ok',
+      stderrTail: '',
+      source: 'config',
+      scope: 'full',
+      workspaceRevisionSha256: revision,
+      productRevisionSha256: productRevision,
+    }],
+  }]);
+}
+
 function next(root, args = []) {
   const result = runP2a(['next', '--target', root, '--json', '--contract', 'v2', ...args]);
   assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
@@ -2132,6 +2200,23 @@ test('completed iterations expose product review, P2A retrospective, and close w
     const currentSpec = JSON.parse(readFileSync(join(rootArtifact, 'current-spec.json'), 'utf8'));
     assert.equal(currentSpec.active_iteration, iterationId);
     assert.equal(currentSpec.closed_iterations, undefined);
+  } finally {
+    remove(root);
+  }
+});
+
+test('completed iterations reuse current configured full implementation evidence without a final rerun', () => {
+  const root = project();
+  try {
+    const rootArtifact = artifact(root);
+    const iterationId = writeIteration(rootArtifact);
+    writeGateA(rootArtifact, 'ready_for_spec', iterationId);
+    writeGateB(rootArtifact, 'approved', iterationId);
+    writeGateC(rootArtifact, [task('task-001', 'done')], iterationId);
+    writeGateD(rootArtifact, [], iterationId);
+    writeReusableImplementationVerification(root, rootArtifact, iterationId);
+
+    assertCompletionDecision(next(root), artifactPath(root));
   } finally {
     remove(root);
   }

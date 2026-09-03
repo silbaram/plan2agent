@@ -1,4 +1,4 @@
-/** Enforce one revision-bound full verification pass before iteration close. */
+/** Enforce the revision-bound verification profile required before iteration close. */
 
 import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
@@ -704,6 +704,9 @@ export function assertFinalFullVerificationReady({
   }
   return {
     run: matched.run,
+    evidenceSource: FINAL_VERIFICATION_RUN_KINDS.has(matched.run.runKind)
+      ? 'final_run'
+      : 'implementation_run_reuse',
     workspaceRevisionSha256: matched.currentWorkspaceRevision,
     productRevisionSha256: matched.currentProductRevision,
     profile,

@@ -38,6 +38,35 @@ Proposal 저장은 다시 별도 승인이 필요하며 회고를 건너뛰거�
 - Suggested improvement
 - Evidence
 
+## P2A GitHub 이슈로 발행하기
+
+위 네 H2 섹션만 가진 짧은 회고가 P2A 자체의 실행 절차 문제를 설명한다면, 먼저 공개
+GitHub 이슈 초안을 만든다. 상세 사이클 템플릿이나 제품 코드 문제를 그대로 P2A 저장소로
+보내지 않는다. 한 보고서에 서로 다른 대상의 문제가 섞여 있으면 P2A 관련 항목을 별도 짧은
+회고로 분리한다.
+
+```bash
+p2a proposals issue-preview \
+  --retrospective docs/retrospective/<project_id>-v<N>.md \
+  --target-area Execution
+```
+
+`issue-preview`는 `silbaram/plan2agent` 공개 저장소에 올라갈 제목과 본문을 보여주며 GitHub를
+호출하거나 파일을 만들지 않는다. 비밀값이나 사용자 절대 경로가 감지되면 중단한다.
+
+사용자가 표시된 대상·제목·본문을 확인하고 원격 등록을 별도로 승인한 뒤에만 게시한다.
+
+```bash
+p2a proposals publish-issue \
+  --retrospective docs/retrospective/<project_id>-v<N>.md \
+  --target-area Execution \
+  --yes
+```
+
+게시는 대상을 `github.com/silbaram/plan2agent`로 고정하고 같은 회고 marker를 가진 열린·닫힌
+이슈를 검색한 뒤, 없을 때만 `gh issue create`를 실행한다. 별도 draft나 receipt artifact는
+만들지 않는다. 같은 회고를 여러 checkout에서 동시에 발행하는 것은 지원하지 않는다.
+
 아래 전체 템플릿은 사용자가 5분 상세 회고를 요청한 경우에만 사용한다.
 
 1. [cycle-template.md](./cycle-template.md)를 복사해
