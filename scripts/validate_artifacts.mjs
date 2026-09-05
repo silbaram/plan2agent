@@ -6024,6 +6024,42 @@ export function validateRunTaskContract(runData, artifactRoot, options = {}) {
   };
 }
 
+function validateReviewRemediationLink(runData, index, runsDir) {
+  const remediation = runData.reviewRemediation;
+  if (!remediation) return;
+  if (runData.runKind || runData.sourceLayout !== 'iteration') {
+    throw new ValidationError(
+      `run ${runData.runId} reviewRemediation is only valid for a normal active-iteration implementation run`,
+    );
+  }
+  if (remediation.sourceRunId === runData.runId) {
+    throw new ValidationError(`run ${runData.runId} reviewRemediation cannot reference itself`);
+  }
+  const sourceEntry = index.runs.find((entry) => entry.runId === remediation.sourceRunId);
+  if (!sourceEntry) {
+    throw new ValidationError(
+      `run ${runData.runId} reviewRemediation source run ${remediation.sourceRunId} is missing from run-index`,
+    );
+  }
+  const sourceRef = normalizeIndexedRunRef(sourceEntry.runRef, sourceEntry.runId);
+  const sourcePath = path.join(runsDir, sourceRef);
+  assertFile(sourcePath, sourceEntry.runRef);
+  const sourceRun = validateRun(sourcePath);
+  if (
+    sourceRun.status !== 'finished'
+    || sourceRun.runKind
+    || sourceRun.projectId !== runData.projectId
+    || sourceRun.taskId !== runData.taskId
+    || sourceRun.iterationId !== runData.iterationId
+    || sourceRun.sourceLayout !== runData.sourceLayout
+    || sourceRun.taskGraphRef !== runData.taskGraphRef
+  ) {
+    throw new ValidationError(
+      `run ${runData.runId} reviewRemediation source ${sourceRun.runId} must be a finished implementation run for the same task and iteration`,
+    );
+  }
+}
+
 export function validateRunsDir(runsDir, options = {}) {
   if (!existsSync(runsDir)) throw new ValidationError(`runs directory is missing: ${runsDir}`);
   if (!lstatSync(runsDir).isDirectory()) throw new ValidationError(`runs path must be a directory: ${runsDir}`);
@@ -6060,6 +6096,7 @@ export function validateRunsDir(runsDir, options = {}) {
     if (runData.projectId !== index.projectId) {
       throw new ValidationError(`run ${run.runId} projectId does not match run-index projectId`);
     }
+    validateReviewRemediationLink(runData, index, runsDir);
     const source = runData.status === 'finished'
       ? validateRunTaskContract(
           runData,

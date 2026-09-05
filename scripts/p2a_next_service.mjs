@@ -1508,13 +1508,13 @@ function approvalNextAction(
 
 function completionOptions(context) {
   const remediationArgv = [
-    'tasks',
-    'todo',
+    'execute',
+    'remediate',
     '--artifacts',
     context.artifactArg,
+    '--task',
     '<task-id>',
-    '--reopen',
-    '--note',
+    '--finding',
     '<review finding>',
   ];
   const closeArgv = ['iteration', 'close', '--artifacts', context.artifactArg];
@@ -1550,10 +1550,10 @@ function completionOptions(context) {
     {
       id: 'review',
       label: 'Review and remediate',
-      description: 'Keep the active iteration open, review the completed implementation read-only using current final verification evidence, and reopen the owning completed task only when a finding requires code changes.',
+      description: 'Keep the active iteration open, review the completed implementation read-only using current final verification evidence, and start a linked in-iteration remediation run only when a finding requires code changes.',
       action: {
         kind: 'review',
-        display: `Review the completed implementation read-only while keeping the active iteration open. Inspect the diff, code, tests, and current verification evidence without rerunning product commands. If no material finding exists, do not repeat this menu: report "No material issue found" and ask once whether to close with ${p2aCommandLine(P2A_PATHS, closeArgv)}. Remediation changes use the normal verification lifecycle.`,
+        display: `Review the completed implementation read-only while keeping the active iteration open. Inspect the diff, code, tests, and current verification evidence without rerunning product commands. If no material finding exists, do not repeat this menu: report "No material issue found" and ask once whether to close with ${p2aCommandLine(P2A_PATHS, closeArgv)}. A material finding starts a linked remediation run in the same iteration and returns the task to done only after verification passes.`,
         remediation: {
           kind: 'cli',
           argv: remediationArgv,

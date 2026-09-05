@@ -41,7 +41,7 @@ p2a runs checkpoint --run-id <id> --artifacts <dir> --milestone <milestone-id>
 
 ## Conditional reviews
 
-- Optional closeout product review is read-only. Inspect the completed diff, code, tests, and existing current required verification evidence; do not rerun product commands solely because review was selected. A clean review asks once to close instead of repeating the choice menu. Remediation edits return through normal verification.
+- Optional closeout product review is read-only. Inspect the completed diff, code, tests, and existing current required verification evidence; do not rerun product commands solely because review was selected. A clean review asks once to close instead of repeating the choice menu. For a material finding while the iteration remains open, use the returned `p2a execute remediate` action so the reviewed run stays immutable, the replacement run records `reviewRemediation.sourceRunId`, and close remains unavailable until normal verification finishes. Do not use maintenance solely because the owning task was already done.
 - For UI/mixed work or an envelope with `visualContract`, follow `visual-evidence.md`.
 - For acceptance policy `on` with current-iteration behavior criteria, explicit opt-in, or an already-started acceptance run, follow `acceptance-review.md` after non-visual work is integrated. A valid current-iteration contract with no new behavior criteria skips this review, and a required visual contract replaces it.
 - When the run was started with `--require-monitor`, follow `monitor-gate.md`. Ordinary runs do not load or invoke monitor protocol.

@@ -210,6 +210,11 @@ function usage() {
     '  --agent-tool <tool>     Agent/CLI tool that performed the run, such as codex, claude, gemini.',
     '  --run-kind <kind>       Structured run purpose: final_verification, final_visual_review, or final_acceptance_review.',
     '  --verification-scope <scope>  Internal final verification scope: full or relevant.',
+    '  --review-remediation-source-run <run-id>',
+    '                          Internal start link to the completed implementation run under review.',
+    '  --review-remediation-finding <text>',
+    '                          Internal non-empty review finding that authorized remediation.',
+    '  --review-ref <ref>      Optional issue, comment, report, or review evidence reference.',
     '  --workspace <dir>       Workspace path for verification commands. Defaults to cwd or --worktree.',
     '  --workspace-ref <ref>   Human-readable workspace reference. Defaults to --workspace display path.',
     '  --isolation <mode>      none, branch, or worktree. Default: none.',
@@ -285,6 +290,9 @@ function parseArgs(argv) {
     agentTool: null,
     runKind: null,
     verificationScope: null,
+    reviewRemediationSourceRunId: null,
+    reviewRemediationFinding: null,
+    reviewRef: null,
     workspace: null,
     workspaceRef: null,
     isolation: 'none',
@@ -355,6 +363,15 @@ function parseArgs(argv) {
       if (!['full', 'relevant'].includes(args.verificationScope)) {
         throw new Error('--verification-scope must be full or relevant');
       }
+    }
+    else if (arg === '--review-remediation-source-run') {
+      args.reviewRemediationSourceRunId = requiredValue(argv, ++index, '--review-remediation-source-run');
+    }
+    else if (arg === '--review-remediation-finding') {
+      args.reviewRemediationFinding = requiredNonBlankText(argv, ++index, '--review-remediation-finding');
+    }
+    else if (arg === '--review-ref') {
+      args.reviewRef = requiredNonBlankText(argv, ++index, '--review-ref');
     }
     else if (arg === '--workspace') args.workspace = requiredValue(argv, ++index, '--workspace');
     else if (arg === '--workspace-ref') args.workspaceRef = requiredValue(argv, ++index, '--workspace-ref');
@@ -479,6 +496,20 @@ function parseArgs(argv) {
   }
   if (args.verificationScope && (args.command !== 'start' || args.runKind !== 'final_verification')) {
     throw new Error('--verification-scope is only supported when starting a final_verification run');
+  }
+  const hasReviewRemediation = [
+    args.reviewRemediationSourceRunId,
+    args.reviewRemediationFinding,
+    args.reviewRef,
+  ].some((value) => value !== null);
+  if (hasReviewRemediation && args.command !== 'start') {
+    throw new Error('review remediation options are only supported with start');
+  }
+  if (hasReviewRemediation && (!args.reviewRemediationSourceRunId || !args.reviewRemediationFinding)) {
+    throw new Error('review remediation start requires --review-remediation-source-run and --review-remediation-finding');
+  }
+  if (hasReviewRemediation && (args.runKind || args.maintenance || !args.artifacts)) {
+    throw new Error('review remediation is only supported for a normal run in an active iteration');
   }
   const hasVisualFeedbackDetails = args.visualFeedbackNote !== null || args.visualFeedbackConcerns.length > 0;
   if ((args.visualFeedbackVerdict || hasVisualFeedbackDetails) && args.command !== 'record') {
@@ -783,6 +814,9 @@ function resolveTaskSource(args) {
       projectId: state.projectId,
       sourceLayout: 'iteration',
       iterationId: state.activeIteration,
+      iterationArchived: (state.currentSpec.closed_iterations ?? []).some((closed) => (
+        closed?.iteration_id === state.activeIteration && closed?.status === 'archived'
+      )),
       artifactRoot: state.artifactRoot,
       graphPath: state.taskGraphPath,
       graph,
@@ -1148,6 +1182,28 @@ function mergeRunIndexRetrospectives(indexes) {
     : null;
 }
 
+function retainReviewRemediationLineage(runsDir, index, selected) {
+  const selectedById = new Map(selected.map((entry) => [entry.runId, entry]));
+  const queued = index.runs.filter((entry) => !selectedById.has(entry.runId));
+  const visited = new Set();
+  while (queued.length) {
+    const entry = queued.pop();
+    if (visited.has(entry.runId)) continue;
+    visited.add(entry.runId);
+    const run = loadJson(runFilePath(runsDir, entry.runId, index));
+    const sourceRunId = run.reviewRemediation?.sourceRunId;
+    if (!sourceRunId) continue;
+    const sourceEntry = index.runs.find((candidate) => candidate.runId === sourceRunId);
+    if (!sourceEntry) {
+      throw new Error(
+        `cannot prune run evidence while ${run.runId} references missing remediation source ${sourceRunId}`,
+      );
+    }
+    if (selectedById.delete(sourceRunId)) queued.push(sourceEntry);
+  }
+  return selected.filter((entry) => selectedById.has(entry.runId));
+}
+
 function pruneIndexedRunEvidenceLocked(runsDir, options = {}) {
   assertNoPendingRunMigration(runsDir);
   recoverPendingRunWrite(runsDir);
@@ -1180,10 +1236,11 @@ function pruneIndexedRunEvidenceLocked(runsDir, options = {}) {
       `cannot prune active run evidence; finish or block started run(s): ${started.map((entry) => entry.runId).join(', ')}`,
     );
   }
-  const selected = scoped.filter((entry) => (
+  let selected = scoped.filter((entry) => (
     entry.status !== 'started'
     && !keepRunIds.has(entry.runId)
   ));
+  selected = retainReviewRemediationLineage(runsDir, index, selected);
   const droppedRetrospective = options.dropRetrospective === true
     ? dropRetrospectiveIterations(index, selectors.iterationIds)
     : index.retrospective;
@@ -2895,6 +2952,42 @@ function executionStrategy(source, runKind = null) {
   return { mode, selectionRationale, milestones };
 }
 
+function reviewRemediationForStart(args, source, task) {
+  if (!args.reviewRemediationSourceRunId) return null;
+  if (source.sourceLayout !== 'iteration' || source.iterationArchived) {
+    throw new Error(
+      `review remediation requires an active, unarchived iteration; open maintenance or a new iteration for ${source.iterationId}`,
+    );
+  }
+  if (task.status !== 'in_progress') {
+    throw new Error(
+      `review remediation run requires ${task.id} to be in_progress; use p2a execute remediate to reopen and start it atomically`,
+    );
+  }
+  assertSafeRunId(args.reviewRemediationSourceRunId, '--review-remediation-source-run');
+  const sourceRun = readRun(source.runsDir, args.reviewRemediationSourceRunId);
+  assertRunMatchesSourceContext(sourceRun, source);
+  if (sourceRun.taskId !== task.id) {
+    throw new Error(
+      `review remediation source run ${sourceRun.runId} belongs to ${sourceRun.taskId}, not ${task.id}`,
+    );
+  }
+  if (sourceRun.status !== 'finished' || sourceRun.runKind) {
+    throw new Error(
+      `review remediation source run ${sourceRun.runId} must be a finished implementation run`,
+    );
+  }
+  validateRunTaskContract(sourceRun, source.artifactRoot, { runsDir: source.runsDir });
+  return {
+    metadata: {
+      sourceRunId: sourceRun.runId,
+      ...(args.reviewRef ? { reviewRef: args.reviewRef } : {}),
+      finding: args.reviewRemediationFinding,
+    },
+    sourceRunSha256: createHash('sha256').update(JSON.stringify(sourceRun)).digest('hex'),
+  };
+}
+
 function startRun(args) {
   const source = resolveTaskSource(args);
   const task = requireTask(source.graph, args.taskId);
@@ -3029,6 +3122,8 @@ function startRun(args) {
       );
   const ruleContract = args.requireMonitor ? monitorRuleContract(source, configWorkspacePath) : null;
   const strategy = executionStrategy(source, args.runKind);
+  const reviewRemediationStart = reviewRemediationForStart(args, source, task);
+  const reviewRemediation = reviewRemediationStart?.metadata ?? null;
   // A fresh worktree is the future workspace: validate its existing Git base
   // before creation, then validate the worktree itself after prepareIsolation.
   assertDirectory(createsWorktree ? isolationBasePath : workspacePath, '--workspace');
@@ -3075,6 +3170,7 @@ function startRun(args) {
     taskContractSha256: taskContractSha256(task),
     mode: strategy.mode,
     selectionRationale: strategy.selectionRationale,
+    ...(reviewRemediation ? { reviewRemediation } : {}),
     ...(strategy.milestones ? { milestones: strategy.milestones } : {}),
     ...(executionEnvelope ? {
       executionEnvelopeRef: { sha256: executionEnvelopeSha256(executionEnvelope) },
@@ -3120,6 +3216,17 @@ function startRun(args) {
         run.runId,
         executionEnvelope ?? undefined,
       );
+      if (reviewRemediationStart) {
+        const currentReviewRemediation = reviewRemediationForStart(args, source, task);
+        if (
+          JSON.stringify(currentReviewRemediation.metadata) !== JSON.stringify(reviewRemediationStart.metadata)
+          || currentReviewRemediation.sourceRunSha256 !== reviewRemediationStart.sourceRunSha256
+        ) {
+          throw new Error(
+            `review remediation source run ${reviewRemediation.sourceRunId} changed while run ${run.runId} was preparing isolation; no run was written`,
+          );
+        }
+      }
     } catch (error) {
       if (allocation.reservationToken) {
         releaseRunIdReservation(runsDir, run.runId, allocation.reservationToken);
@@ -3139,6 +3246,9 @@ function startRun(args) {
   console.log(`- executionMode: ${run.mode}`);
   console.log(`- agentTool: ${run.agentTool}`);
   console.log(`- workspaceRef: ${run.workspaceRef}`);
+  if (run.reviewRemediation) {
+    console.log(`- reviewRemediation: ${run.reviewRemediation.sourceRunId}${run.reviewRemediation.reviewRef ? ` (${run.reviewRemediation.reviewRef})` : ''}`);
+  }
   if (executionEnvelope) {
     console.log(`- executionEnvelope: ${run.executionEnvelopeSha256}`);
   }

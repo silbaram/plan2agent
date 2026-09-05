@@ -317,6 +317,28 @@
       "type": "string",
       "minLength": 1
     },
+    "reviewRemediation": {
+      "type": "object",
+      "required": [
+        "sourceRunId",
+        "finding"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "sourceRunId": {
+          "type": "string",
+          "pattern": "^run-[A-Za-z0-9._-]+$"
+        },
+        "reviewRef": {
+          "type": "string",
+          "minLength": 1
+        },
+        "finding": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
     "milestones": {
       "type": "array",
       "minItems": 2,
@@ -1233,6 +1255,20 @@
           "runKind": {
             "const": "final_verification"
           }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "reviewRemediation"
+        ]
+      },
+      "then": {
+        "not": {
+          "required": [
+            "runKind"
+          ]
         }
       }
     },

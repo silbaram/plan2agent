@@ -1198,18 +1198,11 @@ test('a confirmed entry proceeds through Gate A-C execution and opens a baseline
     assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
 
     next = runNext(root, ['--entry', 'idea.md', '--contract', 'v2']);
-    assert.equal(next.state, 'ready_task_available');
-    const remediationRunId = 'run-entry-contract-review-remediation';
-    result = runP2a([
-      'execute', 'start',
-      '--artifacts', artifactRoot,
-      '--task', 'task-001',
-      '--run-id', remediationRunId,
-      '--agent-tool', 'codex',
-      '--workspace', root,
-      '--workspace-ref', 'entry-contract-review-remediation',
-    ]);
-    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    assert.equal(next.state, 'run_started');
+    const remediationRunId = JSON.parse(readFileSync(
+      path.join(artifactRoot, 'runs', 'run-index.json'),
+      'utf8',
+    )).tasks.find((entry) => entry.taskId === 'task-001').latestRunId;
 
     result = runP2a([
       'execute', 'finish',

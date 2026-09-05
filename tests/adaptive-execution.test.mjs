@@ -125,6 +125,362 @@ test('execution JSON returns one validated result document for start and resume'
   }
 });
 
+test('review remediation keeps completed work in the active iteration with immutable linked evidence', () => {
+  const fixture = adaptiveArtifact();
+  try {
+    let result = runExecute([
+      'prepare',
+      '--artifacts', fixture.artifactRoot,
+      '--mode', 'direct',
+      '--selection-rationale', 'One completed task needs a bounded in-iteration review correction.',
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    initialize(fixture);
+
+    const sourceRunId = 'run-review-remediation-source';
+    result = runExecute([
+      'start',
+      '--artifacts', fixture.artifactRoot,
+      '--run-id', sourceRunId,
+      '--workspace', fixture.workspaceRoot,
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    result = runRuns([
+      'verify',
+      '--artifacts', fixture.artifactRoot,
+      '--run-id', sourceRunId,
+      '--verify-command', 'custom:node -e "process.exit(0)"',
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    result = runExecute(['finish', '--artifacts', fixture.artifactRoot, '--run-id', sourceRunId]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+
+    const runsDir = path.join(fixture.artifactRoot, 'runs');
+    const sourceRunPath = runFilePath(runsDir, sourceRunId);
+    const immutableSource = readFileSync(sourceRunPath);
+    const remediationRunId = 'run-review-remediation-fix';
+    const finding = 'The completed handler misses the reviewed malformed-signature branch.';
+    result = runExecute([
+      'remediate',
+      '--artifacts', fixture.artifactRoot,
+      '--task', 'task-001',
+      '--run-id', remediationRunId,
+      '--workspace', fixture.workspaceRoot,
+      '--finding', finding,
+      '--review-ref', 'https://example.test/reviews/201#finding-1',
+      '--json',
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    const executionResult = JSON.parse(result.stdout);
+    validateSchema(executionResult, EXECUTION_RESULT_SCHEMA);
+    assert.equal(executionResult.command, 'remediate');
+    assert.equal(executionResult.runId, remediationRunId);
+
+    let graph = JSON.parse(readFileSync(fixture.graphPath, 'utf8'));
+    assert.equal(graph.tasks[0].status, 'in_progress');
+    let remediationRun = JSON.parse(readFileSync(runFilePath(runsDir, remediationRunId), 'utf8'));
+    assert.equal(remediationRun.sourceLayout, 'iteration');
+    assert.equal(remediationRun.iterationId, 'iter-001');
+    assert.deepEqual(remediationRun.reviewRemediation, {
+      sourceRunId,
+      reviewRef: 'https://example.test/reviews/201#finding-1',
+      finding,
+    });
+    assert.deepEqual(readFileSync(sourceRunPath), immutableSource);
+    validateRunsDir(runsDir);
+
+    result = runRuns([
+      'record',
+      '--artifacts', fixture.artifactRoot,
+      '--run-id', remediationRunId,
+      '--implementation-interruption', 'Confirmed the reviewed edge case before applying the correction.',
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    remediationRun = JSON.parse(readFileSync(runFilePath(runsDir, remediationRunId), 'utf8'));
+    assert.deepEqual(remediationRun.interruptions.map(({ type, summary }) => ({ type, summary })), [{
+      type: 'implementation_decision',
+      summary: 'Confirmed the reviewed edge case before applying the correction.',
+    }]);
+    assert.deepEqual(readFileSync(sourceRunPath), immutableSource);
+
+    const activeNext = runP2a([
+      'next', '--target', fixture.workspaceRoot, '--json', '--contract', 'v2',
+    ]);
+    assert.equal(activeNext.status, 0, `${activeNext.stdout}\n${activeNext.stderr}`);
+    const activePayload = JSON.parse(activeNext.stdout);
+    assert.equal(activePayload.state, 'run_started');
+    assert.equal(activePayload.command.argv.includes('close'), false);
+
+    const status = runExecute([
+      'status', '--artifacts', fixture.artifactRoot, '--run-id', remediationRunId,
+    ]);
+    assert.equal(status.status, 0, `${status.stdout}\n${status.stderr}`);
+    assert.match(status.stdout, new RegExp(`reviewRemediation: ${sourceRunId}`));
+
+    result = runRuns([
+      'verify',
+      '--artifacts', fixture.artifactRoot,
+      '--run-id', remediationRunId,
+      '--verify-command', 'custom:node -e "process.exit(0)"',
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    result = runExecute(['finish', '--artifacts', fixture.artifactRoot, '--run-id', remediationRunId]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+
+    graph = JSON.parse(readFileSync(fixture.graphPath, 'utf8'));
+    assert.equal(graph.tasks[0].status, 'done');
+    remediationRun = JSON.parse(readFileSync(runFilePath(runsDir, remediationRunId), 'utf8'));
+    assert.equal(remediationRun.status, 'finished');
+    assert.deepEqual(readFileSync(sourceRunPath), immutableSource);
+    const index = validateRunsDir(runsDir);
+    assert.deepEqual(
+      index.tasks.find((entry) => entry.taskId === 'task-001'),
+      {
+        taskId: 'task-001',
+        runIds: [sourceRunId, remediationRunId],
+        latestRunId: remediationRunId,
+      },
+    );
+
+    let closeReady = runP2a([
+      'next', '--target', fixture.workspaceRoot, '--json', '--contract', 'v2',
+    ]);
+    assert.equal(closeReady.status, 0, `${closeReady.stdout}\n${closeReady.stderr}`);
+    let closePayload = JSON.parse(closeReady.stdout);
+    if (closePayload.state === 'final_verification_required') {
+      const finalRunId = 'run-review-remediation-final';
+      writeFileSync(
+        path.join(fixture.artifactRoot, 'project.config.json'),
+        `${JSON.stringify({
+          testCommand: `${JSON.stringify(process.execPath)} -e ${JSON.stringify('process.exit(0)')}`,
+        }, null, 2)}\n`,
+        'utf8',
+      );
+      result = runExecute([
+        'verify-final',
+        '--artifacts', fixture.artifactRoot,
+        '--run-id', finalRunId,
+        '--workspace', fixture.workspaceRoot,
+      ]);
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+      result = runRuns([
+        'verify',
+        '--artifacts', fixture.artifactRoot,
+        '--run-id', finalRunId,
+        '--test',
+      ]);
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+      result = runExecute(['finish', '--artifacts', fixture.artifactRoot, '--run-id', finalRunId]);
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+      closeReady = runP2a([
+        'next', '--target', fixture.workspaceRoot, '--json', '--contract', 'v2',
+      ]);
+      assert.equal(closeReady.status, 0, `${closeReady.stdout}\n${closeReady.stderr}`);
+      closePayload = JSON.parse(closeReady.stdout);
+    }
+    assert.equal(closePayload.state, 'iteration_review_or_close_required');
+    assert.equal(closePayload.retrospective.candidateCount, 0);
+
+    result = runIteration(['close', '--artifacts', fixture.artifactRoot]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    const closedGraph = readFileSync(fixture.graphPath);
+    const closedIndex = readFileSync(path.join(runsDir, 'run-index.json'));
+    result = runExecute([
+      'remediate',
+      '--artifacts', fixture.artifactRoot,
+      '--task', 'task-001',
+      '--finding', 'This finding arrived after the iteration archive.',
+      '--workspace', fixture.workspaceRoot,
+    ]);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /already archived.*maintenance or open a new iteration/i);
+    assert.deepEqual(readFileSync(fixture.graphPath), closedGraph);
+    assert.deepEqual(readFileSync(path.join(runsDir, 'run-index.json')), closedIndex);
+  } finally {
+    rmSync(fixture.workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test('review remediation restores a completed task when linked run creation fails', () => {
+  const fixture = adaptiveArtifact();
+  try {
+    let result = runExecute([
+      'prepare',
+      '--artifacts', fixture.artifactRoot,
+      '--mode', 'direct',
+      '--selection-rationale', 'A failed remediation start must preserve the completed task state.',
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    initialize(fixture);
+
+    const sourceRunId = 'run-review-remediation-rollback-source';
+    result = runExecute([
+      'start',
+      '--artifacts', fixture.artifactRoot,
+      '--run-id', sourceRunId,
+      '--workspace', fixture.workspaceRoot,
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    result = runRuns([
+      'verify',
+      '--artifacts', fixture.artifactRoot,
+      '--run-id', sourceRunId,
+      '--verify-command', 'custom:node -e "process.exit(0)"',
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    result = runExecute(['finish', '--artifacts', fixture.artifactRoot, '--run-id', sourceRunId]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+
+    const runsDir = path.join(fixture.artifactRoot, 'runs');
+    const sourceRunPath = runFilePath(runsDir, sourceRunId);
+    const immutableSource = readFileSync(sourceRunPath);
+    result = runExecute([
+      'remediate',
+      '--artifacts', fixture.artifactRoot,
+      '--task', 'task-001',
+      '--run-id', 'run-review-remediation-rollback-failure',
+      '--workspace', fixture.workspaceRoot,
+      '--finding', 'Exercise atomic rollback after the task claim.',
+      '--changed-file', '../outside-workspace.js',
+    ]);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /changed file (?:resolves outside|escapes) the workspace/i);
+    assert.match(result.stderr, /returned to done/i);
+
+    const graph = JSON.parse(readFileSync(fixture.graphPath, 'utf8'));
+    assert.equal(graph.tasks[0].status, 'done');
+    assert.deepEqual(readFileSync(sourceRunPath), immutableSource);
+    const index = validateRunsDir(runsDir);
+    assert.deepEqual(index.tasks.find((entry) => entry.taskId === 'task-001'), {
+      taskId: 'task-001',
+      runIds: [sourceRunId],
+      latestRunId: sourceRunId,
+    });
+  } finally {
+    rmSync(fixture.workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test('review remediation retry preserves its source lineage in active-only run storage', () => {
+  const fixture = adaptiveArtifact();
+  try {
+    writeFileSync(
+      path.join(fixture.workspaceRoot, '.plan2agent', 'project.config.json'),
+      `${JSON.stringify({
+        runTracking: { persistence: 'active_only' },
+        proposals: { enabled: false },
+      }, null, 2)}\n`,
+      'utf8',
+    );
+    let result = runExecute([
+      'prepare',
+      '--artifacts', fixture.artifactRoot,
+      '--mode', 'direct',
+      '--selection-rationale', 'A review-remediation retry must retain its source relationship.',
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    initialize(fixture);
+
+    const sourceRunId = 'run-review-remediation-retry-source';
+    result = runExecute([
+      'start',
+      '--artifacts', fixture.artifactRoot,
+      '--run-id', sourceRunId,
+      '--workspace', fixture.workspaceRoot,
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    result = runRuns([
+      'verify',
+      '--artifacts', fixture.artifactRoot,
+      '--run-id', sourceRunId,
+      '--verify-command', 'custom:node -e "process.exit(0)"',
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    result = runExecute(['finish', '--artifacts', fixture.artifactRoot, '--run-id', sourceRunId]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+
+    const runsDir = path.join(fixture.artifactRoot, 'runs');
+    const sourceRunPath = runFilePath(runsDir, sourceRunId);
+    const immutableSource = readFileSync(sourceRunPath);
+    const finding = 'The first review correction still fails its regression check.';
+    const failedRunId = 'run-review-remediation-retry-failed';
+    result = runExecute([
+      'remediate',
+      '--artifacts', fixture.artifactRoot,
+      '--task', 'task-001',
+      '--run-id', failedRunId,
+      '--workspace', fixture.workspaceRoot,
+      '--finding', finding,
+      '--review-ref', 'review-201-retry',
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    result = runRuns([
+      'verify',
+      '--artifacts', fixture.artifactRoot,
+      '--run-id', failedRunId,
+      '--verify-command', 'custom:node -e "process.exit(1)"',
+    ]);
+    assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+    result = runExecute([
+      'finish',
+      '--artifacts', fixture.artifactRoot,
+      '--run-id', failedRunId,
+      '--status', 'failed',
+      '--failure-class', 'verification_failed',
+      '--retryable', 'yes',
+      '--needs-user-decision', 'false',
+      '--failure-source', 'owner',
+      '--repro-command', 'node -e "process.exit(1)"',
+      '--localization', 'The review correction does not satisfy its regression check.',
+      '--localized-file', 'package.json',
+      '--guard', 'The review regression check must pass before completion.',
+    ]);
+    assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+    let graph = JSON.parse(readFileSync(fixture.graphPath, 'utf8'));
+    assert.equal(graph.tasks[0].status, 'todo');
+
+    const retryRunId = 'run-review-remediation-retry-success';
+    result = runExecute([
+      'start',
+      '--artifacts', fixture.artifactRoot,
+      '--task', 'task-001',
+      '--run-id', retryRunId,
+      '--workspace', fixture.workspaceRoot,
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    let retryRun = JSON.parse(readFileSync(runFilePath(runsDir, retryRunId), 'utf8'));
+    assert.deepEqual(retryRun.reviewRemediation, {
+      sourceRunId,
+      reviewRef: 'review-201-retry',
+      finding,
+    });
+    result = runRuns([
+      'verify',
+      '--artifacts', fixture.artifactRoot,
+      '--run-id', retryRunId,
+      '--verify-command', 'custom:node -e "process.exit(0)"',
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    result = runExecute(['finish', '--artifacts', fixture.artifactRoot, '--run-id', retryRunId]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+
+    graph = JSON.parse(readFileSync(fixture.graphPath, 'utf8'));
+    assert.equal(graph.tasks[0].status, 'done');
+    retryRun = JSON.parse(readFileSync(runFilePath(runsDir, retryRunId), 'utf8'));
+    assert.equal(retryRun.status, 'finished');
+    assert.deepEqual(readFileSync(sourceRunPath), immutableSource);
+    assert.equal(existsSync(runFilePath(runsDir, failedRunId)), false);
+    const index = validateRunsDir(runsDir);
+    assert.deepEqual(index.tasks.find((entry) => entry.taskId === 'task-001'), {
+      taskId: 'task-001',
+      runIds: [sourceRunId, retryRunId],
+      latestRunId: retryRunId,
+    });
+  } finally {
+    rmSync(fixture.workspaceRoot, { recursive: true, force: true });
+  }
+});
+
 test('direct execution prepares one synthetic work item and records its strategy', () => {
   const fixture = adaptiveArtifact();
   try {

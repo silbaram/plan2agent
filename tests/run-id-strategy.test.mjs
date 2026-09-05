@@ -3830,6 +3830,91 @@ test('direct run start rejects current contract drift while isolation is prepari
   }
 });
 
+test('review remediation revalidates its source under the final run-store lock', async () => {
+  const artifactRoot = initializedArtifactRoot('review-remediation-source-gc-race');
+  const graphPath = path.join(
+    artifactRoot,
+    'iterations',
+    'v1-mvp',
+    'gate-c-task-graph',
+    'task-graph.json',
+  );
+  const runsDir = path.join(artifactRoot, 'runs');
+  const workspace = tempRoot('review-remediation-source-gc-workspace');
+  const hookControlDir = tempRoot('review-remediation-source-gc-hook');
+  const readyPath = path.join(hookControlDir, 'isolation-ready');
+  const releasePath = path.join(hookControlDir, 'isolation-release');
+  const configPath = path.join(artifactRoot, '.plan2agent', 'project.config.json');
+  const config = JSON.parse(readFileSync(configPath, 'utf8'));
+  config.runTracking = { persistence: 'active_only' };
+  writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+  const gitEnv = gitHooksEnv(path.join(workspace, '.git', 'hooks'));
+  initGitWorkspace(workspace, { env: gitEnv });
+
+  const sourceRunId = 'run-review-remediation-gc-source';
+  let result = executeCli([
+    'start',
+    '--artifacts', artifactRoot,
+    '--task', 'task-001',
+    '--run-id', sourceRunId,
+    '--agent-tool', 'codex',
+    '--workspace', workspace,
+  ]);
+  assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+  result = runCli([
+    'verify',
+    '--artifacts', artifactRoot,
+    '--run-id', sourceRunId,
+    '--verify-command', 'custom:node -e "process.exit(0)"',
+  ]);
+  assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+  result = executeCli(['finish', '--artifacts', artifactRoot, '--run-id', sourceRunId]);
+  assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+
+  installBlockingPostCheckoutHook(workspace, readyPath, releasePath);
+  const remediationRunId = 'run-review-remediation-gc-race';
+  const remediationPromise = executeCliAsync([
+    'remediate',
+    '--artifacts', artifactRoot,
+    '--task', 'task-001',
+    '--run-id', remediationRunId,
+    '--finding', 'The source relationship must survive until the new run commits.',
+    '--agent-tool', 'codex',
+    '--workspace', workspace,
+    '--isolation', 'branch',
+    '--branch', 'p2a/review-remediation-gc-race',
+    '--create-isolation',
+  ], ROOT, { env: gitEnv });
+
+  try {
+    await waitForPath(readyPath);
+    const gc = runCli([
+      'gc',
+      '--artifacts', artifactRoot,
+      '--iteration', 'v1-mvp',
+    ]);
+    assert.equal(gc.status, 0, `${gc.stdout}${gc.stderr}`);
+  } finally {
+    writeFileSync(releasePath, 'release\n', 'utf8');
+  }
+
+  try {
+    const remediation = await remediationPromise;
+    assert.equal(remediation.status, 1, `${remediation.stdout}${remediation.stderr}`);
+    assert.match(remediation.stderr, /run-review-remediation-gc-source is missing/i);
+    assert.match(remediation.stderr, /returned to done/i);
+    assert.equal(existsSync(runFilePath(runsDir, remediationRunId)), false);
+    const graph = JSON.parse(readFileSync(graphPath, 'utf8'));
+    assert.equal(graph.tasks.find((task) => task.id === 'task-001')?.status, 'done');
+    const validation = runCli(['validate', '--artifacts', artifactRoot]);
+    assert.equal(validation.status, 0, `${validation.stdout}${validation.stderr}`);
+  } finally {
+    rmSync(artifactRoot, { recursive: true, force: true });
+    rmSync(workspace, { recursive: true, force: true });
+    rmSync(hookControlDir, { recursive: true, force: true });
+  }
+});
+
 test('p2a_execute keeps a task claimed when pending run recovery blocks start', () => {
   const root = tempRoot('execute-pending-run-write');
   const graphPath = path.join(root, 'gate-c-task-graph', 'task-graph.json');

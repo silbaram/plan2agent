@@ -178,7 +178,13 @@ changed after verification require `p2a execute verify-final`. If documentation 
 product pass, P2A keeps that pass and runs only `p2a execute verify-final --scope relevant`; a later
 product-file change requires full verification again.
 
-See the [Execution Reference](docs/supervised-execution.md) for start, resume, finish, retry, and bounded batch procedures.
+If a material code-review finding appears after a task is done but before the iteration closes, use
+`p2a execute remediate --artifacts <root> --task <task-id> --finding <text>`. P2A keeps the reviewed run
+immutable, starts a linked run in the same iteration, blocks close while remediation is active, and returns
+the task to done only after verification passes. Work discovered after iteration close belongs in maintenance
+or a new iteration.
+
+See the [Execution Reference](docs/supervised-execution.md) for start, remediation, resume, finish, retry, and bounded batch procedures.
 
 ### 3. Iterate without losing the baseline
 

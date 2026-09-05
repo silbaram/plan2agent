@@ -106,13 +106,13 @@
                               "minItems": 8,
                               "maxItems": 8,
                               "prefixItems": [
-                                { "const": "tasks" },
-                                { "const": "todo" },
+                                { "const": "execute" },
+                                { "const": "remediate" },
                                 { "const": "--artifacts" },
                                 { "type": "string", "minLength": 1 },
+                                { "const": "--task" },
                                 { "const": "<task-id>" },
-                                { "const": "--reopen" },
-                                { "const": "--note" },
+                                { "const": "--finding" },
                                 { "const": "<review finding>" }
                               ],
                               "items": false

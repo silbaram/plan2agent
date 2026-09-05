@@ -6,6 +6,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- Add `p2a execute remediate` to start a review-linked correction run for a completed task inside its still-open iteration, preserving the reviewed run and blocking close until verification succeeds.
+
+### Fixed
+
+- Keep pre-close code-review corrections in their original iteration instead of routing them to maintenance or a new iteration, and reject remediation after archive with explicit recovery guidance.
+
 ## [0.5.20] - 2026-09-02
 
 ### Added
