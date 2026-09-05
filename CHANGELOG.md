@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.5.21] - 2026-09-05
+
 ### Added
 
 - Add `p2a execute remediate` to start a review-linked correction run for a completed task inside its still-open iteration, preserving the reviewed run and blocking close until verification succeeds.
@@ -338,7 +340,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Add package-runtime project initialization, managed provider assets, artifact validation, handoff, supervised execution, evaluation, and proposal workflows.
 - Ship canonical and generated integrations for Codex, Claude Code, and Gemini CLI.
 
-[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.5.20...HEAD
+[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.5.21...HEAD
+[0.5.21]: https://github.com/silbaram/plan2agent/compare/v0.5.20...v0.5.21
 [0.5.20]: https://github.com/silbaram/plan2agent/compare/v0.5.19...v0.5.20
 [0.5.19]: https://github.com/silbaram/plan2agent/compare/v0.5.18...v0.5.19
 [0.5.18]: https://github.com/silbaram/plan2agent/compare/v0.5.17...v0.5.18
