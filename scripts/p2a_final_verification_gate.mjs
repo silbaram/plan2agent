@@ -13,7 +13,6 @@ import {
 import {
   VERIFICATION_PROFILES,
   classifyVerificationProfile,
-  docsMetadataFiles,
   isDocsMetadataPath,
   productRevisionExcludedPaths,
 } from './p2a_verification_profile.mjs';
@@ -28,6 +27,7 @@ import {
   relatedVerificationCommands,
 } from './p2a_project_config.mjs';
 import {
+  automaticDocsMetadataFiles,
   collectGitChangedFiles,
   collectGitChangedFilesSince,
   normalizeChangedFiles,
@@ -179,7 +179,7 @@ function normalizedRelatedObligationEvidence(runEntries) {
   };
 }
 
-function relatedVerificationFiles(runEntries, workspacePath, profile, fullEvidence) {
+function relatedVerificationFiles(runEntries, workspacePath, profile, fullEvidence, config) {
   const recordedDocs = profile.id === 'docs_metadata'
     ? runEntries
       .filter(({ run }) => !run.runKind && run.status === 'finished')
@@ -193,7 +193,7 @@ function relatedVerificationFiles(runEntries, workspacePath, profile, fullEviden
   let workingTreeDocs = [];
   let gitStatusAvailable = false;
   try {
-    workingTreeDocs = collectGitChangedFiles(workspacePath).filter(isDocsMetadataPath);
+    workingTreeDocs = collectGitChangedFiles(workspacePath, config).filter(isDocsMetadataPath);
     gitStatusAvailable = true;
   } catch {
     // A non-Git workspace is covered by recorded paths or the bounded scan.
@@ -230,7 +230,7 @@ function relatedVerificationFiles(runEntries, workspacePath, profile, fullEviden
   ];
   if (profile.id === 'docs_metadata' && (!gitStatusAvailable || !gitHistoryAvailable)) {
     candidates.push(...(fullEvidence?.run?.docsMetadataBaseline ?? []));
-    candidates.push(...docsMetadataFiles(workspacePath));
+    candidates.push(...automaticDocsMetadataFiles(workspacePath, config));
   }
   const nonConfigCandidates = candidates.filter(
     (candidate) => !P2A_VERIFICATION_METADATA_REF_SET.has(candidate),
@@ -238,7 +238,7 @@ function relatedVerificationFiles(runEntries, workspacePath, profile, fullEviden
   const selectedCandidates = nonConfigCandidates.length ? nonConfigCandidates : candidates;
   return normalizeChangedFiles(
     workspacePath,
-    selectedCandidates.length ? selectedCandidates : docsMetadataFiles(workspacePath),
+    selectedCandidates.length ? selectedCandidates : automaticDocsMetadataFiles(workspacePath, config),
   );
 }
 
@@ -660,6 +660,7 @@ export function assertFinalFullVerificationReady({
       canonicalWorkspacePath,
       profile,
       profile.id === 'docs_metadata' ? null : matched,
+      config,
     );
     assertRelatedSelectionCoverage(relevantMatched.item, selectedFiles, profile);
     assertRelatedContentBinding(

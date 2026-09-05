@@ -88,6 +88,44 @@ test('runtime verification never records a spawn error as passed or exit zero', 
   assert.match(result.stderrTail, /spawnSync \/bin\/sh EPERM/);
 });
 
+test('successful standard checks keep a bounded plain-text tail and preserve warnings', () => {
+  const summary = 'Tests: 240 passed, 0 failed\r\n';
+  const result = runVerificationCommand({
+    type: 'test', command: 'npm test', source: 'config', scope: 'full',
+  }, process.cwd(), 10000, {
+    spawnSync: () => ({
+      status: 0, signal: null,
+      stdout: `\u001b[32m${'passed test\n'.repeat(500)}${summary}\u001b[0m`,
+      stderr: `\u001b[33m${'warning\n'.repeat(200)}\u001b[0m`,
+    }),
+  });
+  assert.equal(result.status, 'passed');
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.command, 'npm test');
+  assert.equal(result.stdoutTail.length, 1000);
+  assert.match(result.stdoutTail, /^\[\.\.\. earlier output omitted \.\.\.\]/);
+  assert.ok(result.stdoutTail.endsWith(summary.replaceAll('\r\n', '\n')));
+  assert.doesNotMatch(result.stdoutTail, /\u001b|\r/);
+  assert.equal(result.stderrTail, 'warning\n'.repeat(200));
+  assert.ok(result.startedAt && result.finishedAt && result.durationMs >= 0);
+});
+
+test('failures and custom behavior checks retain the longer diagnostic output limit', () => {
+  const stdout = `${'detail\n'.repeat(1000)}important result\n`;
+  for (const [type, exitCode] of [['test', 1], ['custom', 0]]) {
+    const result = runVerificationCommand({
+      type, command: 'node check.mjs', source: 'command', scope: 'full',
+    }, process.cwd(), 10000, {
+      spawnSync: () => ({ status: exitCode, signal: null, stdout, stderr: stdout }),
+    });
+    assert.equal(result.status, exitCode === 0 ? 'passed' : 'failed');
+    assert.equal(result.exitCode, exitCode);
+    assert.equal(result.stdoutTail.length, 4000);
+    assert.equal(result.stderrTail.length, 4000);
+    assert.ok(result.stdoutTail.endsWith('important result\n'));
+  }
+});
+
 test('bounded environment preflight classifies EPERM before product commands run', () => {
   let spawnCount = 0;
   const preflight = runVerificationEnvironmentPreflight(process.cwd(), {

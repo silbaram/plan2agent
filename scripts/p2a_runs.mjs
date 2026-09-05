@@ -16,6 +16,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
+import { stripVTControlCharacters } from 'node:util';
 import {
   FAILURE_CLASSES,
   FAILURE_RETRYABLE,
@@ -71,6 +72,7 @@ import {
   legacyRunRef,
   legacyRunsDirForGraph,
   orphanRunEvidenceRefs,
+  P2A_VERIFICATION_METADATA_REFS,
   resolveRunsDir,
   RUN_SIDECAR_SUFFIXES,
   safeRunStoreFilePath,
@@ -180,6 +182,7 @@ const FAILURE_DEFAULTS = {
 };
 const VERIFICATION_STATUSES = new Set(['passed', 'failed', 'skipped', 'not_run', 'unavailable']);
 const OUTPUT_TAIL_LIMIT = 4000;
+const PASSED_OUTPUT_TAIL_LIMIT = 1000;
 function usage() {
   return [
     'Usage:',
@@ -224,7 +227,7 @@ function usage() {
     '  --create-isolation      Create the branch/worktree with git before writing the run record.',
     '  --require-monitor       Require the run\'s co-located .monitor-verdict.json before a finished run can close.',
     '  --changed-file <path>   Changed file to attach to the run. Repeatable.',
-    '  --collect-git           Add changed files from git status in the workspace.',
+    '  --collect-git           Add Git changes, excluding untracked runTracking.generatedPaths.',
     '  --note <text>           Append a run note. Repeatable.',
     '  --usage-model <profile> Model/profile label for one usage sample.',
     '  --usage-input-tokens <n>, --usage-output-tokens <n>',
@@ -1204,11 +1207,34 @@ function retainReviewRemediationLineage(runsDir, index, selected) {
   return selected.filter((entry) => selectedById.has(entry.runId));
 }
 
+function prunableEnvelopeRefs(runsDir, index, nextIndex, selectors) {
+  // Plan before deleting any records: an unindexed run can share a snapshot
+  // with a selected run, so protecting only preexisting orphan envelopes is insufficient.
+  const orphans = orphanRunEvidenceRefs(runsDir, index);
+  if (orphans.some((ref) => isRunRecordFile(path.join(runsDir, ref)))) return [];
+  if (index.runs.some((entry) => entry.status === 'started' && pruneScopeMatches(entry, selectors))) return [];
+  try {
+    for (const entry of index.runs) {
+      const run = loadJson(safeRunStoreFilePath(runsDir, indexedRunRef(runsDir, entry.runId, index)));
+      if (run.executionEnvelopeRef) executionEnvelopeStoreRef(run, run.executionEnvelopeRef.sha256);
+    }
+  } catch {
+    // Do not infer that a snapshot is unused from missing or unreadable runs.
+    return [];
+  }
+  const preexisting = new Set(orphans);
+  const wholeIterations = selectors.iterationIds && !selectors.taskIds && !selectors.runKinds;
+  return orphanRunEvidenceRefs(runsDir, nextIndex).filter((ref) => (
+    ref.includes('/envelopes/')
+    && (!preexisting.has(ref) || (wholeIterations && selectors.iterationIds.has(ref.split('/')[0])))
+  ));
+}
+
 function pruneIndexedRunEvidenceLocked(runsDir, options = {}) {
   assertNoPendingRunMigration(runsDir);
   recoverPendingRunWrite(runsDir);
   if (!existsSync(indexPath(runsDir))) {
-    return { prunedRunIds: [], cleanupFailures: [] };
+    return { prunedRunIds: [], removedEnvelopeRefs: [], cleanupFailures: [] };
   }
   const selectors = {
     iterationIds: normalizedSelectorSet(options.iterationIds, 'iterationIds'),
@@ -1246,17 +1272,22 @@ function pruneIndexedRunEvidenceLocked(runsDir, options = {}) {
     : index.retrospective;
   const retrospectiveChanged = JSON.stringify(droppedRetrospective) !== JSON.stringify(index.retrospective);
   if (!selected.length) {
+    const envelopeRefs = prunableEnvelopeRefs(runsDir, index, index, selectors);
     if (retrospectiveChanged) {
       const nextIndex = { ...index };
       if (droppedRetrospective) nextIndex.retrospective = droppedRetrospective;
       else delete nextIndex.retrospective;
       writeIndex(runsDir, nextIndex);
     }
-    return { prunedRunIds: [], cleanupFailures: [] };
+    const cleanup = removeOrphanRunEvidence(runsDir, envelopeRefs);
+    return {
+      prunedRunIds: [],
+      removedEnvelopeRefs: cleanup.removedRefs,
+      cleanupFailures: cleanup.cleanupFailures,
+    };
   }
 
   const selectedIds = new Set(selected.map((entry) => entry.runId));
-  const preexistingOrphanRefs = new Set(orphanRunEvidenceRefs(runsDir, index));
   const evidencePaths = [];
   for (const entry of selected) {
     const runRef = indexedRunRef(runsDir, entry.runId, index);
@@ -1292,24 +1323,8 @@ function pruneIndexedRunEvidenceLocked(runsDir, options = {}) {
   } else {
     delete nextIndex.retrospective;
   }
+  const envelopeRefs = prunableEnvelopeRefs(runsDir, index, nextIndex, selectors);
   writeIndex(runsDir, nextIndex);
-  for (const reference of orphanRunEvidenceRefs(runsDir, nextIndex)) {
-    if (
-      preexistingOrphanRefs.has(reference)
-      || !reference.includes('/envelopes/')
-    ) continue;
-    const envelopePath = path.resolve(runsDir, reference);
-    const relative = path.relative(path.resolve(runsDir), envelopePath);
-    if (
-      !relative
-      || relative === '..'
-      || relative.startsWith(`..${path.sep}`)
-      || path.isAbsolute(relative)
-    ) {
-      throw new Error(`execution envelope path escapes runs directory: ${JSON.stringify(reference)}`);
-    }
-    if (existsSync(envelopePath)) evidencePaths.push(envelopePath);
-  }
   const cleanupFailures = [];
   for (const evidencePath of evidencePaths) {
     try {
@@ -1318,9 +1333,13 @@ function pruneIndexedRunEvidenceLocked(runsDir, options = {}) {
       if (error?.code !== 'ENOENT') cleanupFailures.push(`${displayPath(evidencePath)}: ${error.message}`);
     }
   }
+  // A record left behind by a failed unlink may still need its snapshot.
+  const envelopeCleanup = removeOrphanRunEvidence(runsDir, cleanupFailures.length ? [] : envelopeRefs);
+  cleanupFailures.push(...envelopeCleanup.cleanupFailures);
 
   return {
     prunedRunIds: selected.map((entry) => entry.runId),
+    removedEnvelopeRefs: envelopeCleanup.removedRefs,
     cleanupFailures,
   };
 }
@@ -1328,7 +1347,7 @@ function pruneIndexedRunEvidenceLocked(runsDir, options = {}) {
 export function pruneIndexedRunEvidence(runsDir, options = {}) {
   const resolvedRunsDir = path.resolve(runsDir);
   if (!existsSync(resolvedRunsDir)) {
-    return { prunedRunIds: [], cleanupFailures: [] };
+    return { prunedRunIds: [], removedEnvelopeRefs: [], cleanupFailures: [] };
   }
   const prune = () => pruneIndexedRunEvidenceLocked(resolvedRunsDir, options);
   return options.alreadyLocked === true
@@ -1512,13 +1531,8 @@ function removeOrphanRunEvidence(runsDir, refs) {
   const cleanupFailures = [];
   const removedRefs = [];
   for (const ref of refs) {
-    const evidencePath = path.resolve(runsDir, ref);
-    const relative = path.relative(path.resolve(runsDir), evidencePath);
-    if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-      cleanupFailures.push(`${ref}: path escapes runs directory`);
-      continue;
-    }
     try {
+      const evidencePath = safeRunStoreFilePath(runsDir, ref, 'orphan evidence');
       if (!lstatSync(evidencePath).isFile()) {
         cleanupFailures.push(`${ref}: orphan evidence is not a regular file`);
         continue;
@@ -1617,7 +1631,10 @@ function gcRunEvidence(args) {
       dryRun: false,
       persistence,
       prunedRunIds: indexedCleanup.prunedRunIds,
-      orphanRefs: orphanCleanup.removedRefs,
+      orphanRefs: uniqueStrings([
+        ...(indexedCleanup.removedEnvelopeRefs ?? []),
+        ...orphanCleanup.removedRefs,
+      ]),
       keepRunIds,
     });
     if (cleanupFailures.length) {
@@ -1952,6 +1969,14 @@ function tail(value) {
   return text.length > OUTPUT_TAIL_LIMIT ? text.slice(-OUTPUT_TAIL_LIMIT) : text;
 }
 
+function verificationOutputTail(value, limit = OUTPUT_TAIL_LIMIT) {
+  if (value === null || value === undefined) return null;
+  const text = stripVTControlCharacters(String(value)).replaceAll('\r\n', '\n');
+  if (text.length <= limit) return text;
+  const marker = '[... earlier output omitted ...]\n';
+  return marker + text.slice(-(limit - marker.length));
+}
+
 function gitResultToTail(result) {
   return tail([result.stdout, result.stderr, result.error?.message].filter(Boolean).join('\n'));
 }
@@ -2122,7 +2147,7 @@ function commandDisplayFromArgv(argv) {
   return argv.map((value) => shellQuote(value)).join(' ');
 }
 
-function normalizedWorkspaceRelativePath(workspacePath, candidate) {
+function normalizedWorkspaceRelativePath(workspacePath, candidate, { checkRealPath = true } = {}) {
   if (typeof candidate !== 'string' || !candidate.trim()) {
     throw new Error('changed files must be non-blank workspace-relative paths');
   }
@@ -2151,6 +2176,7 @@ function normalizedWorkspaceRelativePath(workspacePath, candidate) {
   ) {
     throw new Error(`changed file escapes the workspace: ${JSON.stringify(candidate)}`);
   }
+  if (!checkRealPath) return normalizePath(relative);
   let existingAncestor = resolved;
   while (!existsSync(existingAncestor) && path.dirname(existingAncestor) !== existingAncestor) {
     existingAncestor = path.dirname(existingAncestor);
@@ -2560,9 +2586,10 @@ export function runVerificationCommand(spec, workspacePath, timeoutMs, options =
   const exitCode = result.error ? null : (typeof result.status === 'number' ? result.status : 1);
   const unavailable = classifyVerificationSpawnResult(result, { command, workspacePath });
   const timedOut = result.error?.code === 'ETIMEDOUT' || result.signal === 'SIGTERM';
+  const status = unavailable.status ?? (timedOut ? 'failed' : (exitCode === 0 ? 'passed' : 'failed'));
   const stderrTail = timedOut
-    ? tail([result.stderr, result.error?.message, `verification command timed out after ${timeoutMs}ms`].filter(Boolean).join('\n'))
-    : tail([result.stderr, result.error?.message].filter(Boolean).join('\n'));
+    ? verificationOutputTail([result.stderr, result.error?.message, `verification command timed out after ${timeoutMs}ms`].filter(Boolean).join('\n'))
+    : verificationOutputTail([result.stderr, result.error?.message].filter(Boolean).join('\n'));
   const relatedContentSha256 = spec.scope === 'related'
     && Array.isArray(spec.selectedFiles)
     && spec.selectedFiles.length
@@ -2571,12 +2598,15 @@ export function runVerificationCommand(spec, workspacePath, timeoutMs, options =
   return {
     type: spec.type,
     command,
-    status: unavailable.status ?? (timedOut ? 'failed' : (exitCode === 0 ? 'passed' : 'failed')),
+    status,
     exitCode,
     durationMs: Math.max(0, finishedAt.getTime() - startedAt.getTime()),
     startedAt: startedAt.toISOString(),
     finishedAt: finishedAt.toISOString(),
-    stdoutTail: tail(result.stdout),
+    stdoutTail: verificationOutputTail(
+      result.stdout,
+      status === 'passed' && spec.type !== 'custom' ? PASSED_OUTPUT_TAIL_LIMIT : OUTPUT_TAIL_LIMIT,
+    ),
     stderrTail,
     source: spec.source,
     scope: spec.scope ?? 'full',
@@ -2669,7 +2699,25 @@ export function runVerificationCommands(specs, workspacePath, timeoutMs, options
   return specs.map((spec) => runVerificationCommand(spec, workspacePath, timeoutMs, options));
 }
 
-export function collectGitChangedFiles(workspacePath) {
+function generatedPathMatcher(workspacePath, config) {
+  const configuredPaths = config?.runTracking?.generatedPaths ?? [];
+  if (!Array.isArray(configuredPaths)) {
+    throw new Error('project config runTracking.generatedPaths must be an array of workspace-relative paths');
+  }
+  const generatedPaths = [
+    '.plan2agent/artifacts',
+    ...configuredPaths,
+  ].map((candidate) => normalizedWorkspaceRelativePath(workspacePath, candidate, { checkRealPath: false }));
+  if (generatedPaths.some((candidate) => /[*?\[\]]/u.test(candidate))) {
+    throw new Error('project config runTracking.generatedPaths accepts literal paths, not glob patterns');
+  }
+  return (filePath) => generatedPaths.some((generatedPath) => (
+    filePath === generatedPath || filePath.startsWith(`${generatedPath}/`)
+  ));
+}
+
+export function collectGitChangedFiles(workspacePath, config = {}) {
+  const isGenerated = generatedPathMatcher(workspacePath, config);
   const result = gitCommandResult(['status', '--porcelain=v1', '-z', '--untracked-files=all'], workspacePath);
   if (result.status !== 0) {
     throw new Error(`git status failed while collecting changed files: ${gitResultToTail(result)}`);
@@ -2681,6 +2729,9 @@ export function collectGitChangedFiles(workspacePath) {
     if (record.length < 4) continue;
     const status = record.slice(0, 2);
     const filePath = record.slice(3);
+    // Never hide tracked edits, additions, deletions or renames. Explicit
+    // --changed-file inputs also bypass this automatic untracked-file filter.
+    if (status === '??' && isGenerated(filePath)) continue;
     if (filePath) changedFiles.push(filePath);
     if (status.includes('R') || status.includes('C')) {
       const previousPath = records[index + 1];
@@ -2689,6 +2740,19 @@ export function collectGitChangedFiles(workspacePath) {
     }
   }
   return normalizeChangedFiles(workspacePath, changedFiles);
+}
+
+export function automaticDocsMetadataFiles(workspacePath, config = {}) {
+  const files = docsMetadataFiles(workspacePath);
+  const isGenerated = generatedPathMatcher(workspacePath, config);
+  const verificationMetadata = new Set(P2A_VERIFICATION_METADATA_REFS);
+  const isGeneratedDocument = (file) => isGenerated(file) && !verificationMetadata.has(file);
+  if (!files.some(isGeneratedDocument)) return files;
+  const result = gitCommandResult(['ls-files', '--cached', '-z'], workspacePath);
+  // Without a Git index we cannot prove that a document is untracked.
+  if (result.error || result.status !== 0) return files;
+  const tracked = new Set(result.stdout.split('\0').filter(Boolean));
+  return files.filter((file) => !isGeneratedDocument(file) || tracked.has(file));
 }
 
 export function collectGitChangedFilesSince(workspacePath, baseRef) {
@@ -2821,6 +2885,7 @@ function verificationProfileForRun(source, run) {
 export function finalRunRelatedChangedFiles(source, run, workspacePath) {
   if (!run.runKind || !source?.artifactRoot || source.sourceLayout !== 'iteration') return [];
   if (run.verificationScope === 'relevant') {
+    const config = loadProjectConfigWithPath(source.runsDir, run, workspacePath, source).config;
     const currentRuns = loadRunsForArtifactRoot(source.artifactRoot, {
       iterationId: run.iterationId,
     });
@@ -2835,7 +2900,7 @@ export function finalRunRelatedChangedFiles(source, run, workspacePath) {
     let gitDocs = [];
     let gitStatusAvailable = false;
     try {
-      gitDocs = collectGitChangedFiles(workspacePath).filter(isDocsMetadataPath);
+      gitDocs = collectGitChangedFiles(workspacePath, config).filter(isDocsMetadataPath);
       gitStatusAvailable = true;
     } catch {
       // Non-Git workspaces fall back to the bounded documentation file scan.
@@ -2907,11 +2972,11 @@ export function finalRunRelatedChangedFiles(source, run, workspacePath) {
       selected.push(selectedConfig.workspaceRelativePath);
     }
     if (!gitStatusAvailable || !gitHistoryAvailable) {
-      selected.push(...docsMetadataFiles(workspacePath));
+      selected.push(...automaticDocsMetadataFiles(workspacePath, config));
     }
     return normalizeWorkspaceLocalRelatedFiles(
       workspacePath,
-      selected.length ? selected : docsMetadataFiles(workspacePath),
+      selected.length ? selected : automaticDocsMetadataFiles(workspacePath, config),
     );
   }
   return normalizeChangedFiles(
@@ -3336,7 +3401,10 @@ function verifyRun(args) {
     : [
         ...run.changedFiles,
         ...args.changedFiles,
-        ...(args.collectGit ? collectGitChangedFiles(workspacePath) : []),
+        ...(args.collectGit ? collectGitChangedFiles(
+          workspacePath,
+          loadProjectConfigWithPath(runsDir, run, workspacePath, source).config,
+        ) : []),
       ];
   if (!run.runKind) {
     run.changedFiles = normalizeChangedFiles(workspacePath, requestedChangedFiles);
@@ -3375,7 +3443,7 @@ function verifyRun(args) {
   if (specs.some((spec) => spec.scope === 'full' && spec.type !== 'custom')) {
     // Bind deletion fallback to the files that existed at the evidence point,
     // not to an earlier run-start snapshot that may predate implementation.
-    run.docsMetadataBaseline = docsMetadataFiles(workspacePath);
+    run.docsMetadataBaseline = automaticDocsMetadataFiles(workspacePath, config);
   }
   const revisions = verificationRevisions(runsDir, run, source, workspacePath);
   const executedResults = runVerificationCommands(specs, workspacePath, timeoutMs);
@@ -3543,7 +3611,12 @@ function finishRun(args) {
     throw new Error(`${run.runKind} finish is evidence-only and does not allow changed-file attribution`);
   }
   const changedFiles = [...args.changedFiles];
-  if (args.collectGit) changedFiles.push(...collectGitChangedFiles(workspacePath));
+  if (args.collectGit) {
+    changedFiles.push(...collectGitChangedFiles(
+      workspacePath,
+      loadProjectConfigWithPath(runsDir, run, workspacePath, source ?? taskSource).config,
+    ));
+  }
   run.changedFiles = normalizeChangedFiles(workspacePath, [...run.changedFiles, ...changedFiles]);
   run.verification.push(...args.manualVerification);
   run.notes = uniqueStrings([...run.notes, ...args.notes]);

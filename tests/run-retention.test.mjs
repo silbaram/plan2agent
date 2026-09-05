@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -284,6 +285,8 @@ test('active-only pruning removes selected run records and sidecars while rebuil
     const envelopePath = path.join(runsDir, 'v1', 'envelopes', `${envelopeSha}.json`);
     mkdirSync(path.dirname(envelopePath), { recursive: true });
     writeFileSync(envelopePath, '{}\n', 'utf8');
+    const oldOrphanPath = path.join(runsDir, 'v1', 'envelopes', `${'b'.repeat(64)}.json`);
+    writeFileSync(oldOrphanPath, '{}\n', 'utf8');
 
     const result = pruneIndexedRunEvidence(runsDir, { iterationIds: ['v1'] });
 
@@ -292,6 +295,7 @@ test('active-only pruning removes selected run records and sidecars while rebuil
     assert.equal(existsSync(path.join(runsDir, 'v1/run-old.acceptance-review.json')), false);
     assert.equal(existsSync(path.join(runsDir, 'v1/run-old.monitor-verdict.json')), false);
     assert.equal(existsSync(envelopePath), false);
+    assert.equal(existsSync(oldOrphanPath), false);
     assert.equal(existsSync(path.join(runsDir, retainedRun.runRef)), true);
     const index = JSON.parse(readFileSync(path.join(runsDir, 'run-index.json'), 'utf8'));
     assert.deepEqual(index.runs.map((entry) => entry.runId), ['run-current']);
@@ -302,6 +306,122 @@ test('active-only pruning removes selected run records and sidecars while rebuil
     }]);
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('whole-iteration cleanup removes leftover snapshots even with no indexed runs', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'p2a-orphan-envelopes-'));
+  const runsDir = path.join(root, 'runs');
+  try {
+    const oldSnapshot = path.join(runsDir, 'v1', 'envelopes', `${'a'.repeat(64)}.json`);
+    const otherSnapshot = path.join(runsDir, 'v2', 'envelopes', `${'b'.repeat(64)}.json`);
+    for (const file of [oldSnapshot, otherSnapshot]) {
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, '{}\n');
+    }
+    writeIndex(runsDir, []);
+    const beforeIndex = readFileSync(path.join(runsDir, 'run-index.json'), 'utf8');
+    pruneIndexedRunEvidence(runsDir, { iterationIds: ['v1'], taskIds: ['task-001'] });
+    assert.equal(existsSync(oldSnapshot), true, 'a task retry does not own old iteration snapshots');
+    const result = pruneIndexedRunEvidence(runsDir, { iterationIds: ['v1'] });
+    assert.deepEqual(result, {
+      prunedRunIds: [],
+      removedEnvelopeRefs: [`v1/envelopes/${'a'.repeat(64)}.json`],
+      cleanupFailures: [],
+    });
+    assert.equal(existsSync(oldSnapshot), false);
+    assert.equal(existsSync(otherSnapshot), true);
+    assert.equal(readFileSync(path.join(runsDir, 'run-index.json'), 'utf8'), beforeIndex);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('automatic snapshot cleanup preserves indexed references and unindexed recovery evidence', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'p2a-preserved-envelopes-'));
+  const runsDir = path.join(root, 'runs');
+  try {
+    const retained = runEntry('run-retained', 'task-001', 'v1', 'finished', 'v1/run-retained.json');
+    const sha256 = 'a'.repeat(64);
+    const snapshot = path.join(runsDir, 'v1', 'envelopes', `${sha256}.json`);
+    const orphanSnapshot = path.join(runsDir, 'v1', 'envelopes', `${'b'.repeat(64)}.json`);
+    mkdirSync(path.dirname(snapshot), { recursive: true });
+    writeIndex(runsDir, [retained]);
+    writeFileSync(path.join(runsDir, retained.runRef), JSON.stringify({
+      ...retained, executionEnvelopeRef: { sha256 },
+    }));
+    writeFileSync(snapshot, '{}\n');
+    writeFileSync(orphanSnapshot, '{}\n');
+    const orphanRunPath = path.join(runsDir, 'v1', 'run-recovery.json');
+    writeFileSync(orphanRunPath, JSON.stringify({
+      runId: 'run-recovery', status: 'started', iterationId: 'v1',
+      executionEnvelopeRef: { sha256: 'b'.repeat(64) },
+    }));
+    const options = { iterationIds: ['v1'], keepRunIds: ['run-retained'] };
+    pruneIndexedRunEvidence(runsDir, options);
+    assert.equal(existsSync(snapshot), true);
+    assert.equal(existsSync(orphanSnapshot), true);
+    writeFileSync(orphanRunPath, '{partial write');
+    pruneIndexedRunEvidence(runsDir, options);
+    assert.equal(existsSync(orphanSnapshot), true, 'unreadable unindexed runs are not guessed to be disposable');
+    rmSync(orphanRunPath);
+    pruneIndexedRunEvidence(runsDir, options);
+    assert.equal(existsSync(snapshot), true);
+    assert.equal(existsSync(orphanSnapshot), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('automatic snapshot cleanup never follows an envelopes directory symlink', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'p2a-envelope-symlink-'));
+  const runsDir = path.join(root, 'runs');
+  const outside = path.join(root, 'outside');
+  try {
+    mkdirSync(path.join(runsDir, 'v1'), { recursive: true });
+    mkdirSync(outside);
+    const snapshot = path.join(outside, `${'a'.repeat(64)}.json`);
+    writeFileSync(snapshot, '{}\n');
+    symlinkSync(outside, path.join(runsDir, 'v1', 'envelopes'));
+    writeIndex(runsDir, []);
+    const result = pruneIndexedRunEvidence(runsDir, { iterationIds: ['v1'] });
+    assert.deepEqual(result.cleanupFailures, []);
+    assert.equal(existsSync(snapshot), true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('pruning protects shared snapshots before deleting indexed records, including task retries', () => {
+  for (const scope of [{ iterationIds: ['v1'] }, { iterationIds: ['v1'], taskIds: ['task-001'] }]) {
+    for (const malformed of [false, true]) {
+      const root = mkdtempSync(path.join(tmpdir(), 'p2a-shared-recovery-envelope-'));
+      const runsDir = path.join(root, 'runs');
+      try {
+        const sha256 = 'a'.repeat(64);
+        const snapshot = path.join(runsDir, 'v1', 'envelopes', `${sha256}.json`);
+        mkdirSync(path.dirname(snapshot), { recursive: true });
+        const indexed = runEntry('run-indexed', 'task-001', 'v1', 'finished', 'v1/run-indexed.json');
+        writeIndex(runsDir, [indexed]);
+        writeFileSync(path.join(runsDir, indexed.runRef), JSON.stringify({
+          ...indexed, executionEnvelopeRef: { sha256 },
+        }));
+        writeFileSync(snapshot, '{"objective":"recover this run"}\n');
+        const recoveryPath = path.join(runsDir, 'v1', 'run-recovery.json');
+        const recovery = malformed ? '{partial write' : JSON.stringify({
+          ...indexed, runId: 'run-recovery', status: 'started', finishedAt: null,
+          executionEnvelopeRef: { sha256 },
+        });
+        writeFileSync(recoveryPath, recovery);
+        const result = pruneIndexedRunEvidence(runsDir, scope);
+        assert.deepEqual(result.prunedRunIds, ['run-indexed']);
+        assert.deepEqual(result.removedEnvelopeRefs, []);
+        assert.equal(readFileSync(snapshot, 'utf8'), '{"objective":"recover this run"}\n');
+        assert.equal(readFileSync(recoveryPath, 'utf8'), recovery);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
   }
 });
 
@@ -504,6 +624,9 @@ test('runs gc dry-run lists indexed and orphan evidence before removing it while
       '--keep-final',
     ]);
     assert.equal(collected.status, 0, `${collected.stdout}${collected.stderr}`);
+    assert.match(collected.stdout, /orphan files removed: 3/);
+    assert.ok(collected.stdout.includes(orphanEnvelopeRef));
+    assert.ok(collected.stdout.includes(indexedEnvelopeRef));
     assert.equal(existsSync(path.join(runsDir, oldRun.runRef)), false);
     assert.equal(existsSync(path.join(runsDir, finalRun.runRef)), true);
     assert.equal(existsSync(path.join(runsDir, orphanRef)), false);
@@ -511,6 +634,35 @@ test('runs gc dry-run lists indexed and orphan evidence before removing it while
     assert.equal(existsSync(path.join(runsDir, indexedEnvelopeRef)), false);
     const index = JSON.parse(readFileSync(path.join(runsDir, 'run-index.json'), 'utf8'));
     assert.deepEqual(index.runs.map((entry) => entry.runId), ['run-gc-final']);
+  } finally {
+    rmSync(artifactRoot, { recursive: true, force: true });
+  }
+});
+
+test('gc reports an envelope removed by pruning when every indexed run is kept', () => {
+  const artifactRoot = initializedIterationProject('active_only');
+  try {
+    const runsDir = path.join(artifactRoot, 'runs');
+    const retained = runEntry('run-kept', 'task-001', 'v1-mvp', 'finished', 'v1-mvp/run-kept.json');
+    const snapshotRef = `v1-mvp/envelopes/${'a'.repeat(64)}.json`;
+    const snapshot = path.join(runsDir, snapshotRef);
+    mkdirSync(path.dirname(snapshot), { recursive: true });
+    writeIndex(runsDir, [retained]);
+    writeEvidence(runsDir, retained);
+    writeFileSync(snapshot, '{}\n');
+    const args = ['gc', '--artifacts', artifactRoot, '--iteration', 'v1-mvp', '--keep-final'];
+    const preview = runCli(RUNS_CLI, [...args, '--dry-run']);
+    assert.equal(preview.status, 0, `${preview.stdout}${preview.stderr}`);
+    assert.match(preview.stdout, /indexed runs selected: 0/);
+    assert.match(preview.stdout, /orphan files selected: 1/);
+    assert.equal(existsSync(snapshot), true);
+    const collected = runCli(RUNS_CLI, args);
+    assert.equal(collected.status, 0, `${collected.stdout}${collected.stderr}`);
+    assert.match(collected.stdout, /indexed runs removed: 0/);
+    assert.match(collected.stdout, /orphan files removed: 1/);
+    assert.ok(collected.stdout.includes(snapshotRef));
+    assert.equal(existsSync(snapshot), false);
+    assert.equal(existsSync(path.join(runsDir, retained.runRef)), true);
   } finally {
     rmSync(artifactRoot, { recursive: true, force: true });
   }

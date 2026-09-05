@@ -11,6 +11,7 @@ import {
   relatedVerificationCommands,
 } from '../scripts/p2a_project_config.mjs';
 import {
+  collectGitChangedFiles,
   normalizeRelatedChangedFiles,
   runVerificationCommand,
   verificationSpecs,
@@ -312,6 +313,61 @@ test('related verification for excluded Plan2Agent metadata is bound to current 
     );
   } finally {
     rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('generated documentation exclusions remain consistent through final close, including scan fallback', () => {
+  for (const withGitBaseline of [true, false]) {
+    const workspace = mkdtempSync(path.join(tmpdir(), 'p2a-generated-docs-close-'));
+    try {
+      const artifactRoot = path.join(workspace, '.plan2agent', 'artifacts', 'sample');
+      const graphPath = path.join(artifactRoot, 'iterations', 'v1', 'gate-c-task-graph', 'task-graph.json');
+      const runsDir = path.join(artifactRoot, 'runs');
+      mkdirSync(path.dirname(graphPath), { recursive: true });
+      mkdirSync(runsDir, { recursive: true });
+      mkdirSync(path.join(workspace, 'docs', 'generated'), { recursive: true });
+      writeFileSync(graphPath, '{}\n');
+      const config = { runTracking: { generatedPaths: ['docs/generated'] }, relatedVerification: [] };
+      writeFileSync(path.join(workspace, '.plan2agent', 'project.config.json'), JSON.stringify(config));
+      writeFileSync(path.join(workspace, '.gitignore'), '.plan2agent/\n');
+      writeFileSync(path.join(workspace, 'docs', 'guide.md'), 'before\n');
+      git(workspace, ['init', '-q']);
+      git(workspace, ['config', 'user.email', 'fixture@example.com']);
+      git(workspace, ['config', 'user.name', 'Plan2Agent Fixture']);
+      git(workspace, ['add', '.']);
+      git(workspace, ['commit', '-qm', 'baseline']);
+      const headSha = git(workspace, ['rev-parse', 'HEAD']);
+      writeFileSync(path.join(workspace, 'docs', 'guide.md'), 'after\n');
+      writeFileSync(path.join(workspace, 'docs', 'generated', 'output.md'), 'generated output\n');
+      const changedFiles = collectGitChangedFiles(workspace, config);
+      assert.deepEqual(changedFiles, ['docs/guide.md']);
+      const run = {
+        runId: 'run-generated-docs', taskId: 'task-001', iterationId: 'v1', sourceLayout: 'iteration',
+        taskGraphRef: 'iterations/v1/gate-c-task-graph/task-graph.json', status: 'finished',
+        workspacePath: workspace, isolation: { mode: 'none' }, changedFiles,
+        ...(withGitBaseline ? { git: { headSha } } : {}),
+        startedAt: '2026-09-06T00:00:00.000Z', finishedAt: '2026-09-06T00:01:00.000Z',
+      };
+      const exclusions = workspaceRevisionExcludedPathsForRun(runsDir, run, { artifactRoot, graphPath, workspacePath: workspace });
+      run.workspaceRevisionSha256 = workspaceRevisionSha256(workspace, exclusions);
+      run.productRevisionSha256 = workspaceRevisionSha256(workspace, [...exclusions, ...productRevisionExcludedPaths(workspace)]);
+      const argv = [process.execPath, '-e', 'process.exit(0)', '--', ...changedFiles];
+      const result = runVerificationCommand({
+        type: 'custom', command: argv.map((arg) => JSON.stringify(arg)).join(' '), argv,
+        source: 'command', scope: 'related', selectedFiles: changedFiles, selectedFileCount: changedFiles.length,
+      }, workspace, 10000);
+      assert.equal(result.status, 'passed');
+      run.verification = [{ ...result, workspaceRevisionSha256: run.workspaceRevisionSha256, productRevisionSha256: run.productRevisionSha256 }];
+      const close = () => assertFinalFullVerificationReady({ runsDir, runs: [run], artifactRoot, graphPath, activeIteration: 'v1' });
+      assert.equal(close().profile.id, 'docs_metadata');
+      run.changedFiles = [...changedFiles, 'docs/generated/output.md'];
+      assert.throws(close, /did not cover.*docs\/generated\/output\.md/, 'explicitly recorded evidence is never filtered');
+      run.changedFiles = changedFiles;
+      git(workspace, ['add', 'docs/generated/output.md']);
+      assert.throws(close, /did not cover.*docs\/generated\/output\.md/, 'staged files remain required even in generated paths');
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
   }
 });
 
@@ -1125,7 +1181,10 @@ test('execute finish collects Git changes before related argv execution and seal
 
     writeFileSync(path.join(workspace, 'src', 'changed file.js'), 'export const value = 2;\n', 'utf8');
     writeFileSync(path.join(workspace, 'src', 'explicit $(literal).js'), 'export const explicit = 2;\n', 'utf8');
+    mkdirSync(path.join(workspace, '.cache', 'run-output'), { recursive: true });
+    writeFileSync(path.join(workspace, '.cache', 'run-output', 'backup.json'), '{}\n');
     writeFileSync(path.join(artifactRoot, 'project.config.json'), `${JSON.stringify({
+      runTracking: { generatedPaths: ['.cache/run-output'] },
       relatedVerification: [{
         type: 'test',
         argv: [process.execPath, captureScript, captureOutput],
@@ -1208,6 +1267,7 @@ test('docs final verification reuses implementation paths for related evidence w
       'utf8',
     );
     writeFileSync(path.join(artifactRoot, 'project.config.json'), `${JSON.stringify({
+      runTracking: { generatedPaths: ['docs/generated'] },
       relatedVerification: [{
         type: 'test',
         argv: [process.execPath, captureScript, captureOutput],
@@ -1216,6 +1276,8 @@ test('docs final verification reuses implementation paths for related evidence w
     }, null, 2)}\n`, 'utf8');
     mkdirSync(path.join(workspace, 'docs'), { recursive: true });
     writeFileSync(path.join(workspace, 'docs', 'guide.md'), '# First revision\n', 'utf8');
+    mkdirSync(path.join(workspace, 'docs', 'generated'), { recursive: true });
+    writeFileSync(path.join(workspace, 'docs', 'generated', 'output.md'), 'generated output\n');
     writeFileSync(path.join(workspace, '.gitignore'), '.plan2agent/\n', 'utf8');
     git(workspace, ['init', '-q']);
     git(workspace, ['config', 'user.email', 'fixture@example.com']);

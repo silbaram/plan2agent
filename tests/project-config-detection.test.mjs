@@ -93,6 +93,10 @@ test('defaults new projects to adaptive while preserving legacy omitted-mode beh
   assert.equal(projectConfig.devExecution.executionMode, 'adaptive');
   assert.equal(projectConfig.runTracking.defaultIsolation, 'none');
   assert.equal(projectConfig.runTracking.persistence, 'active_only');
+  assert.deepEqual(projectConfig.runTracking.generatedPaths, ['.plan2agent/artifacts']);
+  assert.deepEqual(mergeDevSkillConfig({
+    runTracking: { generatedPaths: ['.local/backups'] },
+  }).config.runTracking.generatedPaths, ['.local/backups']);
   assert.equal(resolveRunPersistence(projectConfig), 'active_only');
   assert.equal(resolveRunPersistence({}), 'persistent');
   assert.equal(mergeDevSkillConfig({ devExecution: {} }).config.devExecution.executionMode, 'orchestrated');

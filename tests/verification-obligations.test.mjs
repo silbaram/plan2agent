@@ -20,6 +20,7 @@ import {
   verificationCommandIdentity,
 } from '../scripts/p2a_verification_evidence.mjs';
 import {
+  automaticDocsMetadataFiles,
   collectGitChangedFiles,
   collectGitChangedFilesSince,
   normalizeChangedFiles,
@@ -253,6 +254,110 @@ test('git rename collection retains both old and new canonical paths', () => {
       new Set(collectGitChangedFilesSince(workspace, baseRef)),
       new Set(['old-name.md', 'new-name.md']),
     );
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('Git collection omits only untracked generated paths, retaining source and explicit evidence', () => {
+  const workspace = mkdtempSync(path.join(tmpdir(), 'p2a-generated-paths-'));
+  try {
+    const runGit = (args) => {
+      const result = spawnSync('git', args, { cwd: workspace, encoding: 'utf8' });
+      assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    };
+    runGit(['init', '-q']);
+    runGit(['config', 'user.email', 'fixture@example.com']);
+    runGit(['config', 'user.name', 'Plan2Agent Fixture']);
+    const files = [
+      '.buildlore/backups/tracked.json',
+      '.buildlore/backups/deleted.json',
+      '.buildlore/backups/old-name.json',
+      '.buildlore/backups/new.json',
+      '.buildlore/backups/staged.json',
+      '.buildlore/handoffs/result.md',
+      '.buildlore/backups-source/new.js',
+      '.plan2agent/artifacts/example/runs/run-new.json',
+      '.plan2agent/project.config.json',
+      'src/new.js',
+      'docs/guide.md',
+    ];
+    for (const file of files) {
+      mkdirSync(path.dirname(path.join(workspace, file)), { recursive: true });
+      writeFileSync(path.join(workspace, file), 'before\n');
+    }
+    runGit(['add', ...files.slice(0, 3)]);
+    runGit(['commit', '-qm', 'baseline']);
+    writeFileSync(path.join(workspace, files[0]), 'after\n');
+    rmSync(path.join(workspace, files[1]));
+    runGit(['mv', files[2], '.buildlore/backups/renamed.json']);
+    runGit(['add', '.buildlore/backups/staged.json']);
+
+    const config = { runTracking: { generatedPaths: ['./.buildlore//backups/', '.buildlore/handoffs'] } };
+    const changed = collectGitChangedFiles(workspace, config);
+    assert.deepEqual(new Set(changed), new Set([
+      ...files.slice(0, 3),
+      '.buildlore/backups/renamed.json',
+      '.buildlore/backups/staged.json',
+      '.buildlore/backups-source/new.js',
+      '.plan2agent/project.config.json',
+      'src/new.js',
+      'docs/guide.md',
+    ]));
+    assert.ok(collectGitChangedFiles(workspace).includes('.buildlore/backups/new.json'), 'unknown product paths are not guessed to be junk');
+    assert.ok(normalizeChangedFiles(workspace, [
+      ...changed, '.buildlore/backups/new.json',
+    ]).includes('.buildlore/backups/new.json'), 'an explicit path remains authoritative');
+    for (const generatedPaths of ['cache', ['..'], ['.'], ['/tmp'], ['cache/**'], [null]]) {
+      assert.throws(() => collectGitChangedFiles(workspace, { runTracking: { generatedPaths } }));
+    }
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('generated path matching does not resolve external cache symlinks but recorded paths still do', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'p2a-excluded-cache-link-'));
+  const workspace = path.join(root, 'workspace');
+  const cache = path.join(root, 'cache');
+  try {
+    mkdirSync(workspace);
+    mkdirSync(cache);
+    const git = (args) => {
+      const result = spawnSync('git', args, { cwd: workspace, encoding: 'utf8' });
+      assert.equal(result.status, 0, result.stderr);
+    };
+    git(['init', '-q']);
+    writeFileSync(path.join(workspace, '.gitignore'), '.cache\n');
+    writeFileSync(path.join(workspace, 'README.md'), '# Changed\n');
+    symlinkSync(cache, path.join(workspace, '.cache'));
+    const config = { runTracking: { generatedPaths: ['.cache'] } };
+    assert.deepEqual(collectGitChangedFiles(workspace, config), collectGitChangedFiles(workspace));
+    assert.throws(() => normalizeChangedFiles(workspace, ['.cache']), /resolves outside the workspace/);
+    git(['add', '-f', '.cache']);
+    assert.throws(() => collectGitChangedFiles(workspace, config), /resolves outside the workspace/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('automatic documentation scans exclude generated files but retain tracked and verification metadata', () => {
+  const workspace = mkdtempSync(path.join(tmpdir(), 'p2a-generated-doc-scan-'));
+  try {
+    const files = ['docs/guide.md', 'docs/generated/tracked.md', 'docs/generated/untracked.md', '.plan2agent/project.config.json'];
+    for (const file of files) {
+      mkdirSync(path.dirname(path.join(workspace, file)), { recursive: true });
+      writeFileSync(path.join(workspace, file), '{}\n');
+    }
+    const config = { runTracking: { generatedPaths: ['docs/generated', '.plan2agent'] } };
+    assert.deepEqual(new Set(automaticDocsMetadataFiles(workspace, config)), new Set(files), 'non-Git scans cannot infer tracking');
+    for (const args of [['init', '-q'], ['add', 'docs/generated/tracked.md']]) {
+      const result = spawnSync('git', args, { cwd: workspace, encoding: 'utf8' });
+      assert.equal(result.status, 0, result.stderr);
+    }
+    assert.deepEqual(new Set(automaticDocsMetadataFiles(workspace, config)), new Set([
+      'docs/guide.md', 'docs/generated/tracked.md', '.plan2agent/project.config.json',
+    ]));
   } finally {
     rmSync(workspace, { recursive: true, force: true });
   }

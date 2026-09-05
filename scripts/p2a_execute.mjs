@@ -1913,10 +1913,11 @@ function currentVerificationAttemptsForExecuteRun(source, run, workspaceOverride
 function automaticVerificationOptions(source, run, args) {
   if (run.milestones?.some((milestone) => milestone.status === 'pending')) return null;
   const workspacePath = path.resolve(args.workspace ?? run.workspacePath);
+  const config = loadProjectConfig(source, workspacePath);
   const changedFiles = normalizeChangedFiles(workspacePath, [
     ...run.changedFiles,
     ...args.changedFiles,
-    ...(args.collectGit ? collectGitChangedFiles(workspacePath) : []),
+    ...(args.collectGit ? collectGitChangedFiles(workspacePath, config) : []),
   ]);
   const profile = verificationProfileForExecuteRun(source, run, changedFiles);
   const relevantOnly = (
@@ -1941,7 +1942,6 @@ function automaticVerificationOptions(source, run, args) {
           : {}),
       };
   const passed = executedPassedVerificationItems(run.verification, revisions);
-  const config = loadProjectConfig(source, workspacePath);
   if (relevantOnly) {
     const relatedConfigured = configuredRelatedVerificationObligations(
       relatedVerificationCommands(config),

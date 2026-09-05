@@ -179,6 +179,7 @@ export function defaultRunTracking() {
   return {
     runsDir: DEFAULT_RUNS_DIR,
     persistence: 'active_only',
+    generatedPaths: ['.plan2agent/artifacts'],
     defaultIsolation: 'none',
     runIdStrategy: 'timestamp',
     runIdPattern: DEFAULT_RUN_ID_PATTERN,

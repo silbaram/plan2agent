@@ -119,6 +119,8 @@ run을 정리합니다. proposal로 아직 mining하지 않은 실패·차단 ru
 새 run은 Gate B에서 파생한 execution envelope를 content hash별로 한 번만 저장하고 각 run은
 그 참조와 검증용 SHA-256만 가집니다. 기존 인라인 run도 계속 읽을 수 있으며
 `p2a runs migrate-schema`로 참조형으로 전환할 수 있습니다.
+생성물 파일 목록은 `runTracking.generatedPaths`로 자동 수집에서 제외할 수 있고, 성공한 기본
+검증의 출력은 짧게 보존합니다. 실패 이력과 검증 근거는 유지합니다([기록 정책](docs/cli-reference.md)).
 
 네 섹션으로 작성한 짧은 P2A 회고는 `p2a proposals issue-preview`로 공개 이슈 내용을 먼저
 검토하고, 명시적인 `--yes` 확인 뒤에만 `publish-issue`로 P2A GitHub 저장소에 등록할 수 있습니다.

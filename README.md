@@ -119,6 +119,9 @@ Unmined failed or blocked runs remain available to the proposal flow. Use `p2a r
 to review indexed and orphan evidence before cleanup; persistent projects require an explicit
 `--force`. Each Git-backed run also records its current HEAD, branch, and dirty state. Set
 `runTracking.persistence` to `persistent` only when long-lived local run evidence is required.
+Use `runTracking.generatedPaths` to omit untracked generated files from automatic change collection.
+Successful standard checks keep shorter output tails; failures and verification bindings remain intact
+([recording policy](docs/cli-reference.md)).
 Optional `runTracking.retrospectiveSignals` thresholds let `p2a next --json --contract v2`
 surface bounded current-iteration performance and process candidates before close. Safe process
 signals are detected by default; projects can set `enabled: false` to disable them, while performance

@@ -334,6 +334,49 @@ test('valid custom build and configured test, lint, and typecheck flags remain s
   });
 });
 
+test('run verify and finish collect only relevant untracked files and preserve explicit paths', () => {
+  const fixture = executeRunFixture();
+  try {
+    const git = (args) => {
+      const result = spawnSync('git', args, { cwd: fixture.projectRoot, encoding: 'utf8' });
+      assert.equal(result.status, 0, commandOutput(result));
+    };
+    mkdirSync(path.join(fixture.projectRoot, '.plan2agent'), { recursive: true });
+    writeFileSync(path.join(fixture.projectRoot, '.plan2agent', 'project.config.json'), JSON.stringify({
+      runTracking: { generatedPaths: ['.local/backups'] },
+    }));
+    writeFileSync(path.join(fixture.projectRoot, '.gitignore'), 'runs/\n');
+    git(['init', '-q']);
+    git(['config', 'user.email', 'fixture@example.com']);
+    git(['config', 'user.name', 'Plan2Agent Fixture']);
+    git(['add', '.']);
+    git(['commit', '-qm', 'baseline']);
+    mkdirSync(path.join(fixture.projectRoot, '.local', 'backups'), { recursive: true });
+    writeFileSync(path.join(fixture.projectRoot, '.local', 'backups', 'automatic.json'), '{}\n');
+    writeFileSync(path.join(fixture.projectRoot, '.local', 'backups', 'explicit.json'), '{}\n');
+    writeFileSync(path.join(fixture.projectRoot, 'feature.js'), 'export const feature = true;\n');
+    let result = runCli(RUNS_CLI, [
+      'verify', '--graph', fixture.graphPath, '--run-id', fixture.runId, '--collect-git',
+      '--changed-file', '.local/backups/explicit.json',
+      '--verify-command', `custom:${JSON.stringify(process.execPath)} -e "process.exit(0)"`,
+    ], fixture.projectRoot);
+    assert.equal(result.status, 0, commandOutput(result));
+    const expectedFiles = ['.local/backups/explicit.json', 'feature.js'];
+    assert.deepEqual(JSON.parse(readFileSync(fixture.runPath, 'utf8')).changedFiles, expectedFiles);
+    result = runCli(RUNS_CLI, [
+      'finish', '--graph', fixture.graphPath, '--run-id', fixture.runId,
+      '--collect-git', '--status', 'finished',
+    ], fixture.projectRoot);
+    assert.equal(result.status, 0, commandOutput(result));
+    const run = JSON.parse(readFileSync(fixture.runPath, 'utf8'));
+    assert.deepEqual(run.changedFiles, expectedFiles);
+    assert.equal(run.status, 'finished');
+    assert.match(run.verification[0].workspaceRevisionSha256, /^[a-f0-9]{64}$/u);
+  } finally {
+    rmSync(fixture.workspace, { recursive: true, force: true });
+  }
+});
+
 test('latest same-command attempt decides while prior failed and unavailable evidence is preserved', async (t) => {
   const cases = [
     {

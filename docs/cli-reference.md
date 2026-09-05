@@ -371,6 +371,22 @@ p2a iteration maintenance add \
 
 Git workspace에서 시작한 run은 시작 시점의 `headSha`/`branch`/`dirty`를 기록하고 finish 때 현재 값으로 갱신하므로 `p2a runs show`가 Git 이력의 얇은 index 역할도 한다. `p2a runs gc [--dry-run] [--iteration <id>] [--keep-final] [--force]`는 기존 index-first prune 엔진으로 닫힌 run과 sidecar를 정리하고 crash 뒤 남은 미인덱스 orphan 파일도 함께 스윕한다. `--keep-final`은 최신 닫힌 run과 함께 현재 iteration의 누적 제품 위험도 및 `full`/`relevant` 검증 판단에 필요한 최소 anchor를 보존한다. index 안이나 crash orphan에 `started` run이 있으면 거부하며 `persistent` 모드는 `--force` 없이는 정리하지 않는다. doctor는 orphan을 warning과 gc dry-run 안내로 노출한다.
 
+`--collect-git`은 미추적 `.plan2agent/artifacts/`와 `runTracking.generatedPaths`에 지정한 생성물 경로를 변경 목록에서 제외한다. 설정은 workspace 기준의 실제 상대 경로이며 해당 경로와 하위 파일에만 적용한다. glob이나 workspace 전체를 제외하는 `.`/`..`는 허용하지 않는다. Git이 추적하거나 stage한 파일, 직접 `--changed-file`로 지정한 파일, 기존 run에 기록된 파일은 제외하지 않는다. 이 설정은 파일 목록 수집에만 적용하며 workspace revision 계산이나 검증 의무를 면제하지 않는다. 예를 들어 BuildLore의 백업·인계 생성물은 `.plan2agent/project.config.json`에 다음과 같이 지정할 수 있다.
+
+같은 제외 기준을 최종 검증의 자동 파일 수집과 신규 문서 baseline에도 적용한다. Git 이력이 없어 보조 스캔을 사용하더라도 추적 파일과 검증용 P2A 설정은 유지하며, Git index를 읽을 수 없으면 미추적 여부를 추측해 제외하지 않는다. 제외 경로는 링크 대상을 따라가지 않고 경로 문자열만 검사하지만, 실제 기록하는 파일의 workspace 경계 검사는 그대로 유지한다.
+
+```json
+{
+  "runTracking": {
+    "generatedPaths": [".buildlore/backups", ".buildlore/handoffs"]
+  }
+}
+```
+
+새 검증 기록은 명령·종료 코드·실행 시간·revision·실패 원인을 유지한다. 성공한 기본 `test`/`lint`/`typecheck`의 stdout은 마지막 1,000자, 실패와 `custom` 검증의 stdout 및 모든 stderr는 마지막 4,000자까지 보존한다. 터미널 색상 제어 문자는 제거하고 잘린 출력에는 생략 표시를 남긴다. 실제로 여러 번 실행한 검증은 각각 기록하며 실패→수정→성공 이력이나 기존 sidecar에 결합된 과거 기록을 축약·재작성하지 않는다.
+
+`active_only`로 종료된 iteration 전체를 정리할 때는 index에서 이미 빠진 미참조 envelope도 함께 정리한다. 다른 iteration의 파일과 참조 중인 계약은 보존한다. run 삭제 전에 envelope 정리 대상을 계산하며, 미인덱스 run이나 읽을 수 없는 run이 있으면 공유 계약을 잃지 않도록 envelope 자동 정리를 건너뛴다. `p2a runs gc --dry-run`으로 확인한 뒤 명시적으로 정리할 수 있고, 실제 GC 결과에는 내부 정리에서 삭제한 envelope도 합산해 표시한다.
+
 `p2a runs rebuild-index --runs <dir> --dry-run`은 canonical run 파일에서 live `runs`/`tasks` projection을 다시 계산한다. 검토 뒤 `--yes`로 적용하면 새 index 전체를 검증하고 실패 시 원본 index로 rollback한다. 기존 retrospective summary가 내부 합계 검증을 통과하면 보존하고, 손상된 summary는 재구성할 원본 run이 이미 삭제됐을 수 있으므로 명시적 rebuild에서만 버린다고 출력한다.
 
 새 run은 Gate B에서 파생한 실행 계약을 `runs/<iterationId>/envelopes/<sha256>.json`에 내용 주소화하고 본문에는 `executionEnvelopeRef.sha256`과 `executionEnvelopeSha256`만 기록한다. resolver는 사용 시점마다 파일 존재, 중간 symbolic-link가 없는 regular-file 경계, 본문 hash, 승인된 Gate B 계약 일치를 다시 검사한다. 구형 인라인 `executionEnvelope` run도 계속 유효하며 `p2a runs migrate-schema`가 동일 hash를 dedup해 참조형으로 바꾼다. `migrate-layout`과 portable handoff도 참조된 envelope 파일을 run과 함께 이동·복사한다.
