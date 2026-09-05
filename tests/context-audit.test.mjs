@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import {
   cpSync,
   mkdirSync,
@@ -34,7 +35,10 @@ function referenceRouteSignature(reference) {
       .map((item) => `${item.provider}=\`${item.path}\``)
       .join(', ')}`);
   }
-  return `${parts.join('; ')} — \`${reference.path}\` — ${reference.condition}`;
+  const referencePath = reference.source_skill
+    ? `.agents/skills/${reference.source_skill}/${reference.path}`
+    : reference.path;
+  return `${parts.join('; ')} — \`${referencePath}\` — ${reference.condition}`;
 }
 
 test('canonical context routes produce a schema-valid provider and stage audit', () => {
@@ -85,6 +89,95 @@ test('doctor context mode is harness-independent and supports JSON, human, and s
   assert.match(result.stdout, /unique resolved corpus:/);
   assert.match(result.stdout, /codex:/);
   assert.doesNotMatch(result.stdout, /\.plan2agent directory is missing/);
+});
+
+const SHARED_REFERENCES = [
+  { skill: 'p2a-next', stage: 'closeout', owner: 'p2a-dev-execution', file: 'verification-closeout.md' },
+  { skill: 'p2a-task-breakdown', stage: 'gate-c', owner: 'p2a-task-author', file: 'draft-contract.md' },
+];
+
+for (const { skill, stage, owner, file } of SHARED_REFERENCES) {
+  test(`${skill} audits its shared reference only when selected and counts the real source bytes`, () => {
+    const conditionId = `reference:${skill}:references/${file}`;
+    const scenario = { skill, stage, conditions: [] };
+    const unloaded = auditContext(ROOT, { scenario });
+    const loaded = auditContext(ROOT, { scenario: { ...scenario, conditions: [conditionId] } });
+    const inventory = auditContext(ROOT);
+    assert.equal(unloaded.status, 'pass');
+    assert.equal(loaded.status, 'pass');
+    assert.equal(inventory.status, 'pass');
+    for (const context of loaded.contexts) {
+      const sourcePath = `${context.provider === 'claude' ? '.claude' : '.agents'}/skills/${owner}/references/${file}`;
+      const body = readFileSync(path.join(ROOT, sourcePath), 'utf8').replace(/\r\n?/g, '\n');
+      const references = context.sources.filter((source) => source.role === 'reference');
+      assert.equal(references.length, 1);
+      assert.equal(references[0].path, sourcePath);
+      assert.equal(references[0].conditionId, conditionId);
+      assert.equal(references[0].bytes, Buffer.byteLength(body, 'utf8'));
+      assert.equal(references[0].sha256, createHash('sha256').update(body, 'utf8').digest('hex'));
+      const inactive = unloaded.contexts.find((item) => item.provider === context.provider);
+      assert.ok(inactive.sources.every((source) => source.role !== 'reference'));
+      assert.equal(context.totals.promptBytes - inactive.totals.promptBytes, references[0].bytes);
+      const declared = inventory.contexts.find((item) => (
+        item.provider === context.provider && item.skill === skill && item.stage === stage
+      ));
+      assert.ok(declared.sources.some((source) => source.path === sourcePath));
+    }
+  });
+}
+
+test('context audit fails when a linked shared reference is omitted from consumer routes', () => {
+  const targetRoot = makeTempDir('p2a-context-unrouted-shared-');
+  try {
+    for (const directory of ['.agents', '.claude', '.codex', '.gemini']) {
+      cpSync(path.join(ROOT, directory), path.join(targetRoot, directory), { recursive: true });
+    }
+    const routesPath = path.join(targetRoot, '.agents', 'context-routes.json');
+    const routes = JSON.parse(readFileSync(routesPath, 'utf8'));
+    for (const { skill } of SHARED_REFERENCES) {
+      routes.skills.find((item) => item.id === skill).references = [];
+    }
+    writeFileSync(routesPath, `${JSON.stringify(routes, null, 2)}\n`, 'utf8');
+    const report = auditContext(targetRoot);
+    assert.equal(report.status, 'fail');
+    for (const { skill } of SHARED_REFERENCES) {
+      assert.ok(report.diagnostics.some((item) => (
+        item.code === 'unrouted_shared_reference'
+          && item.paths?.includes(`.agents/skills/${skill}/SKILL.md`)
+      )));
+    }
+  } finally {
+    rmSync(targetRoot, { recursive: true, force: true });
+  }
+});
+
+test('shared consumer audits detect missing source files and provider mirror drift', () => {
+  const targetRoot = makeTempDir('p2a-context-shared-source-');
+  try {
+    for (const directory of ['.agents', '.claude', '.codex', '.gemini']) {
+      cpSync(path.join(ROOT, directory), path.join(targetRoot, directory), { recursive: true });
+    }
+    const relativePath = '.claude/skills/p2a-dev-execution/references/verification-closeout.md';
+    const sourcePath = path.join(targetRoot, relativePath);
+    const options = { scenario: {
+      skill: 'p2a-next', stage: 'closeout',
+      conditions: ['reference:p2a-next:references/verification-closeout.md'],
+    } };
+    writeFileSync(sourcePath, `${readFileSync(sourcePath, 'utf8')}\nMirror drift.\n`, 'utf8');
+    let report = auditContext(targetRoot, options);
+    assert.equal(report.status, 'fail');
+    assert.ok(report.diagnostics.some((item) => (
+      item.code === 'provider_skill_mirror_drift' && item.paths?.includes(relativePath)
+    )));
+    rmSync(sourcePath);
+    report = auditContext(targetRoot, options);
+    assert.equal(report.status, 'fail');
+    assert.ok(report.diagnostics.some((item) => (
+      item.code === 'missing_context_source' && item.paths?.includes(relativePath)
+    )));
+  } finally {
+    rmSync(targetRoot, { recursive: true, force: true });
+  }
 });
 
 test('context audit candidate evidence omits prompt content and identifies source owners', () => {

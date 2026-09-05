@@ -101,6 +101,7 @@
       "properties": {
         "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9.-]+$" },
         "path": { "type": "string", "pattern": "^references/[A-Za-z0-9._/-]+$" },
+        "source_skill": { "type": "string", "pattern": "^p2a-[a-z0-9-]+$" },
         "load": { "enum": ["conditional", "on-demand"] },
         "required": { "type": "boolean" },
         "condition": { "type": "string", "minLength": 1 },

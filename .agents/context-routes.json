@@ -81,7 +81,20 @@
         "closeout"
       ],
       "gemini_command": "next",
-      "references": []
+      "references": [
+        {
+          "id": "next.verification-closeout",
+          "path": "references/verification-closeout.md",
+          "source_skill": "p2a-dev-execution",
+          "phases": [],
+          "load": "conditional",
+          "required": true,
+          "condition": "A closeout choice or an explicit retrospective/report/issue request is being handled.",
+          "stages": [
+            "closeout"
+          ]
+        }
+      ]
     },
     {
       "id": "p2a-spec",
@@ -190,7 +203,20 @@
         "gate-c"
       ],
       "gemini_command": "task-breakdown",
-      "references": []
+      "references": [
+        {
+          "id": "task-breakdown.draft-contract",
+          "path": "references/draft-contract.md",
+          "source_skill": "p2a-task-author",
+          "phases": [],
+          "load": "on-demand",
+          "required": true,
+          "condition": "This compatibility entry is about to decompose an approved spec into a task graph.",
+          "stages": [
+            "gate-c"
+          ]
+        }
+      ]
     },
     {
       "id": "p2a-dev-execution",
@@ -365,7 +391,7 @@
       "stages": [
         "gate-b"
       ],
-      "condition": "An approved product specification needs a schema-compatible implementation plan."
+      "condition": "A Gate B product specification draft needs a schema-compatible implementation plan."
     },
     {
       "id": "p2a-task-author",
@@ -388,7 +414,7 @@
       "stages": [
         "gate-c"
       ],
-      "condition": "Orchestrated execution benefits from dependency or ownership boundaries.",
+      "condition": "A legacy flat approved spec needs a compatibility task graph author.",
       "modes": [
         "orchestrated"
       ]

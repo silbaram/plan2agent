@@ -103,6 +103,15 @@ export function validateContextRoutesData(routes) {
       }
     }
   }
+  for (const skill of routes.skills) {
+    for (const reference of skill.references) {
+      if (!reference.source_skill) continue;
+      const sourceSkill = routes.skills.find((item) => item.id === reference.source_skill);
+      if (!sourceSkill?.references.some((item) => !item.source_skill && item.path === reference.path)) {
+        throw new Error(`context reference ${reference.id} must name a directly owned source reference: ${reference.source_skill}/${reference.path}`);
+      }
+    }
+  }
   stableReferenceIds(routes);
   return routes;
 }
@@ -163,6 +172,7 @@ export function selectContextReferenceRoutes(routesInput, options) {
     ))
     .map((reference) => ({
       skillId,
+      ...(reference.source_skill ? { sourceSkillId: reference.source_skill } : {}),
       routeId: reference.id,
       conditionId: referenceConditionId(skillId, reference.path),
       relativePath: assertRelativeReferencePath(
@@ -195,7 +205,7 @@ function pathIsInside(root, candidate) {
 
 export function readContextRouteSource(targetRootInput, provider, route) {
   const targetRoot = path.resolve(targetRootInput);
-  const sourceRoot = skillSourceRoot(targetRoot, provider, route.skillId);
+  const sourceRoot = skillSourceRoot(targetRoot, provider, route.sourceSkillId ?? route.skillId);
   const candidate = path.join(sourceRoot, route.relativePath);
   if (!existsSync(sourceRoot)) throw new Error(`context source root is missing: ${sourceRoot}`);
   if (!pathIsInside(sourceRoot, candidate)) throw new Error(`context source escapes its declared root: ${route.relativePath}`);

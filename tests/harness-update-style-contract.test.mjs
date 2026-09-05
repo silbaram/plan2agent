@@ -23,8 +23,11 @@ test('checkout scaffold guide directs users through the co-located runtime', () 
     assert.match(guide, /`node \.plan2agent\/scripts\/p2a\.mjs next`/);
     assert.match(guide, /\/p2a-next/);
     assert.match(guide, /iteration_review_or_close_required/i);
-    assert.match(guide, /p2a execute remediate.*linked run.*same open iteration/i);
-    assert.match(guide, /only an explicit close choice authorizes the nested close command/i);
+    assert.match(guide, /review is read-only unless fixes were requested/i);
+    assert.match(guide, /p2a execute remediate.*same open iteration/i);
+    assert.match(guide, /only an explicit close choice archives the iteration/i);
+    assert.match(guide, /p2a proposals issue-preview.*p2a proposals publish-issue/i);
+    assert.match(guide, /proposal mining is not required/i);
     assert.doesNotMatch(guide, /p2a\.mjs info/);
     assert.doesNotMatch(guide, /p2a\.mjs execute plan/);
   } finally {

@@ -8829,21 +8829,18 @@ function validateIterationCurrentFixtureCases() {
       unlinkSync(contextRunPath);
 
       const taskAuthorContract = readFileSync(path.join(ROOT, '.agents', 'agents', 'p2a-task-author.md'), 'utf8');
-      const requiredTaskAuthorContractFragments = [
-        '`schema_version: "p2a.task_graph.v1"`',
-        'map `projectId` exactly from `context.project_id`',
-        '`tasks` array',
-        ...['id', 'title', 'intent', 'description', 'status', 'dependencies', 'acceptanceCriteria', 'targetArea', 'suggestedAgentPrompt', 'sourceSpecRefs']
-          .map((field) => `\`${field}\``),
-        '`diff-tasks --force`',
-        '`promote-tasks --replace-existing`',
+      // The agent routes to shared contracts; executable fixtures below verify
+      // task shape, cycles, promotion, and replacement safety, not copied prose.
+      const requiredTaskAuthorReferences = [
+        '.agents/skills/p2a-task-author/references/draft-contract.md',
+        '.agents/skills/p2a-task-author/references/replacement-and-promotion.md',
       ];
-      const missingTaskAuthorContractFragments = requiredTaskAuthorContractFragments
-        .filter((fragment) => !taskAuthorContract.includes(fragment));
+      const missingTaskAuthorReferences = requiredTaskAuthorReferences
+        .filter((ref) => !taskAuthorContract.includes(ref) || !existsSync(path.join(ROOT, ref)));
       checks += 1;
-      if (missingTaskAuthorContractFragments.length) {
-        console.error(`task-author agent schema/safe-replacement contract fixture check failed: ${caseData.id}`);
-        console.error(JSON.stringify({ missingTaskAuthorContractFragments }, null, 2));
+      if (missingTaskAuthorReferences.length) {
+        console.error(`task-author shared contract reference fixture check failed: ${caseData.id}`);
+        console.error(JSON.stringify({ missingTaskAuthorReferences }, null, 2));
         return { status: 1, checks };
       }
 

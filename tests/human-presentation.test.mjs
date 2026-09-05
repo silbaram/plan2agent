@@ -286,6 +286,28 @@ test('completion evidence prefers the newest full pass regardless of run kind', 
   );
 });
 
+test('completion copy separates review, fixes, and retrospective outcomes in both languages', () => {
+  const next = {
+    state: 'iteration_review_or_close_required',
+    command: {
+      kind: 'approval',
+      options: ['review', 'retrospective', 'close'].map((id) => ({ id, label: id })),
+    },
+  };
+  for (const [problem, fixBoundary, reportBoundary] of [
+    ['Make the development workflow simpler.', /fix them only when requested/, /needs no repeated approval/],
+    ['개발 절차를 간결하게 만든다.', /수정은 요청한 경우에만/, /같은 요청을 재승인받지 않고/],
+  ]) {
+    const output = renderNextHuman(next, {
+      spec: { product: { problem } },
+      completion: { verificationCurrent: true },
+    });
+    assert.match(output, fixBoundary);
+    assert.match(output, reportBoundary);
+    assert.doesNotMatch(output, /fix important findings|문제가 있으면 수정하고|회고 진행 여부를 묻습니다/);
+  }
+});
+
 test('completion rendering does not recommend close when its readiness recheck is stale', () => {
   const next = {
     schema_version: 'p2a.next.v2',

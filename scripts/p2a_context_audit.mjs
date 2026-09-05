@@ -131,7 +131,10 @@ function canonicalReferenceRouteSignature(reference) {
       .map((item) => `${item.provider}=\`${item.path}\``)
       .join(', ')}`);
   }
-  return `${parts.join('; ')} — \`${reference.path}\` — ${reference.condition}`;
+  const referencePath = reference.source_skill
+    ? `.agents/skills/${reference.source_skill}/${reference.path}`
+    : reference.path;
+  return `${parts.join('; ')} — \`${referencePath}\` — ${reference.condition}`;
 }
 
 function agentConditionId(agentId) {
@@ -370,14 +373,15 @@ function validateRouteManifest(targetRoot, manifest, diagnostics) {
         continue;
       }
       for (const declaredPath of declaredReferencePaths(reference)) {
-        if (declaredReferences.has(declaredPath)) {
+        const sourceKey = `${reference.source_skill ?? skill.id}/${declaredPath}`;
+        if (declaredReferences.has(sourceKey)) {
           diagnostics.push({
             severity: 'error',
             code: 'duplicate_reference_route',
             message: `Reference route is declared more than once for ${skill.id}: ${declaredPath}`,
           });
         }
-        declaredReferences.add(declaredPath);
+        declaredReferences.add(sourceKey);
       }
       const routeSignature = canonicalReferenceRouteSignature(reference);
       if (!canonicalText.includes(routeSignature)) {
@@ -389,10 +393,20 @@ function validateRouteManifest(targetRoot, manifest, diagnostics) {
         });
       }
     }
+    for (const match of canonicalText.matchAll(/\.agents\/skills\/(p2a-[a-z0-9-]+)\/(references\/[A-Za-z0-9._/-]+\.md)\b/g)) {
+      if (match[1] !== skill.id && !declaredReferences.has(`${match[1]}/${match[2]}`)) {
+        diagnostics.push({
+          severity: 'error',
+          code: 'unrouted_shared_reference',
+          message: `${skill.id}/SKILL.md links a shared reference without a canonical load condition: ${match[0]}`,
+          paths: [normalizePath(path.relative(targetRoot, canonicalMain))],
+        });
+      }
+    }
     const referenceRoot = path.join(targetRoot, '.agents', 'skills', skill.id, 'references');
     for (const filePath of listFiles(referenceRoot)) {
       const relativePath = normalizePath(path.relative(path.dirname(referenceRoot), filePath));
-      if (!declaredReferences.has(relativePath)) {
+      if (!declaredReferences.has(`${skill.id}/${relativePath}`)) {
         diagnostics.push({
           severity: 'warn',
           code: 'unrouted_reference',
@@ -584,7 +598,7 @@ function buildContexts(targetRoot, routes, diagnostics, scenario = null) {
               paths: [normalizePath(path.join(
                 provider === 'claude' ? '.claude' : '.agents',
                 'skills',
-                skill.id,
+                reference.sourceSkillId ?? skill.id,
                 reference.relativePath,
               ))],
             });
@@ -593,8 +607,8 @@ function buildContexts(targetRoot, routes, diagnostics, scenario = null) {
           if (provider === 'claude') {
             reportMirrorDrift(
               targetRoot,
-              sourcePathForSkill(targetRoot, 'codex', skill.id, reference.canonicalPath),
-              sourcePathForSkill(targetRoot, provider, skill.id, reference.relativePath),
+              sourcePathForSkill(targetRoot, 'codex', reference.sourceSkillId ?? skill.id, reference.canonicalPath),
+              sourcePathForSkill(targetRoot, provider, reference.sourceSkillId ?? skill.id, reference.relativePath),
               diagnostics,
               reportedMirrorDrift,
             );
@@ -756,7 +770,7 @@ function canonicalSourcePaths(targetRoot, routes) {
     paths.add(sourcePathForSkill(targetRoot, 'codex', skill.id));
     for (const reference of recordArray(skill.references)) {
       for (const referencePath of declaredReferencePaths(reference)) {
-        paths.add(sourcePathForSkill(targetRoot, 'codex', skill.id, referencePath));
+        paths.add(sourcePathForSkill(targetRoot, 'codex', reference.source_skill ?? skill.id, referencePath));
       }
     }
     for (const provider of routes.providers) {

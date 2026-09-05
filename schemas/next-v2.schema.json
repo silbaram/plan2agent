@@ -100,7 +100,7 @@
                           "additionalProperties": false,
                           "properties": {
                             "kind": { "const": "cli" },
-                            "requiresApproval": { "const": false },
+                            "requiresApproval": { "type": "boolean" },
                             "argv": {
                               "type": "array",
                               "minItems": 8,

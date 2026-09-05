@@ -722,8 +722,8 @@ function humanNextSummaryEnglish(next, context) {
         ...(next.retrospective?.candidateCount
           ? [`P2A found ${next.retrospective.candidateCount} bounded retrospective candidate(s) in the current execution evidence.`]
           : ['Verification is current and P2A found no automatic process concern, so closing is recommended unless you want an extra review.']),
-        'Product review → fix important findings, or ask once to close when no finding exists.',
-        'P2A retrospective → summarize detected signals or your experience, then ask whether to record the retrospective.',
+        'Product review → report findings; fix them only when requested. If clean, ask once to close without repeating the menu.',
+        'P2A retrospective → summarize detected signals or your experience. A request to write a report or publish a GitHub issue needs no repeated approval for that same outcome.',
         'Close → finish the current development batch.',
       ];
     case 'flat_execution_complete':
@@ -955,8 +955,8 @@ function humanNextSummary(next, context) {
         ...(next.retrospective?.candidateCount
           ? [`현재 실행 증거에서 P2A 회고 후보 ${next.retrospective.candidateCount}개를 찾았습니다.`]
           : ['검증 증거가 최신이고 자동으로 발견된 P2A 문제도 없어, 특별히 더 확인할 내용이 없다면 종료를 권장합니다.']),
-        '제품 검토를 선택하면 → 문제가 있으면 수정하고, 없으면 메뉴를 반복하지 않고 종료할지 한 번만 묻습니다.',
-        'P2A 회고를 선택하면 → 발견된 신호나 사용자 경험을 짧게 정리한 뒤 회고 진행 여부를 묻습니다.',
+        '제품 검토를 선택하면 → 발견한 문제를 보고하고, 수정은 요청한 경우에만 진행합니다. 문제가 없으면 메뉴를 반복하지 않고 종료할지 한 번만 묻습니다.',
+        'P2A 회고를 선택하면 → 발견된 신호나 사용자 경험을 짧게 정리합니다. 문서 작성이나 GitHub 이슈 등록을 요청하면 같은 요청을 재승인받지 않고 진행합니다.',
         '완료를 선택하면 → 현재 작업 묶음을 닫습니다.',
       ];
     case 'flat_execution_complete':

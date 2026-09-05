@@ -851,7 +851,8 @@ function assertCompletionDecision(payload, artifactRoot) {
     'execute', 'remediate', '--artifacts', artifactRoot, '--task', '<task-id>',
     '--finding', '<review finding>',
   ]);
-  assert.equal(review.action.remediation.requiresApproval, false);
+  assert.equal(review.action.remediation.requiresApproval, true);
+  assert.match(review.action.display, /only when the user has requested fixes/i);
   assert.equal(retrospective.action.kind, 'retrospective');
   assert.match(retrospective.action.display, /development-process|P2A/i);
   assert.equal(retrospective.action.report.kind, 'artifact');
@@ -860,11 +861,17 @@ function assertCompletionDecision(payload, artifactRoot) {
     join(payload.target, 'docs', 'retrospective', `${payload.projectId}-v1.md`),
   );
   assert.equal(retrospective.action.report.requiresApproval, true);
+  assert.match(retrospective.action.report.display, /issue-preview then p2a proposals publish-issue/);
+  assert.match(retrospective.action.report.display, /project-relative-report-path/);
+  assert.match(retrospective.action.report.display, /proposal mining is not required/i);
   if (payload.retrospective.candidateCount === 0) {
     assert.match(retrospective.description, /No automatic development process signal was found/i);
+    assert.match(retrospective.action.display, /already reported by the user/);
+    assert.match(retrospective.action.display, /no repeated approval/);
     assert.equal('proposalMining' in retrospective.action, false);
   } else {
-    assert.match(retrospective.description, new RegExp(`Review ${payload.retrospective.candidateCount} detected`, 'i'));
+    assert.match(retrospective.description, new RegExp(`Summarize ${payload.retrospective.candidateCount} detected`, 'i'));
+    assert.match(retrospective.action.display, /without asking again/i);
   }
   assert.equal(close.action.kind, 'cli');
   assert.deepEqual(close.action.argv, ['iteration', 'close', '--artifacts', artifactRoot]);
@@ -2375,11 +2382,15 @@ test('human next output defaults to actionable v2 options while unqualified JSON
     assert.match(human.stdout, /완료한 결과:/u);
     assert.match(human.stdout, /통과한 확인: 테스트 1건/u);
     assert.match(human.stdout, /메뉴를 반복하지 않고 종료할지 한 번만 묻습니다/);
+    assert.match(human.stdout, /수정은 요청한 경우에만/);
+    assert.match(human.stdout, /같은 요청을 재승인받지 않고/);
+    assert.doesNotMatch(human.stdout, /문제가 있으면 수정하고|회고 진행 여부를 묻습니다/);
 
     const detailedHuman = runP2a(['next', '--target', root, '--details']);
     assert.equal(detailedHuman.status, 0, `${detailedHuman.stdout}${detailedHuman.stderr}`);
     assert.match(detailedHuman.stdout, /state: iteration_review_or_close_required/);
-    assert.match(detailedHuman.stdout, /Review and remediate \(review\)/);
+    assert.match(detailedHuman.stdout, /Review implementation \(review\)/);
+    assert.match(detailedHuman.stdout, /Remediation approval required: yes/);
     assert.match(detailedHuman.stdout, /Remediation: .*execute remediate .*--task.*--finding/);
     assert.match(detailedHuman.stdout, /Retrospective report: .*docs[/\\]retrospective[/\\]sample-v1\.md/);
     assert.match(detailedHuman.stdout, /Action: .*iteration close/);
@@ -4013,6 +4024,59 @@ test('next routes approved Gate B to adaptive execution preparation without appr
   assert.equal(rule.when({ ...context, executionModePolicy: 'orchestrated' }), false);
 });
 
+test('orchestrated task routing reaches persisted validated graphs in iterative and flat layouts', () => {
+  for (const iterative of [true, false]) {
+    const root = project();
+    try {
+      const rootArtifact = artifact(root);
+      const iterationId = iterative ? writeIteration(rootArtifact) : null;
+      writeGateA(rootArtifact, 'ready_for_spec', iterationId);
+      writeGateB(rootArtifact, 'approved', iterationId);
+      writeJson(join(root, '.plan2agent', 'project.config.json'), {
+        devExecution: { executionMode: 'orchestrated' },
+      });
+      const before = snapshotHarness(root);
+      const routed = next(root);
+      assertAction(routed, 'gate_b_approved_needs_tasks', 'skill');
+      assert.equal(routed.command.skill, iterative ? 'p2a-task-author' : 'p2a-task-breakdown');
+      assert.deepEqual(routed.command.args, ['--artifacts', rootArtifact]);
+      assert.deepEqual(snapshotHarness(root), before);
+
+      const specPath = join(gateRoot(rootArtifact, iterationId), 'gate-b-spec', 'spec.json');
+      const spec = JSON.parse(readFileSync(specPath, 'utf8'));
+      if (iterative) {
+        const context = runP2a(['iteration', 'context', ...routed.command.args]);
+        assert.equal(context.status, 0, `${context.stdout}${context.stderr}`);
+        assert.equal(JSON.parse(context.stdout).schema_version, 'p2a.task_context.v2');
+      }
+      const draftPath = join(gateRoot(rootArtifact, iterationId), 'gate-c-task-graph', 'task-graph.draft.json');
+      writeJson(draftPath, {
+        schema_version: 'p2a.task_graph.v1',
+        projectId: spec.project_id,
+        version: iterative ? `${iterationId}-draft` : 'v1',
+        sourceSpec: '../gate-b-spec/spec.json',
+        tasks: [task('task-001', 'todo')],
+      });
+      const validation = runP2a(iterative
+        ? ['iteration', 'validate', ...routed.command.args, '--stage', 'gate-c-draft']
+        : ['validate', '--task-graph', draftPath, '--require-approved-spec', specPath]);
+      assert.equal(validation.status, 0, `${validation.stdout}${validation.stderr}`);
+      const graphPath = join(dirname(draftPath), 'task-graph.json');
+      assert.equal(existsSync(graphPath), false);
+      if (iterative) {
+        const promotion = runP2a(['iteration', 'promote-tasks', ...routed.command.args]);
+        assert.equal(promotion.status, 0, `${promotion.stdout}${promotion.stderr}`);
+      } else {
+        writeFileSync(graphPath, readFileSync(draftPath));
+      }
+      assert.doesNotThrow(() => validateTaskGraph(graphPath, specPath));
+      assert.notEqual(next(root).state, 'gate_b_approved_needs_tasks');
+    } finally {
+      remove(root);
+    }
+  }
+});
+
 test('next routes iterative approved Gate B through canonical promotion before every execution mode', () => {
   const cases = [
     { mode: 'direct', baselineBacked: false, downstream: 'gate_b_approved_needs_execution_prepare' },
@@ -4149,7 +4213,12 @@ test('next routes iterative approved Gate B through canonical promotion before e
         [iterationId],
       );
       assert.equal(promotedCurrentSpec.pending_iteration?.status, 'gate_b_approved');
-      assertAction(next(root), caseData.downstream, 'skill');
+      const downstream = next(root);
+      assertAction(downstream, caseData.downstream, 'skill');
+      if (caseData.mode === 'orchestrated') {
+        assert.equal(downstream.command.skill, 'p2a-task-author');
+        assert.deepEqual(downstream.command.args, ['--artifacts', rootArtifact]);
+      }
     } finally {
       remove(root);
     }
@@ -4509,6 +4578,11 @@ test('next schema declares the CLI, skill, and approval command shapes', () => {
   };
   assert.doesNotThrow(() => validateSchema(reviewOrClosePayload, NEXT_SCHEMA));
 
+  // Old emitted payloads remain readable, but new review actions require fix authority.
+  const approvalBoundReview = structuredClone(reviewOrClosePayload);
+  approvalBoundReview.command.options[0].action.remediation.requiresApproval = true;
+  assert.doesNotThrow(() => validateSchema(approvalBoundReview, NEXT_SCHEMA));
+
   const missingRetrospectiveReport = structuredClone(reviewOrClosePayload);
   delete missingRetrospectiveReport.command.options[1].action.report;
   assert.throws(
@@ -4752,15 +4826,22 @@ test('p2a-next skill delegates to the CLI without duplicating decision rules', (
   assert.match(skill, /kind: cli/);
   assert.match(skill, /kind: skill/);
   assert.match(skill, /kind: approval/);
-  assert.match(skill, /structured option/);
-  assert.match(skill, /action\.remediation/);
-  assert.match(skill, /action\.report\.path/);
-  assert.match(skill, /After a clean review, report no material issue and ask once/);
+  assert.match(skill, /approval `options`/);
+  assert.match(skill, /\.agents\/skills\/p2a-dev-execution\/references\/verification-closeout\.md/);
+  const closeout = readFileSync(new URL(
+    '../.agents/skills/p2a-dev-execution/references/verification-closeout.md', import.meta.url,
+  ), 'utf8');
+  assert.match(closeout, /read-only/);
+  assert.match(closeout, /unless the user requested fixes/);
+  assert.match(closeout, /p2a execute remediate/);
+  assert.match(closeout, /p2a proposals issue-preview/);
+  assert.match(closeout, /p2a proposals publish-issue/);
+  assert.match(closeout, /A clean review asks once to close/);
   assert.doesNotMatch(skill, /A clean review runs `next` again/);
   assert.doesNotMatch(skill, /show the returned artifact or approval instruction/);
-  assert.match(skill, /Keep the returned artifact path and approval command internal/);
-  assert.match(skill, /explicitly approves that pending action on a later turn, execute its returned `argv` exactly once/);
-  assert.match(skill, /keep the exact command internal while waiting/);
+  assert.match(skill, /artifact paths internal unless requested/);
+  assert.match(skill, /already-given approval satisfies the boundary once/);
+  assert.match(skill, /wait for explicit authorization for that pending action/);
   assert.doesNotMatch(skill, /Never execute a CLI command when `requiresApproval` is true/);
   assert.doesNotMatch(skill, /gate-a|ready task|iteration init/i);
 });
