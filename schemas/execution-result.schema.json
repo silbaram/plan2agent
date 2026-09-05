@@ -14,7 +14,7 @@
   "additionalProperties": false,
   "properties": {
     "schema_version": { "const": "p2a.execution_result.v1" },
-    "command": { "enum": ["start", "resume", "review", "accept", "verify-final"] },
+    "command": { "enum": ["start", "remediate", "resume", "review", "accept", "verify-final"] },
     "outcome": { "const": "succeeded" },
     "taskId": { "type": "string", "minLength": 1 },
     "runId": { "type": "string", "pattern": "^run-[A-Za-z0-9._-]+$" },

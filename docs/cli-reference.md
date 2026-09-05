@@ -26,7 +26,7 @@ Plan2Agent 본체 개발에서만 `scripts/sync_cli_assets.mjs`, `scripts/check_
 1. 하네스가 `--idea` 또는 짧은 Markdown/text 진입 문서에서 **Gate A intake → 조건부 Gate ② constitution → Gate B spec → Gate C execution readiness**를 만든다. 일반 repository convention은 advisory이며 material project-shape 결정만 Gate ②를 연다.
 2. Plan2Agent 본체 저장소에서는 `scripts/validate_artifacts.mjs`, `scripts/run_fixtures.mjs`, `scripts/check_cli_parity.mjs`로 fixture와 CLI 구성을 검증한다. `init` 대상 프로젝트에서는 `p2a validate`와 `p2a iteration`로 산출물을 검증한다.
 3. 새 프로젝트는 먼저 `p2a init --target <project-dir> --tools all`로 하네스를 설치하고 같은 저장소 안에서 기획부터 반복까지 진행한다. 외부 산출물을 옮기는 경우에만 기존 handoff로 승인된 산출물을 개발 대상 저장소의 `.plan2agent/artifacts/`로 인계한다.
-4. 대상 저장소에서는 `p2a next`가 제품 결정과 외부 권한에는 승인을 요구하고 read-only 진단은 즉시 실행 가능하게 반환한다. 모든 task가 끝나면 evidence가 최신이고 신호가 없을 때 close를 권장한다. Review finding은 task를 reopen하지만 깨끗한 review는 종료할지 한 번만 묻는다.
+4. 대상 저장소에서는 `p2a next`가 제품 결정과 외부 권한에는 승인을 요구하고 read-only 진단은 즉시 실행 가능하게 반환한다. 모든 task가 끝나면 evidence가 최신이고 신호가 없을 때 close를 권장한다. Review finding은 `p2a execute remediate`로 같은 iteration의 연결된 run을 시작하지만 깨끗한 review는 종료할지 한 번만 묻는다.
 5. `p2a execute status/finish`로 run 상태 확인, verification, run finish, task 전이를 묶어 기록한다. 설정된 검사만 실행하고 같은 run에서 수정·재검증한다. Close 시 docs/metadata, isolated code, high-risk integration 공통 profile을 사용하며 실제 통합 위험이 있을 때만 별도 final full run을 연다.
 6. 실패, blocked monitor verdict, verification gap이 쌓이면 `p2a proposals mine/review/curate/draft-patch/approve-draft/digest`로 개선 proposal queue, curator review artifact, approval-ready curation artifact, non-applying patch draft, 승인 artifact를 만든다. proposal 적용은 승인된 maintenance task를 별도 실행해서 진행한다.
 7. `p2a eval grade/compare/analyze/generate/digest`로 run acceptance 증거, iteration regression, 실패 클러스터를 평가하고 proposal/maintenance/delta draft 경로로 연결한다.
@@ -577,6 +577,13 @@ p2a execute finish \
   --related \
   --collect-git
 
+# iteration close 전 완료 task에서 material review finding이 발견된 경우
+p2a execute remediate \
+  --artifacts .plan2agent/artifacts/<project_id> \
+  --task task-001 \
+  --finding "검토에서 확인한 구체적인 결함" \
+  --review-ref "<issue-comment-or-report>"
+
 # full visual iteration의 구현 통합이 끝난 뒤, 완료된 visual task마다 실행
 p2a execute review \
   --graph .plan2agent/artifacts/<project_id>/gate-c-task-graph/task-graph.json \
@@ -591,6 +598,8 @@ p2a execute accept \
 ```
 
 `start`는 승인 spec에서 objective, source Gate hash, scope, `mustPreserve`, non-goal, acceptance, verification, authority, 필요한 visual contract를 파생해 run과 prompt에 한 번만 싣고 graph의 mode와 선택 근거도 기록한다. Claude Code 또는 Codex owner는 이 envelope 안에서 repository 조사, 구현 선택, 실패 수정을 자율적으로 반복한다. `verify-final`은 다중 product task/worktree 통합, high-risk 경로, 또는 검증 후 제품 변경처럼 별도 canonical full evidence가 필요한 경우에만 사용한다. Docs/metadata는 관련 증거를, isolated code는 현재 product revision의 implementation full 증거를 재사용한다. 유효한 product full 이후 비제품 파일만 바뀌면 `p2a execute verify-final --scope relevant --artifacts <root>`가 프로젝트별 관련 명령 또는 내장 무결성 검사를 실행해 현재 workspace revision의 `scope: related` 증거만 추가한다. 필수 visual/acceptance review 안전 경계는 유지한다. 환경 preflight가 child-process 실행 거부를 감지한 final run은 `p2a execute retry --artifacts <root> --run-id <run-id>`로 immutable 실패를 닫고 같은 task와 canonical workspace에 묶인 replacement를 시작한다.
+
+`remediate`는 active iteration이 아직 닫히지 않았고 대상 task가 `done`일 때만 실행된다. 최신 완료 implementation run을 자동으로 `reviewRemediation.sourceRunId`에 연결하며 `--source-run-id`로 명시할 수도 있다. 기존 run은 수정하지 않고 보존하며 대상 task를 `in_progress`로 바꿔 close를 차단한다. 새 run 시작에 실패하면 task는 `done`으로 rollback되고, 정상 검증·finish 뒤에는 다시 `done`이 된다. 이미 archive된 iteration에서는 maintenance 또는 새 iteration을 안내하며 거부한다.
 
 `p2a execute start --require-monitor`는 run과 같은 `runs/<iterationId>/`에 `<run-id>.monitor-gate.json` sidecar를 만들고, 해당 run은 연결된 `.monitor-verdict.json` 없이는 `finished`로 닫을 수 없다. 새 sidecar는 승인 constitution 또는 legacy style의 ref/SHA-256과 enforceable rule ID를 `ruleContract`에 고정하고 `rule_concerns`를 포함한 필수 verdict 배열을 선언한다. Run 본문은 정규화된 sidecar의 SHA-256을 함께 보존하므로 sidecar 삭제·완화·경로 변경도 거부한다. Monitor는 실제 changed file을 architecture, stack, enforceable prohibition, style과 대조하고 모든 ID를 `rules_reviewed`로 반환해야 한다. Finish는 규칙 원문의 SHA-256을 다시 계산하며 원본 drift, 필수 배열의 malformed 값, ID coverage 누락을 거부한다. 판정에 사용한 verdict의 exact-byte SHA-256은 `monitorVerdictEvidenceSha256`으로 run에 봉인되며 이후 파일 변경은 `p2a runs validate`, task 완료, eval과 proposal mining에서 거부된다. Run-side binding이 없는 과거 monitor sidecar와 verdict는 기존 형식으로 계속 읽는다. monitor gate가 필요하지 않은 단일 task에는 이 옵션을 붙이지 않는다.
 

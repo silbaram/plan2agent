@@ -75,7 +75,7 @@ p2a execute start <task>     # 일반 구현 run, task in_progress
 p2a execute finish           # task 구현·검증 완료
 ```
 
-일반 구현 run은 `changedFiles`를 전제하므로 이 반복 중 같은 할당 workspace에서 계속 수정해도 된다. Workspace 불변과 빈 `changedFiles` 제약은 `final_visual_review`와 `final_acceptance_review` run에만 적용된다. 이 task-level 루프는 비게이팅·무기록이며 추가 review run, sidecar, screenshot hash, verdict를 만들지 않고 iteration 최종 `confirm_ui`를 대체하지도 않는다. Contract 변경이 필요할 때만 Gate B로 돌아가며, `finish` 후 시각 문제를 발견한 경우에는 `p2a tasks todo <id> --reopen --note <reason>`으로 task를 다시 연 뒤 수정한다.
+일반 구현 run은 `changedFiles`를 전제하므로 이 반복 중 같은 할당 workspace에서 계속 수정해도 된다. Workspace 불변과 빈 `changedFiles` 제약은 `final_visual_review`와 `final_acceptance_review` run에만 적용된다. 이 task-level 루프는 비게이팅·무기록이며 추가 review run, sidecar, screenshot hash, verdict를 만들지 않고 iteration 최종 `confirm_ui`를 대체하지도 않는다. Contract 변경이 필요할 때만 Gate B로 돌아간다. `finish` 후 iteration close 전에 시각 또는 코드 review 문제가 발견되면 `p2a execute remediate --artifacts <root> --task <id> --finding <reason>`으로 기존 run에 연결된 같은-iteration 수정 run을 시작한다.
 
 ## 2. 감독형 자동화 경계
 

@@ -118,7 +118,7 @@ import { fullSpecTaskRefs } from './p2a_spec_model.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.projectRoot;
-const COMMANDS = new Set(['prepare', 'plan', 'start', 'verify-final', 'review', 'accept', 'retry', 'resume', 'status', 'finish']);
+const COMMANDS = new Set(['prepare', 'plan', 'start', 'remediate', 'verify-final', 'review', 'accept', 'retry', 'resume', 'status', 'finish']);
 const PREPARE_MODES = new Set(['direct', 'planned']);
 const FINISH_STATUSES = new Set(['finished', 'failed', 'blocked']);
 const FAILURE_SOURCES = new Set(['owner', 'monitor', 'implementer']);
@@ -152,6 +152,7 @@ function usage() {
     '  p2a execute prepare --artifacts <dir> --mode direct|planned --selection-rationale <text> [options]',
     '  p2a execute plan (--artifacts <dir>|--graph <path>) [--task <task-id>] [options]',
     '  p2a execute start (--artifacts <dir>|--graph <path>) [--task <task-id>] [options]',
+    '  p2a execute remediate --artifacts <dir> --task <task-id> --finding <text> [options]',
     '  p2a execute review (--artifacts <dir>|--graph <path>) [--task <task-id>] [options]',
     '  p2a execute accept --artifacts <dir> [--task <task-id>] [options]',
     '  p2a execute retry --artifacts <dir> --run-id <run-id>',
@@ -163,6 +164,7 @@ function usage() {
     '  prepare              Create one synthetic Gate C work item for opt-in direct or planned execution.',
     '  plan                 Resolve one ready task and print the supervised execution plan. No files are changed.',
     '  start                Create a run, mark the task in_progress, and print the manual launcher prompt.',
+    '  remediate            Reopen one completed task and start a linked in-iteration review-remediation run.',
     '  review               Start the single no-change pre-close visual review run for the iteration.',
     '  accept               Start the single no-change functional acceptance review run for a non-UI iteration.',
     '  retry                Close environment-only final evidence and start its replacement in one command.',
@@ -181,7 +183,7 @@ function usage() {
     '  --selection-rationale <text>',
     '  --milestone <id|outcome|command>  Planned only; repeat 2-5 times in execution order.',
     '',
-    'Start/plan/verify-final/review/accept options:',
+    'Start/remediate/plan/verify-final/review/accept options:',
     '  --task <task-id>     Task to execute; for review/accept, optional remediation owner. Start/plan require one ready task when omitted.',
     '  --approval <path>    Proposal draft approval JSON; selects its maintenance task and implies --maintenance.',
     '  --agent-tool <tool>  Write implementer label: codex, claude, or manual. Default: codex.',
@@ -196,6 +198,9 @@ function usage() {
     '  --create-isolation   Ask p2a_runs.mjs to create the branch/worktree before run start.',
     '  --require-monitor       Require the run\'s co-located .monitor-verdict.json before a finished run can close.',
     '  --scope full|relevant   verify-final only; default full. Relevant runs only the outstanding non-product checks.',
+    '  --finding <text>     Remediate only; required material code-review finding.',
+    '  --source-run-id <id> Remediate only; completed implementation run being reviewed. Defaults to the latest eligible run for the task.',
+    '  --review-ref <ref>   Remediate only; optional issue, comment, report, or review evidence reference.',
     '',
     'Finish/verification options:',
     '  --test, --lint, --typecheck',
@@ -251,6 +256,9 @@ function parseArgs(argv) {
     agentTool: 'codex',
     runId: null,
     runReservationToken: null,
+    reviewFinding: null,
+    reviewSourceRunId: null,
+    reviewRef: null,
     verificationScope: null,
     workspace: null,
     workspaceRef: null,
@@ -311,6 +319,9 @@ function parseArgs(argv) {
     else if (arg === '--agent-tool') args.agentTool = requiredValue(argv, ++index, '--agent-tool');
     else if (arg === '--run-id') args.runId = requiredValue(argv, ++index, '--run-id');
     else if (arg === '--run-reservation-token') args.runReservationToken = requiredValue(argv, ++index, '--run-reservation-token');
+    else if (arg === '--finding') args.reviewFinding = requiredNonBlankText(argv, ++index, '--finding');
+    else if (arg === '--source-run-id') args.reviewSourceRunId = requiredValue(argv, ++index, '--source-run-id');
+    else if (arg === '--review-ref') args.reviewRef = requiredNonBlankText(argv, ++index, '--review-ref');
     else if (arg === '--scope') {
       args.verificationScope = requiredValue(argv, ++index, '--scope');
       if (!['full', 'relevant'].includes(args.verificationScope)) {
@@ -384,8 +395,8 @@ function parseArgs(argv) {
   }
 
   if (args.help) return args;
-  if (args.json && !['start', 'resume', 'verify-final', 'review', 'accept'].includes(args.command)) {
-    throw new Error('--json is only supported with start, resume, verify-final, review, or accept');
+  if (args.json && !['start', 'remediate', 'resume', 'verify-final', 'review', 'accept'].includes(args.command)) {
+    throw new Error('--json is only supported with start, remediate, resume, verify-final, review, or accept');
   }
   const sourceCount = [args.artifacts, args.graph].filter(Boolean).length;
   if (sourceCount > 1) throw new Error('--artifacts and --graph cannot be used together');
@@ -426,19 +437,28 @@ function parseArgs(argv) {
     throw new Error('--mode, --selection-rationale, and --milestone are only supported with prepare');
   }
   if (args.maintenance && !args.artifacts) throw new Error('--maintenance is only supported with --artifacts');
+  if (args.command === 'remediate') {
+    if (!args.artifacts || args.graph || args.maintenance || args.approval) {
+      throw new Error('remediate requires --artifacts for a normal active iteration');
+    }
+    if (!args.taskId) throw new Error('--task is required for remediate');
+    if (!args.reviewFinding) throw new Error('--finding is required for remediate');
+  } else if (args.reviewFinding || args.reviewSourceRunId || args.reviewRef) {
+    throw new Error('--finding, --source-run-id, and --review-ref are only supported with remediate');
+  }
   if (args.graph) assertNotUninitializedScaffoldGraph(args.graph);
-  if (args.graph && ['start', 'review', 'accept', 'retry', 'finish'].includes(args.command)) {
+  if (args.graph && ['start', 'remediate', 'review', 'accept', 'retry', 'finish'].includes(args.command)) {
     assertUnmanagedGraphMutation(args.graph, `p2a execute ${args.command}`);
   }
   if (['finish', 'retry', 'resume'].includes(args.command) && !args.runId) throw new Error(`--run-id is required for ${args.command}`);
-  if (args.runReservationToken && (!['start', 'verify-final', 'review', 'accept'].includes(args.command) || !args.runId)) {
-    throw new Error('--run-reservation-token requires start, verify-final, review, or accept with --run-id');
+  if (args.runReservationToken && (!['start', 'remediate', 'verify-final', 'review', 'accept'].includes(args.command) || !args.runId)) {
+    throw new Error('--run-reservation-token requires start, remediate, verify-final, review, or accept with --run-id');
   }
   if (args.verificationScope && args.command !== 'verify-final') {
     throw new Error('--scope is only supported with verify-final');
   }
   if (args.command === 'status' && !args.taskId && !args.runId && !args.approval) throw new Error('--task, --approval, or --run-id is required for status');
-  if (['plan', 'start'].includes(args.command) && !IMPLEMENTER_AGENT_TOOLS.has(args.agentTool)) {
+  if (['plan', 'start', 'remediate'].includes(args.command) && !IMPLEMENTER_AGENT_TOOLS.has(args.agentTool)) {
     throw new Error('--agent-tool for implementation must be one of codex, claude, or manual; Gemini is read-only and may only be used as a reviewer/monitor');
   }
   if (['verify-final', 'review', 'accept', 'retry'].includes(args.command) && !REVIEWER_AGENT_TOOLS.has(args.agentTool)) {
@@ -447,8 +467,8 @@ function parseArgs(argv) {
   if (args.command !== 'finish' && args.verifyOptions.length) {
     throw new Error('verification options are only supported with finish');
   }
-  if (args.requireMonitor && args.command !== 'start') {
-    throw new Error('--require-monitor is only supported with start');
+  if (args.requireMonitor && !['start', 'remediate'].includes(args.command)) {
+    throw new Error('--require-monitor is only supported with start or remediate');
   }
   const hasUsage = [args.usageModel, args.usageInputTokens, args.usageOutputTokens, args.usageSource]
     .some((value) => value !== null);
@@ -655,6 +675,9 @@ function resolveSource(args) {
       sourceArgs: ['--artifacts', args.artifacts],
       sourceLayout: 'iteration',
       iterationId: state.activeIteration,
+      iterationArchived: (state.currentSpec.closed_iterations ?? []).some((closed) => (
+        closed?.iteration_id === state.activeIteration && closed?.status === 'archived'
+      )),
       artifactRoot: state.artifactRoot,
       graphPath: state.taskGraphPath,
       specPath: state.specPath,
@@ -736,6 +759,54 @@ function selectReadyTask(source, taskId = null) {
     throw new Error(`multiple ready tasks found; pass --task. Ready tasks: ${summary}`);
   }
   return ready[0];
+}
+
+function selectReviewRemediationSourceRun(source, task, runId = null) {
+  const candidates = loadRunsForArtifactRoot(source.artifactRoot, {
+    iterationId: source.iterationId,
+  }).filter((run) => (
+    run.taskId === task.id
+    && run.status === 'finished'
+    && !run.runKind
+    && runMatchesSourceContext(run, source)
+  ));
+  let sourceRun;
+  if (runId) {
+    assertSafeRunId(runId, '--source-run-id');
+    sourceRun = candidates.find((run) => run.runId === runId);
+    if (!sourceRun) {
+      throw new Error(
+        `--source-run-id ${runId} must identify a finished implementation run for ${task.id} in the active iteration`,
+      );
+    }
+  } else {
+    sourceRun = candidates
+      .map((run, runOrder) => ({ run, runOrder }))
+      .sort(compareRunEvidence)[0]?.run;
+    if (!sourceRun) {
+      throw new Error(
+        `${task.id} has no finished implementation run to link as review-remediation evidence`,
+      );
+    }
+  }
+  validateRunTaskContract(sourceRun, source.artifactRoot, { runsDir: source.runsDir });
+  return sourceRun;
+}
+
+function inheritReviewRemediationRetry(args, source, task) {
+  if (args.command !== 'start' || task.status !== 'todo') return null;
+  const latestRunId = latestRunIdForTask(source.runsDir, task.id, source);
+  if (!latestRunId) return null;
+  const latestRun = readRun(source.runsDir, latestRunId);
+  if (
+    latestRun.runKind
+    || !['failed', 'blocked'].includes(latestRun.status)
+    || !latestRun.reviewRemediation
+  ) return null;
+  args.reviewSourceRunId = latestRun.reviewRemediation.sourceRunId;
+  args.reviewFinding = latestRun.reviewRemediation.finding;
+  args.reviewRef = latestRun.reviewRemediation.reviewRef ?? null;
+  return latestRun;
 }
 
 function selectCompletedVisualTask(source, taskId = null) {
@@ -882,6 +953,25 @@ function claimTaskForRunStart(source, task) {
   atomicWriteJson(source.graphPath, source.graph);
 }
 
+function claimCompletedTaskForReviewRemediation(source, task) {
+  if (task.status !== 'done') {
+    throw new Error(`${task.id} must be done before review remediation; current status is ${task.status}`);
+  }
+  if (hasStartedRunForTask(source, task.id)) {
+    throw new Error(`${task.id} already has started run evidence; finish or recover that run before remediation`);
+  }
+  const previous = {
+    status: task.status,
+    blockReason: task.blockReason,
+    blockNote: task.blockNote,
+  };
+  task.status = 'in_progress';
+  delete task.blockReason;
+  delete task.blockNote;
+  atomicWriteJson(source.graphPath, source.graph);
+  return previous;
+}
+
 function pendingRunWriteMatchesTask(source, taskId) {
   const transactionPath = runWriteTransactionPath(source.runsDir);
   if (!existsSync(transactionPath)) return false;
@@ -941,6 +1031,19 @@ function rollbackTaskRunStartClaim(source, taskId, recoveryContext = null) {
   delete task.blockReason;
   if (recoveryContext) task.blockNote = recoveryContext;
   else delete task.blockNote;
+  atomicWriteJson(current.graphPath, current.graph);
+  return true;
+}
+
+function rollbackReviewRemediationClaim(source, taskId, previous) {
+  const current = currentSourceGraph(source);
+  const task = requireTask(current, taskId);
+  if (task.status !== 'in_progress' || hasStartedRunForTask(current, taskId)) return false;
+  task.status = previous.status;
+  if (previous.blockReason === undefined) delete task.blockReason;
+  else task.blockReason = previous.blockReason;
+  if (previous.blockNote === undefined) delete task.blockNote;
+  else task.blockNote = previous.blockNote;
   atomicWriteJson(current.graphPath, current.graph);
   return true;
 }
@@ -1335,7 +1438,7 @@ function sourceSelectionArgs(args, taskId) {
 
 function executeStartArgs(args, task, runId, defaults) {
   const startArgs = [
-    'start',
+    args.command === 'remediate' ? 'remediate' : 'start',
     ...sourceRunArgs(args),
     ...sourceSelectionArgs(args, task.id),
     '--agent-tool',
@@ -1354,6 +1457,11 @@ function executeStartArgs(args, task, runId, defaults) {
   if (args.baseRef) startArgs.push('--base-ref', args.baseRef);
   if (args.createIsolation) startArgs.push('--create-isolation');
   if (args.requireMonitor) startArgs.push('--require-monitor');
+  if (args.command === 'remediate') {
+    startArgs.push('--finding', args.reviewFinding);
+    if (args.reviewSourceRunId) startArgs.push('--source-run-id', args.reviewSourceRunId);
+    if (args.reviewRef) startArgs.push('--review-ref', args.reviewRef);
+  }
   for (const changedFile of args.changedFiles) startArgs.push('--changed-file', changedFile);
   for (const note of args.notes) startArgs.push('--note', note);
   return startArgs;
@@ -1377,6 +1485,11 @@ function startRunArgs(args, task, runId, defaults, approval = null) {
   if (args.runKind) runArgs.push('--run-kind', args.runKind);
   if (args.runKind === 'final_verification' && args.verificationScope) {
     runArgs.push('--verification-scope', args.verificationScope);
+  }
+  if (args.reviewSourceRunId) {
+    runArgs.push('--review-remediation-source-run', args.reviewSourceRunId);
+    runArgs.push('--review-remediation-finding', args.reviewFinding);
+    if (args.reviewRef) runArgs.push('--review-ref', args.reviewRef);
   }
   if (args.workspaceRef) runArgs.push('--workspace-ref', args.workspaceRef);
   if (args.runReservationToken) runArgs.push('--run-reservation-token', args.runReservationToken);
@@ -1612,6 +1725,11 @@ function printExecutionPlan(args, source, task, runId = null, defaults = null, a
     if (defaults.worktree) console.log(`- worktree: ${displayPath(defaults.worktree)}`);
   }
   if (args.requireMonitor) console.log('- monitorGate: required');
+  if (args.reviewSourceRunId) {
+    console.log(`- reviewSourceRun: ${args.reviewSourceRunId}`);
+    if (args.reviewRef) console.log(`- reviewRef: ${args.reviewRef}`);
+    console.log(`- finding: ${args.reviewFinding}`);
+  }
   console.log('');
   console.log('Lifecycle:');
   console.log('1. start: create run and mark the task in_progress');
@@ -1641,6 +1759,13 @@ function printLauncherPrompt(source, task, runId, approvalLink = null, options =
   console.log('- Do not edit Plan2Agent task graph, run logs, or planning artifacts directly.');
   console.log('- The owner will run p2a execute finish or p2a runs verify/finish after implementation.');
   console.log('- Report changed files, verification commands, results, and blockers.');
+  if (options.run?.reviewRemediation) {
+    console.log(`- Correct this review finding: ${options.run.reviewRemediation.finding}`);
+    console.log(`- Preserve the reviewed run as immutable evidence: ${options.run.reviewRemediation.sourceRunId}`);
+    if (options.run.reviewRemediation.reviewRef) {
+      console.log(`- Review evidence: ${options.run.reviewRemediation.reviewRef}`);
+    }
+  }
   if (recoveryContext) {
     console.log(`- Apply the recorded recovery context before retrying: ${recoveryContext}`);
   }
@@ -2168,6 +2293,7 @@ function runStart(args) {
     const source = currentStartSource(args, initialSource);
     const approvalLink = resolveApprovalSelection(args, source);
     const task = selectReadyTask(source, approvalLink.taskId);
+    inheritReviewRemediationRetry(args, source, task);
     const recoveryContext = taskRecoveryContext(task);
     if (recoveryContext) {
       args.notes = uniqueStrings([
@@ -2222,6 +2348,73 @@ function runStart(args) {
       heading: 'Run commands:',
     });
     recordExecutionResult(args, 'start', startedRun);
+    return 0;
+  });
+}
+
+function runRemediate(args) {
+  const initialSource = resolveSource(args);
+  if (initialSource.iterationArchived) {
+    throw new Error(
+      `iteration ${initialSource.iterationId} is already archived; use maintenance or open a new iteration for further changes`,
+    );
+  }
+  assertLifecycleChildProcessAvailable('review remediation start preflight');
+  return withRunStoreLocks([path.dirname(initialSource.graphPath)], () => {
+    const source = currentStartSource(args, initialSource);
+    if (source.iterationArchived) {
+      throw new Error(
+        `iteration ${source.iterationId} was archived while remediation was waiting for the task graph lock; use maintenance or open a new iteration`,
+      );
+    }
+    const task = requireTask(source, args.taskId);
+    if (task.status !== 'done') {
+      throw new Error(`${task.id} must be done before review remediation; current status is ${task.status}`);
+    }
+    const sourceRun = selectReviewRemediationSourceRun(source, task, args.reviewSourceRunId);
+    args.reviewSourceRunId = sourceRun.runId;
+    const identity = resolveStartIdentity(args, source, task, { reserve: true });
+    const { runId, defaults } = identity;
+    args.runReservationToken = identity.reservationToken;
+    let previousTaskState;
+    try {
+      previousTaskState = claimCompletedTaskForReviewRemediation(source, task);
+    } catch (error) {
+      if (identity.reserved) releaseRunIdReservation(source.runsDir, runId, identity.reservationToken);
+      throw error;
+    }
+
+    printExecutionPlan(args, source, task, runId, defaults);
+    console.log('');
+    console.log('Completed task marked in_progress for review remediation. Starting linked run...');
+    const runResult = runScript('p2a_runs.mjs', startRunArgs(args, task, runId, defaults));
+    printChildResult(runResult, { suppressStdout: args.json });
+    if (childProcessFailed(runResult)) {
+      if (rollbackReviewRemediationClaim(source, task.id, previousTaskState)) {
+        console.error(`Task transition rolled back: ${task.id} returned to done because remediation run ${runId} did not start.`);
+      } else {
+        console.error(`warning: task ${task.id} remains in_progress because started-run evidence could not be ruled out.`);
+      }
+      console.error('Review remediation did not start. Correct the reported cause, then retry with the same reserved run id:');
+      console.error(commandLine('p2a_execute.mjs', executeStartArgs(args, task, runId, defaults)));
+      return childProcessExitStatus(runResult);
+    }
+    if (args.requireMonitor) {
+      console.log(`Attached monitor gate sidecar: ${displayPath(monitorGateSidecarPath(source.runsDir, runId))}`);
+    }
+
+    const startedRun = readRun(source.runsDir, runId);
+    assertRunExecutionContractCurrent(startedRun, source, 'launcher prompt');
+    printLauncherPrompt(source, task, runId, null, {
+      suppressPrompt: args.json,
+      run: startedRun,
+    });
+    printRunCommandFooter(P2A_PATHS, {
+      sourceArgs: source.sourceArgs,
+      runId,
+      heading: 'Run commands:',
+    });
+    recordExecutionResult(args, 'remediate', startedRun);
     return 0;
   });
 }
@@ -2516,6 +2709,9 @@ function runResume(args) {
   console.log(`- executionMode: ${run.mode ?? 'orchestrated'}`);
   console.log(`- agentTool: ${run.agentTool}`);
   console.log(`- workspaceRef: ${run.workspaceRef}`);
+  if (run.reviewRemediation) {
+    console.log(`- reviewRemediation: ${run.reviewRemediation.sourceRunId}${run.reviewRemediation.reviewRef ? ` (${run.reviewRemediation.reviewRef})` : ''}`);
+  }
   const nextMilestone = run.milestones?.find((milestone) => milestone.status === 'pending');
   const latestCheckpointProblems = nextMilestone
     ? latestMilestoneAttempts(run.verification, nextMilestone.id)
@@ -2593,6 +2789,9 @@ function runStatus(args) {
   console.log(`- executionMode: ${run.mode ?? 'orchestrated'}`);
   console.log(`- agentTool: ${run.agentTool}`);
   console.log(`- workspaceRef: ${run.workspaceRef}`);
+  if (run.reviewRemediation) {
+    console.log(`- reviewRemediation: ${run.reviewRemediation.sourceRunId}${run.reviewRemediation.reviewRef ? ` (${run.reviewRemediation.reviewRef})` : ''}`);
+  }
   console.log(`- changedFiles: ${run.changedFiles.length}`);
   console.log(`- verification: ${run.verification.map((item) => `${item.type}:${item.status}`).join(', ') || '-'}`);
   if (run.milestones) {
@@ -2835,6 +3034,7 @@ export function main(argv = process.argv.slice(2), dependencies = {}) {
     if (args.command === 'prepare') status = runPrepare(args);
     else if (args.command === 'plan') status = runPlan(args);
     else if (args.command === 'start') status = runStart(args);
+    else if (args.command === 'remediate') status = runRemediate(args);
     else if (args.command === 'verify-final') status = runVerifyFinal(args);
     else if (args.command === 'review') status = runReview(args);
     else if (args.command === 'accept') status = runAccept(args);

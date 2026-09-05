@@ -848,8 +848,8 @@ function assertCompletionDecision(payload, artifactRoot) {
   assert.match(review.action.display, /without rerunning product commands/i);
   assert.match(review.action.display, /do not repeat this menu/i);
   assert.deepEqual(review.action.remediation.argv, [
-    'tasks', 'todo', '--artifacts', artifactRoot, '<task-id>',
-    '--reopen', '--note', '<review finding>',
+    'execute', 'remediate', '--artifacts', artifactRoot, '--task', '<task-id>',
+    '--finding', '<review finding>',
   ]);
   assert.equal(review.action.remediation.requiresApproval, false);
   assert.equal(retrospective.action.kind, 'retrospective');
@@ -2380,7 +2380,7 @@ test('human next output defaults to actionable v2 options while unqualified JSON
     assert.equal(detailedHuman.status, 0, `${detailedHuman.stdout}${detailedHuman.stderr}`);
     assert.match(detailedHuman.stdout, /state: iteration_review_or_close_required/);
     assert.match(detailedHuman.stdout, /Review and remediate \(review\)/);
-    assert.match(detailedHuman.stdout, /Remediation: .*tasks todo .*--reopen.*--note/);
+    assert.match(detailedHuman.stdout, /Remediation: .*execute remediate .*--task.*--finding/);
     assert.match(detailedHuman.stdout, /Retrospective report: .*docs[/\\]retrospective[/\\]sample-v1\.md/);
     assert.match(detailedHuman.stdout, /Action: .*iteration close/);
 
@@ -4464,10 +4464,10 @@ test('next schema declares the CLI, skill, and approval command shapes', () => {
             remediation: {
               kind: 'cli',
               argv: [
-                'tasks', 'todo', '--artifacts', '.plan2agent/artifacts/sample', '<task-id>',
-                '--reopen', '--note', '<review finding>',
+                'execute', 'remediate', '--artifacts', '.plan2agent/artifacts/sample', '--task', '<task-id>',
+                '--finding', '<review finding>',
               ],
-              display: "p2a tasks todo --artifacts .plan2agent/artifacts/sample '<task-id>' --reopen --note '<review finding>'",
+              display: "p2a execute remediate --artifacts .plan2agent/artifacts/sample --task '<task-id>' --finding '<review finding>'",
               requiresApproval: false,
             },
           },

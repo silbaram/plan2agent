@@ -300,7 +300,7 @@ p2a iteration validate \
 
 `--require-close-ready`는 모든 active iteration task가 `done`인지 추가로 확인하고 변경 경로를 공통 verification profile로 분류한다. Docs/metadata는 현재 문서 revision의 관련 실행 증거를 요구한다. 단일 canonical isolated-code task는 현재 `productRevisionSha256`에 묶인 implementation full evidence를 재사용한다. 다중 product task, worktree 통합, high-risk 경로 또는 full 검증 뒤 제품 코드 변경은 현재 `workspaceRevisionSha256`의 별도 canonical final full run을 요구한다. `visualImpact` task가 있으면 `p2a execute review`가 연 iteration당 하나의 canonical, 변경 없는 review-only run을 요구한다. 비UI iteration의 acceptance 기본값은 `opt_in`이며, 사용자가 시작했거나 정책이 `on`일 때만 `confirm_behavior` sidecar를 요구한다. 시작된 review와 실제 제품 실패는 계속 fail closed한다.
 
-Close-ready는 자동 archive 권한이 아니다. 모든 필수 검증이 끝난 뒤 v2 `p2a next`는 `review`/`retrospective`/`close` 옵션을 반환한다. Evidence가 최신이고 자동 신호가 없으면 close를 권장한다. `review` finding은 owning done task를 reopen하지만, 깨끗한 review는 메뉴를 반복하지 않고 종료할지 한 번만 묻는다. Retrospective와 proposal mining은 각각 별도 승인이고 건너뛰어도 close를 막지 않는다.
+Close-ready는 자동 archive 권한이 아니다. 모든 필수 검증이 끝난 뒤 v2 `p2a next`는 `review`/`retrospective`/`close` 옵션을 반환한다. Evidence가 최신이고 자동 신호가 없으면 close를 권장한다. Material `review` finding은 `p2a execute remediate`로 owning done task를 같은 iteration에서 `in_progress`로 전환하고 완료 implementation run에 연결된 새 run을 만든다. 이 run이 끝날 때까지 close-ready는 해제되며 검증 성공 뒤 task가 다시 `done`이 된다. 깨끗한 review는 메뉴를 반복하지 않고 종료할지 한 번만 묻는다. Retrospective와 proposal mining은 각각 별도 승인이고 건너뛰어도 close를 막지 않는다.
 
 ```bash
 p2a iteration validate \
