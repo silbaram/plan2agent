@@ -6,6 +6,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.5.22] - 2026-09-06
+
+### Changed
+
+- Prioritize explicit review, explanation, status, and Git-operation requests over unrelated lifecycle advancement, while keeping iteration close and external writes explicitly authorized.
+- Stop clean read-only reviews without prompting to close the active iteration.
+
+### Fixed
+
+- Pause Gate A/B planning when a competing entry is supplied instead of advancing the previously approved scope implicitly.
+- Preserve environment-only failure evidence and the original full or relevant verification scope when starting a final-evidence retry.
+- Return a successful replacement run when the unavailable command becomes executable before retry, instead of closing the old run successfully and then reporting an error.
+
 ## [0.5.21] - 2026-09-05
 
 ### Added
@@ -340,7 +353,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Add package-runtime project initialization, managed provider assets, artifact validation, handoff, supervised execution, evaluation, and proposal workflows.
 - Ship canonical and generated integrations for Codex, Claude Code, and Gemini CLI.
 
-[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.5.21...HEAD
+[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.5.22...HEAD
+[0.5.22]: https://github.com/silbaram/plan2agent/compare/v0.5.21...v0.5.22
 [0.5.21]: https://github.com/silbaram/plan2agent/compare/v0.5.20...v0.5.21
 [0.5.20]: https://github.com/silbaram/plan2agent/compare/v0.5.19...v0.5.20
 [0.5.19]: https://github.com/silbaram/plan2agent/compare/v0.5.18...v0.5.19

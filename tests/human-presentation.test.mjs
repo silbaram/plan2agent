@@ -87,7 +87,7 @@ test('human next gives state-specific requests instead of generic approval langu
       state: 'entry_deferred',
       reason: 'The new request is saved while approved work remains active.',
       command: { kind: 'approval', display: 'Continue or pause the current work.' },
-      expected: /현재 승인된 개발을 계속할지, 그대로 멈춰 둘지/u,
+      expected: /기존 범위로 계속할지, 새 요청에 맞춰 범위 변경을 논의할지/u,
     },
     {
       state: 'blocked_scope_replacement_ready',
@@ -174,7 +174,7 @@ test('deferred and replacement routing explain the safety boundary in English', 
   }, { requestIdea: 'Add a new operator dashboard.' });
   assert.match(deferred, /saved the new request/u);
   assert.match(deferred, /will not silently replace/u);
-  assert.match(deferred, /continue the current approved work or leave it paused/u);
+  assert.match(deferred, /continue the current scope or discuss changing it/u);
 
   const replacement = renderNextHuman({
     ...base,
@@ -284,6 +284,28 @@ test('completion evidence prefers the newest full pass regardless of run kind', 
     }).map((run) => run.runId),
     ['run-older-final'],
   );
+});
+
+test('completion copy separates review, fixes, and retrospective outcomes in both languages', () => {
+  const next = {
+    state: 'iteration_review_or_close_required',
+    command: {
+      kind: 'approval',
+      options: ['review', 'retrospective', 'close'].map((id) => ({ id, label: id })),
+    },
+  };
+  for (const [problem, fixBoundary, reportBoundary] of [
+    ['Make the development workflow simpler.', /fix them only when requested/, /needs no repeated approval/],
+    ['개발 절차를 간결하게 만든다.', /수정은 요청한 경우에만/, /같은 요청을 재승인받지 않고/],
+  ]) {
+    const output = renderNextHuman(next, {
+      spec: { product: { problem } },
+      completion: { verificationCurrent: true },
+    });
+    assert.match(output, fixBoundary);
+    assert.match(output, reportBoundary);
+    assert.doesNotMatch(output, /fix important findings|문제가 있으면 수정하고|회고 진행 여부를 묻습니다/);
+  }
 });
 
 test('completion rendering does not recommend close when its readiness recheck is stale', () => {

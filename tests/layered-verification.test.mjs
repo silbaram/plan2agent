@@ -1439,6 +1439,100 @@ test('a successful final retry supersedes an unavailable attempt for the same co
   }
 });
 
+for (const scope of ['full', 'relevant']) {
+  for (const closeBeforeRetry of [false, true]) {
+    test(`environment retry preserves ${scope} scope and immutable ${closeBeforeRetry ? 'closed' : 'started'} failure evidence`, () => {
+      const workspace = mkdtempSync(path.join(tmpdir(), 'p2a-final-retry-scope-'));
+      try {
+        const artifactRoot = path.join(workspace, '.plan2agent', 'artifacts', 'webhook-api-service');
+        mkdirSync(path.dirname(artifactRoot), { recursive: true });
+        cpSync(path.resolve('fixtures/_e2e/webhook-api-service'), artifactRoot, { recursive: true });
+        const fixture = prepareNoDocsFallbackConfigDrift({
+          workspace,
+          artifactRoot,
+          iterationId: 'iter-retry-scope',
+          runPrefix: 'retry-scope',
+        });
+        const check = [
+          'if (!process.env.P2A_TEST_COMMAND_READY) {',
+          "  console.error('/bin/sh: 1: p2a-test-command: not found');",
+          '  process.exit(127);',
+          '}',
+        ].join(' ');
+        writeFileSync(fixture.configPath, `${JSON.stringify({
+          ...JSON.parse(readFileSync(fixture.configPath, 'utf8')),
+          ...(scope === 'full' ? {
+            testCommand: `${JSON.stringify(process.execPath)} -e ${JSON.stringify(check)}`,
+          } : {}),
+          relatedVerification: [{
+            type: 'custom',
+            argv: [process.execPath, '-e', check],
+            appendChangedFiles: true,
+          }],
+        }, null, 2)}\n`, 'utf8');
+        const runId = 'run-retry-scope-unavailable';
+        let result = runExecute([
+          'verify-final', '--artifacts', artifactRoot,
+          '--task', fixture.taskId, '--run-id', runId,
+          '--agent-tool', 'manual', '--workspace', workspace,
+          '--scope', scope,
+        ]);
+        assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+
+        const unavailableEnv = { ...process.env };
+        delete unavailableEnv.P2A_TEST_COMMAND_READY;
+        result = runRuns([
+          'verify', '--artifacts', artifactRoot, '--run-id', runId,
+          ...(scope === 'relevant' ? ['--related'] : []),
+        ], { env: unavailableEnv });
+        assert.equal(result.status, 1, `${result.stdout}${result.stderr}`);
+        const runPath = runFilePath(fixture.runsDir, runId);
+        const unavailableRun = JSON.parse(readFileSync(runPath, 'utf8'));
+        assert.equal(unavailableRun.verification.at(-1).status, 'unavailable');
+
+        if (closeBeforeRetry) {
+          result = runExecute([
+            'finish', '--artifacts', artifactRoot, '--run-id', runId,
+            '--status', 'failed', '--failure-class', 'environment_failure',
+          ], { env: unavailableEnv });
+          assert.equal(result.status, 1, `${result.stdout}${result.stderr}`);
+          assert.equal(JSON.parse(readFileSync(runPath, 'utf8')).status, 'failed');
+        }
+
+        const availableEnv = { ...process.env, P2A_TEST_COMMAND_READY: '1' };
+        result = runExecute([
+          'retry', '--artifacts', artifactRoot, '--run-id', runId,
+        ], { env: availableEnv });
+        assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+        const runIndex = JSON.parse(readFileSync(path.join(fixture.runsDir, 'run-index.json'), 'utf8'));
+        const replacements = runIndex.runs.filter((run) => run.runId !== runId && run.status === 'started');
+        assert.equal(replacements.length, 1);
+        const failedRun = JSON.parse(readFileSync(runPath, 'utf8'));
+        assert.equal(failedRun.status, 'failed');
+        assert.equal(failedRun.failure.class, 'environment_failure');
+        assert.deepEqual(failedRun.verification, unavailableRun.verification);
+
+        const replacement = JSON.parse(readFileSync(runFilePath(fixture.runsDir, replacements[0].runId), 'utf8'));
+        assert.equal(replacement.verificationScope, scope);
+        assert.equal(replacement.taskId, unavailableRun.taskId);
+        assert.equal(replacement.workspaceRef, unavailableRun.workspaceRef);
+        assert.equal(replacement.agentTool, unavailableRun.agentTool);
+        result = runExecute([
+          'finish', '--artifacts', artifactRoot, '--run-id', replacement.runId,
+        ], { env: availableEnv });
+        assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+        const finished = JSON.parse(readFileSync(runFilePath(fixture.runsDir, replacement.runId), 'utf8'));
+        assert.equal(finished.status, 'finished');
+        assert.equal(finished.verification.every((item) => item.scope === (scope === 'full' ? 'full' : 'related')), true);
+        const graph = JSON.parse(readFileSync(fixture.graphPath, 'utf8'));
+        assert.equal(graph.tasks.every((task) => task.status === 'done'), true);
+      } finally {
+        rmSync(workspace, { recursive: true, force: true });
+      }
+    });
+  }
+}
+
 test('reusable implementation full evidence selects a deleted document when Git history is unavailable', () => {
   const workspace = mkdtempSync(path.join(tmpdir(), 'p2a-high-risk-docs-after-verify-'));
   try {

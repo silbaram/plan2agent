@@ -922,9 +922,9 @@ function printMaintenanceCompletionChoices(source, run) {
     const reportPath = maintenanceRetrospectiveReportPath(current, run.taskId);
     console.log('');
     console.log('Maintenance development is complete. Choose one:');
-    console.log('1. Review the completed maintenance changes and remediate any material finding.');
+    console.log('1. Review the completed maintenance changes read-only; fix findings only when requested.');
     console.log('2. Review the P2A development process; ask once about delay, errors, wrong routing, or unnecessary steps.');
-    console.log(`   After explicit approval, write the minimal retrospective report to ${reportPath}`);
+    console.log(`   When requested, write the minimal retrospective report to ${reportPath}; an existing report request needs no repeated approval.`);
     console.log('3. Finish maintenance without an optional review or retrospective.');
   } catch (error) {
     console.error(`warning: maintenance completion choices were not rendered: ${error.message}`);
@@ -2629,6 +2629,7 @@ function replacementArgsForEnvironmentRetry(args, run) {
     runId: null,
     runReservationToken: null,
     agentTool: run.agentTool,
+    verificationScope: run.verificationScope ?? null,
     workspace: run.workspacePath,
     workspaceRef: run.workspaceRef,
     isolation: 'none',
@@ -2673,7 +2674,12 @@ function runEnvironmentRetry(args) {
       throw new Error(`run ${run.runId} has no unavailable final evidence to retry`);
     }
     console.log(`Closing immutable environment-only evidence: ${run.runId}`);
-    runFinish({ ...args, command: 'finish' });
+    runFinish({
+      ...args,
+      command: 'finish',
+      status: 'failed',
+      failureClass: 'environment_failure',
+    });
     run = readRun(source.runsDir, args.runId);
   }
   if (!isEnvironmentOnlyFinalReviewFailure(source, run)) {

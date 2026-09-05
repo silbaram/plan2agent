@@ -14,7 +14,10 @@ import test from 'node:test';
 import { auditContext } from '../scripts/p2a_context_audit.mjs';
 import {
   loadContextRoutes,
+  readContextRouteSource,
   resolveRuntimeContext,
+  selectContextReferenceRoutes,
+  validateContextRoutesData,
 } from '../scripts/p2a_context_routes.mjs';
 import { ROOT } from './helpers/fixtures.mjs';
 
@@ -115,6 +118,30 @@ test('dedicated review eligibility selects only its own reference', () => {
   }
 });
 
+test('closeout choices share one small source without loading implementation verification', () => {
+  const referencePath = 'references/closeout-choices.md';
+  for (const skill of ['p2a-next', 'p2a-dev-execution']) {
+    const audit = auditContext(ROOT, { scenario: {
+      skill,
+      stage: 'closeout',
+      conditions: [`reference:${skill}:${referencePath}`],
+    } });
+    assert.equal(audit.status, 'pass');
+    for (const context of audit.contexts) {
+      const references = context.sources.filter((source) => source.role === 'reference');
+      const providerRoot = context.provider === 'claude' ? '.claude' : '.agents';
+      assert.deepEqual(references.map((source) => source.path), [
+        `${providerRoot}/skills/p2a-dev-execution/${referencePath}`,
+      ]);
+      const verification = resolveRuntimeContext({
+        targetRoot: ROOT, provider: context.provider, phase: 'verify-closeout', mode: 'direct',
+      });
+      assert.deepEqual(verification.sources.map((source) => source.routeId), ['execution.verification-closeout']);
+      assert.ok(references[0].bytes < verification.sources[0].bytes);
+    }
+  }
+});
+
 test('route validation rejects duplicate ids and unknown phases', () => {
   const targetRoot = tempContextRoot('invalid-manifest');
   try {
@@ -159,5 +186,39 @@ test('runtime source confinement rejects missing files and symlink escapes', () 
   } finally {
     rmSync(targetRoot, { recursive: true, force: true });
     rmSync(externalRoot, { recursive: true, force: true });
+  }
+});
+
+test('shared routes require a registered direct owner and confined reference paths', () => {
+  for (const patch of [
+    { source_skill: 'p2a-unknown' },
+    { source_skill: '../p2a-dev-execution' },
+    { source_skill: 'p2a-next' },
+    { path: 'references/unregistered.md' },
+    { path: 'references/../SKILL.md' },
+    { provider_paths: [{ provider: 'claude', path: 'references/../SKILL.md' }] },
+  ]) {
+    const { routes } = loadContextRoutes(ROOT);
+    Object.assign(routes.skills.find((skill) => skill.id === 'p2a-next').references[0], patch);
+    assert.throws(() => validateContextRoutesData(routes), /directly owned source reference|must match pattern|must stay under references/);
+  }
+});
+
+test('shared sources retain missing-file and symlink confinement checks', () => {
+  const targetRoot = tempContextRoot('shared-confinement');
+  try {
+    const { routes } = loadContextRoutes(targetRoot);
+    const [route] = selectContextReferenceRoutes(routes, {
+      skill: 'p2a-next', provider: 'codex', stage: 'closeout',
+    });
+    assert.equal(route.skillId, 'p2a-next');
+    assert.equal(route.sourceSkillId, 'p2a-dev-execution');
+    const sourcePath = path.join(targetRoot, '.agents', 'skills', route.sourceSkillId, route.relativePath);
+    rmSync(sourcePath);
+    assert.throws(() => readContextRouteSource(targetRoot, 'codex', route), /ENOENT/);
+    symlinkSync(path.join(ROOT, '.agents', 'skills', route.sourceSkillId, route.relativePath), sourcePath);
+    assert.throws(() => readContextRouteSource(targetRoot, 'codex', route), /regular non-symlink file/);
+  } finally {
+    rmSync(targetRoot, { recursive: true, force: true });
   }
 });

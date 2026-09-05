@@ -644,6 +644,13 @@ P2A 회고는 공개 GitHub 이슈 초안으로 변환할 수 있다. `issue-pre
 `github.com/silbaram/plan2agent`에 게시한다. 같은 marker가 있는 열린·닫힌 이슈는 다시 만들지
 않으며 별도 draft, schema, receipt artifact는 생성하지 않는다.
 
+에이전트에서는 요청한 결과에 맞춰 진행한다. “회고 정리해”는 대화 요약, “문서로 작성해”는
+짧은 Markdown 작성, “GitHub 이슈로 등록해”는 preview 확인 후 게시까지의 요청이다.
+이슈 등록 요청에 `mine → review → curate → draft-patch` 절차는 필요하지 않으며,
+같은 결과를 명시적으로 요청했다면 다시 승인받지 않는다. 회고 작성만으로 공개 게시를
+허용하지는 않는다. 제품 코드의 “리뷰”도 읽기 전용이며, 수정 요청이 있을 때만 연결된
+`execute remediate` 실행으로 이어진다.
+
 ```bash
 p2a proposals mine \
   --graph .plan2agent/artifacts/<project_id>/gate-c-task-graph/task-graph.json

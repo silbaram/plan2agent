@@ -1429,7 +1429,9 @@ function deferredEntryDecisionSummary(context) {
   const preview = idea && idea.length > 180 ? `${idea.slice(0, 177).trimEnd()}...` : idea;
   return [
     `Saved the new request for the next scope${preview ? `: ${preview}` : '.'}`,
-    'The current approved work remains authoritative until it is finished or explicitly replaced.',
+    context.gateCExists
+      ? 'The current approved work remains authoritative until it is finished or explicitly replaced.'
+      : 'Confirm whether to revise the current planned scope or keep this request for later; existing planning artifacts and approvals remain unchanged.',
   ];
 }
 
@@ -1549,16 +1551,16 @@ function completionOptions(context) {
   return [
     {
       id: 'review',
-      label: 'Review and remediate',
-      description: 'Keep the active iteration open, review the completed implementation read-only using current final verification evidence, and start a linked in-iteration remediation run only when a finding requires code changes.',
+      label: 'Review implementation',
+      description: 'Keep the active iteration open and review the completed implementation read-only. Report findings; code changes require a request to fix them.',
       action: {
         kind: 'review',
-        display: `Review the completed implementation read-only while keeping the active iteration open. Inspect the diff, code, tests, and current verification evidence without rerunning product commands. If no material finding exists, do not repeat this menu: report "No material issue found" and ask once whether to close with ${p2aCommandLine(P2A_PATHS, closeArgv)}. A material finding starts a linked remediation run in the same iteration and returns the task to done only after verification passes.`,
+        display: 'Review the diff, code, tests, and current verification evidence read-only, without rerunning product commands merely because review was selected. Report material findings; use the linked remediation action only when the user has requested fixes. If clean, report "No material issue found" and stop without a close prompt or repeated menu. Leave the iteration open unless the user explicitly requested close.',
         remediation: {
           kind: 'cli',
           argv: remediationArgv,
           display: p2aCommandLine(P2A_PATHS, remediationArgv),
-          requiresApproval: false,
+          requiresApproval: true,
         },
       },
     },
@@ -1568,17 +1570,17 @@ function completionOptions(context) {
         ? 'Review development process (Recommended)'
         : 'Review development process',
       description: context.retrospectiveCandidates.length
-        ? `Review ${context.retrospectiveCandidates.length} detected development performance or P2A process signal(s) before deciding whether to continue the retrospective.`
-        : 'No automatic development process signal was found. Ask once whether the user experienced delay, errors, wrong routing, or unnecessary steps.',
+        ? `Summarize ${context.retrospectiveCandidates.length} detected development performance or P2A process signal(s).`
+        : 'No automatic development process signal was found. Use any user-reported friction; otherwise ask once about delay, errors, wrong routing, or unnecessary steps.',
       action: {
         kind: 'retrospective',
         display: context.retrospectiveCandidates.length
-          ? 'Report the bounded development-process retrospective candidates in plain language, distinguish product verification from P2A workflow signals, then ask whether to continue the retrospective. Keep product review and iteration close separate.'
-          : 'Ask once whether the user experienced any P2A delay, error, wrong routing, or unnecessary step. If not, return to this decision without creating a report.',
+          ? 'Summarize the bounded development-process signals in plain language. An explicit request to write the report authorizes that write without asking again; GitHub publication requires an explicit request to register an issue. Keep product review and iteration close separate.'
+          : 'Summarize any P2A friction already reported by the user; only ask about friction when none was provided. If the user reports none, create nothing. An existing report or issue request needs no repeated approval for that same outcome.',
         report: {
           kind: 'artifact',
           path: reportPath,
-          display: `After the user explicitly continues the retrospective, write the minimal report to ${reportPath}.`,
+          display: `When requested, write one evidence-backed report to ${reportPath} without overwriting an existing report. For an explicit GitHub issue request, run p2a proposals issue-preview then p2a proposals publish-issue, both with --retrospective <project-relative-report-path>, from the target project; publication also needs --yes and targets public silbaram/plan2agent. Proposal mining is not required.`,
           requiresApproval: true,
         },
         ...(proposalMining ? { proposalMining } : {}),
@@ -2454,6 +2456,7 @@ export const NEXT_DECISION_RULES = [
       && (
         !context.hasCanonicalPlanningState
         || activeIterationAwaitsGateA(context)
+        || (context.explicitEntryRequested && context.gateAValid && context.gateAApproved && !context.gateCExists)
       )
       && context.entry
       && context.entry.valid === false
@@ -2621,6 +2624,25 @@ export const NEXT_DECISION_RULES = [
       '--constitution',
       commandProjectPath(context.targetRoot, context.constitution.path),
     ],
+  },
+  {
+    state: 'entry_deferred',
+    kind: 'approval',
+    when: (context) => (
+      context.explicitEntryRequested
+      && context.entry?.valid === true
+      && context.gateAValid
+      && context.gateAApproved
+      && !context.gateCExists
+      && !entryMatchesCurrentScope(context)
+    ),
+    reason: (context) => (
+      `The new request is saved at ${context.entryArg}, but it differs from the scope currently being planned. The existing plan will not be advanced or replaced implicitly.`
+    ),
+    command: (context) => (
+      `Confirm whether to revise the current planned scope for the new request or save it for later. Run ${p2aCommandLine(P2A_PATHS, ['next', '--target', commandTarget(context.targetRoot)])} only if the user chooses to continue the existing plan.`
+    ),
+    decisionSummary: deferredEntryDecisionSummary,
   },
   {
     state: 'shape',
@@ -2798,8 +2820,8 @@ export const NEXT_DECISION_RULES = [
   {
     state: 'gate_b_approved_needs_tasks',
     kind: 'skill',
-    skill: 'p2a-task-breakdown',
-    args: [],
+    skill: (context) => context.detail.activeIteration ? 'p2a-task-author' : 'p2a-task-breakdown',
+    args: (context) => ['--artifacts', context.artifactArg],
     when: (context) => (
       context.gateBValid
       && context.gateBApproved
@@ -2808,7 +2830,9 @@ export const NEXT_DECISION_RULES = [
       && context.executionModePolicy === 'orchestrated'
     ),
     reason: () => 'The approved Gate B specification has no Gate C task graph yet.',
-    command: () => '/p2a-task-breakdown',
+    command: (context) => (
+      `/${context.detail.activeIteration ? 'p2a-task-author' : 'p2a-task-breakdown'} --artifacts ${JSON.stringify(context.artifactArg)}`
+    ),
   },
   {
     state: 'invalid_gate_c',
