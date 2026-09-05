@@ -92,7 +92,7 @@ test('doctor context mode is harness-independent and supports JSON, human, and s
 });
 
 const SHARED_REFERENCES = [
-  { skill: 'p2a-next', stage: 'closeout', owner: 'p2a-dev-execution', file: 'verification-closeout.md' },
+  { skill: 'p2a-next', stage: 'closeout', owner: 'p2a-dev-execution', file: 'closeout-choices.md' },
   { skill: 'p2a-task-breakdown', stage: 'gate-c', owner: 'p2a-task-author', file: 'draft-contract.md' },
 ];
 
@@ -157,11 +157,11 @@ test('shared consumer audits detect missing source files and provider mirror dri
     for (const directory of ['.agents', '.claude', '.codex', '.gemini']) {
       cpSync(path.join(ROOT, directory), path.join(targetRoot, directory), { recursive: true });
     }
-    const relativePath = '.claude/skills/p2a-dev-execution/references/verification-closeout.md';
+    const relativePath = '.claude/skills/p2a-dev-execution/references/closeout-choices.md';
     const sourcePath = path.join(targetRoot, relativePath);
     const options = { scenario: {
       skill: 'p2a-next', stage: 'closeout',
-      conditions: ['reference:p2a-next:references/verification-closeout.md'],
+      conditions: ['reference:p2a-next:references/closeout-choices.md'],
     } };
     writeFileSync(sourcePath, `${readFileSync(sourcePath, 'utf8')}\nMirror drift.\n`, 'utf8');
     let report = auditContext(targetRoot, options);

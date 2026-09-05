@@ -87,7 +87,7 @@ test('human next gives state-specific requests instead of generic approval langu
       state: 'entry_deferred',
       reason: 'The new request is saved while approved work remains active.',
       command: { kind: 'approval', display: 'Continue or pause the current work.' },
-      expected: /현재 승인된 개발을 계속할지, 그대로 멈춰 둘지/u,
+      expected: /기존 범위로 계속할지, 새 요청에 맞춰 범위 변경을 논의할지/u,
     },
     {
       state: 'blocked_scope_replacement_ready',
@@ -174,7 +174,7 @@ test('deferred and replacement routing explain the safety boundary in English', 
   }, { requestIdea: 'Add a new operator dashboard.' });
   assert.match(deferred, /saved the new request/u);
   assert.match(deferred, /will not silently replace/u);
-  assert.match(deferred, /continue the current approved work or leave it paused/u);
+  assert.match(deferred, /continue the current scope or discuss changing it/u);
 
   const replacement = renderNextHuman({
     ...base,

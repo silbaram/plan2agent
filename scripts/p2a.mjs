@@ -641,7 +641,7 @@ function humanNextSummaryEnglish(next, context) {
       ];
     case 'entry_deferred':
       return [
-        'P2A saved the new request, but the current approved work is still active.',
+        'P2A saved the new request, but an existing scope is already being planned or developed.',
         'It will not silently replace that work or start the new request ahead of it.',
       ];
     case 'blocked_scope_replacement_ready':
@@ -874,7 +874,7 @@ function humanNextSummary(next, context) {
       ];
     case 'entry_deferred':
       return [
-        '새 요청은 보관했지만, 현재 승인된 개발이 아직 진행 중입니다.',
+        '새 요청은 보관했지만, 기존 범위의 계획이나 개발이 진행 중입니다.',
         '기존 작업을 몰래 바꾸거나 새 요청을 먼저 시작하지 않습니다.',
       ];
     case 'blocked_scope_replacement_ready':
@@ -1194,7 +1194,7 @@ function humanRecommendedActionEnglish(next, context = {}) {
     case 'entry_invalid':
       return ['Provide the corrected product document, or restate the desired change in natural language.'];
     case 'entry_deferred':
-      return ['Choose whether to continue the current approved work or leave it paused. P2A will resume the saved request only after that work closes.'];
+      return ['Choose whether to continue the current scope or discuss changing it for the new request. Existing records remain unchanged until you choose.'];
     case 'blocked_scope_replacement_ready':
       return ['Approve only if P2A should preserve the blocked history and begin a new full-scope plan from the last approved contract.'];
     case 'started_run_contract_drift':
@@ -1265,7 +1265,7 @@ function humanRecommendedAction(next, context) {
     case 'entry_invalid':
       return ['수정한 기획 문서를 다시 지정하거나, 원하는 변경을 자연어로 알려주세요.'];
     case 'entry_deferred':
-      return ['현재 승인된 개발을 계속할지, 그대로 멈춰 둘지 알려주세요. 새 요청은 현재 작업이 닫힌 뒤 이어갑니다.'];
+      return ['기존 범위로 계속할지, 새 요청에 맞춰 범위 변경을 논의할지 알려주세요. 선택 전에는 기존 기록을 변경하지 않습니다.'];
     case 'blocked_scope_replacement_ready':
       return ['막힌 이력은 그대로 보존하고 마지막 승인 계약에서 새 전체 범위 계획을 시작해도 되는지 승인해 주세요.'];
     case 'started_run_contract_drift':

@@ -83,13 +83,13 @@
       "gemini_command": "next",
       "references": [
         {
-          "id": "next.verification-closeout",
-          "path": "references/verification-closeout.md",
+          "id": "next.closeout-choices",
+          "path": "references/closeout-choices.md",
           "source_skill": "p2a-dev-execution",
           "phases": [],
           "load": "conditional",
           "required": true,
-          "condition": "A closeout choice or an explicit retrospective/report/issue request is being handled.",
+          "condition": "A closeout choice or an explicit review/retrospective/report/issue request is being handled.",
           "stages": [
             "closeout"
           ]
@@ -275,6 +275,17 @@
           "condition": "The implementation outcome is ready for executable verification, checkpointing, or run closeout.",
           "stages": [
             "execution",
+            "closeout"
+          ]
+        },
+        {
+          "id": "execution.closeout-choices",
+          "path": "references/closeout-choices.md",
+          "phases": [],
+          "load": "conditional",
+          "required": true,
+          "condition": "A closeout choice or an explicit review/retrospective/report/issue request is being handled.",
+          "stages": [
             "closeout"
           ]
         },

@@ -846,7 +846,7 @@ function assertCompletionDecision(payload, artifactRoot) {
   assert.equal(review.action.kind, 'review');
   assert.match(review.action.display, /read-only/i);
   assert.match(review.action.display, /without rerunning product commands/i);
-  assert.match(review.action.display, /do not repeat this menu/i);
+  assert.match(review.action.display, /stop without a close prompt or repeated menu/i);
   assert.deepEqual(review.action.remediation.argv, [
     'execute', 'remediate', '--artifacts', artifactRoot, '--task', '<task-id>',
     '--finding', '<review finding>',
@@ -1198,6 +1198,45 @@ test('a closed iteration binds an explicit idea or entry to the next open action
     ]);
   } finally {
     remove(root);
+  }
+});
+
+test('a competing entry pauses every planning stage without changing existing artifacts', () => {
+  for (const approval of [null, 'draft', 'approved']) {
+    const root = project();
+    try {
+      const rootArtifact = artifact(root);
+      writeGateA(rootArtifact, 'ready_for_spec');
+      if (approval) writeGateB(rootArtifact, approval);
+      const beforeAction = next(root);
+      const before = snapshotHarness(root);
+      const entryPath = join(root, 'competing-change.md');
+      const idea = 'Instead of the cache library, build a pet adoption dashboard for shelters.';
+      writeFileSync(entryPath, `${idea}\n`, 'utf8');
+
+      const payload = next(root, ['--entry', entryPath]);
+      assertAction(payload, 'entry_deferred', 'approval');
+      assert.ok(payload.command.decisionSummary.some((item) => item.includes(idea)));
+      assert.equal(payload.continuation, null);
+      assert.equal(payload.command.argv, undefined);
+      assert.deepEqual(snapshotHarness(root), before);
+      assert.equal(next(root).state, beforeAction.state, 'plain next can still resume the existing plan');
+
+      const intake = JSON.parse(readFileSync(join(rootArtifact, 'gate-a-intake', 'intake.json'), 'utf8'));
+      writeFileSync(entryPath, `${intake.idea}\n`, 'utf8');
+      assert.equal(next(root, ['--entry', entryPath]).state, beforeAction.state, 'the same request can resume planning');
+
+      writeFileSync(entryPath, '', 'utf8');
+      assertAction(next(root, ['--entry', entryPath]), 'entry_invalid', 'approval');
+      assert.deepEqual(snapshotHarness(root), before);
+
+      const beforeArtifacts = snapshotDirectory(rootArtifact);
+      assertAction(next(root, ['--idea', idea]), 'entry_deferred', 'approval');
+      assert.deepEqual(snapshotDirectory(rootArtifact), beforeArtifacts);
+      assert.equal(next(root).state, beforeAction.state);
+    } finally {
+      remove(root);
+    }
   }
 });
 
@@ -3636,6 +3675,39 @@ test('next ignores historical composition fields but fail-closes current identit
   }
 });
 
+test('next resumes approved artifacts in each supported root and still rejects stale source hashes', () => {
+  for (const layout of ['managed', 'legacy', 'standalone']) {
+    const root = project();
+    try {
+      const rootArtifact = layout === 'managed'
+        ? artifact(root)
+        : join(root, layout === 'legacy' ? 'artifacts/sample' : 'reviewed-scope');
+      if (layout === 'standalone') {
+        // Direct-root discovery still requires an initialized project.
+        writeJson(join(rootArtifact, '.plan2agent', 'manifest.json'), { provenance: { mode: 'handoff' } });
+      }
+      writeGateA(rootArtifact, 'ready_for_spec');
+      writeGateB(rootArtifact);
+      const target = layout === 'standalone' ? rootArtifact : root;
+      const specPath = join(rootArtifact, 'gate-b-spec', 'spec.json');
+      const before = readFileSync(specPath, 'utf8');
+      assertAction(next(target), 'gate_b_approved_needs_tasks', 'skill');
+      assert.equal(readFileSync(specPath, 'utf8'), before);
+
+      const stale = JSON.parse(before);
+      stale.source_intake_sha256 = '0'.repeat(64);
+      writeJson(specPath, stale);
+      const staleBytes = readFileSync(specPath, 'utf8');
+      const blocked = next(target);
+      assert.notEqual(blocked.state, 'gate_b_approved_needs_tasks');
+      assert.match(blocked.reason, /persisted bytes have changed|source_intake_sha256/);
+      assert.equal(readFileSync(specPath, 'utf8'), staleBytes);
+    } finally {
+      remove(root);
+    }
+  }
+});
+
 test('next rejects invalid Gate B and Gate C artifacts before downstream work', () => {
   const cases = [
     {
@@ -3887,7 +3959,7 @@ test('info keeps its JSON contract and points human output to next', () => {
 });
 
 test('next keeps the ordered decision rules required by the contract', () => {
-  assert.equal(NEXT_DECISION_RULES.length, 36);
+  assert.equal(NEXT_DECISION_RULES.length, 37);
   for (const rule of NEXT_DECISION_RULES) {
     assert.equal(typeof rule.when, 'function');
     assert.equal(typeof rule.reason, 'function');
@@ -4827,16 +4899,16 @@ test('p2a-next skill delegates to the CLI without duplicating decision rules', (
   assert.match(skill, /kind: skill/);
   assert.match(skill, /kind: approval/);
   assert.match(skill, /approval `options`/);
-  assert.match(skill, /\.agents\/skills\/p2a-dev-execution\/references\/verification-closeout\.md/);
+  assert.match(skill, /\.agents\/skills\/p2a-dev-execution\/references\/closeout-choices\.md/);
   const closeout = readFileSync(new URL(
-    '../.agents/skills/p2a-dev-execution/references/verification-closeout.md', import.meta.url,
+    '../.agents/skills/p2a-dev-execution/references/closeout-choices.md', import.meta.url,
   ), 'utf8');
   assert.match(closeout, /read-only/);
   assert.match(closeout, /unless the user requested fixes/);
   assert.match(closeout, /p2a execute remediate/);
   assert.match(closeout, /p2a proposals issue-preview/);
   assert.match(closeout, /p2a proposals publish-issue/);
-  assert.match(closeout, /A clean review asks once to close/);
+  assert.match(closeout, /stops without a close prompt or repeated menu/);
   assert.doesNotMatch(skill, /A clean review runs `next` again/);
   assert.doesNotMatch(skill, /show the returned artifact or approval instruction/);
   assert.match(skill, /artifact paths internal unless requested/);

@@ -118,6 +118,30 @@ test('dedicated review eligibility selects only its own reference', () => {
   }
 });
 
+test('closeout choices share one small source without loading implementation verification', () => {
+  const referencePath = 'references/closeout-choices.md';
+  for (const skill of ['p2a-next', 'p2a-dev-execution']) {
+    const audit = auditContext(ROOT, { scenario: {
+      skill,
+      stage: 'closeout',
+      conditions: [`reference:${skill}:${referencePath}`],
+    } });
+    assert.equal(audit.status, 'pass');
+    for (const context of audit.contexts) {
+      const references = context.sources.filter((source) => source.role === 'reference');
+      const providerRoot = context.provider === 'claude' ? '.claude' : '.agents';
+      assert.deepEqual(references.map((source) => source.path), [
+        `${providerRoot}/skills/p2a-dev-execution/${referencePath}`,
+      ]);
+      const verification = resolveRuntimeContext({
+        targetRoot: ROOT, provider: context.provider, phase: 'verify-closeout', mode: 'direct',
+      });
+      assert.deepEqual(verification.sources.map((source) => source.routeId), ['execution.verification-closeout']);
+      assert.ok(references[0].bytes < verification.sources[0].bytes);
+    }
+  }
+});
+
 test('route validation rejects duplicate ids and unknown phases', () => {
   const targetRoot = tempContextRoot('invalid-manifest');
   try {

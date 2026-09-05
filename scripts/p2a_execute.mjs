@@ -2629,6 +2629,7 @@ function replacementArgsForEnvironmentRetry(args, run) {
     runId: null,
     runReservationToken: null,
     agentTool: run.agentTool,
+    verificationScope: run.verificationScope ?? null,
     workspace: run.workspacePath,
     workspaceRef: run.workspaceRef,
     isolation: 'none',
@@ -2673,7 +2674,12 @@ function runEnvironmentRetry(args) {
       throw new Error(`run ${run.runId} has no unavailable final evidence to retry`);
     }
     console.log(`Closing immutable environment-only evidence: ${run.runId}`);
-    runFinish({ ...args, command: 'finish' });
+    runFinish({
+      ...args,
+      command: 'finish',
+      status: 'failed',
+      failureClass: 'environment_failure',
+    });
     run = readRun(source.runsDir, args.runId);
   }
   if (!isEnvironmentOnlyFinalReviewFailure(source, run)) {

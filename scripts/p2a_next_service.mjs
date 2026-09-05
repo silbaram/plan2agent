@@ -1429,7 +1429,9 @@ function deferredEntryDecisionSummary(context) {
   const preview = idea && idea.length > 180 ? `${idea.slice(0, 177).trimEnd()}...` : idea;
   return [
     `Saved the new request for the next scope${preview ? `: ${preview}` : '.'}`,
-    'The current approved work remains authoritative until it is finished or explicitly replaced.',
+    context.gateCExists
+      ? 'The current approved work remains authoritative until it is finished or explicitly replaced.'
+      : 'Confirm whether to revise the current planned scope or keep this request for later; existing planning artifacts and approvals remain unchanged.',
   ];
 }
 
@@ -1553,7 +1555,7 @@ function completionOptions(context) {
       description: 'Keep the active iteration open and review the completed implementation read-only. Report findings; code changes require a request to fix them.',
       action: {
         kind: 'review',
-        display: `Review the diff, code, tests, and current verification evidence read-only, without rerunning product commands merely because review was selected. Report material findings; use the linked remediation action only when the user has requested fixes. If clean, do not repeat this menu: report "No material issue found" and ask once whether to close with ${p2aCommandLine(P2A_PATHS, closeArgv)}.`,
+        display: 'Review the diff, code, tests, and current verification evidence read-only, without rerunning product commands merely because review was selected. Report material findings; use the linked remediation action only when the user has requested fixes. If clean, report "No material issue found" and stop without a close prompt or repeated menu. Leave the iteration open unless the user explicitly requested close.',
         remediation: {
           kind: 'cli',
           argv: remediationArgv,
@@ -2454,6 +2456,7 @@ export const NEXT_DECISION_RULES = [
       && (
         !context.hasCanonicalPlanningState
         || activeIterationAwaitsGateA(context)
+        || (context.explicitEntryRequested && context.gateAValid && context.gateAApproved && !context.gateCExists)
       )
       && context.entry
       && context.entry.valid === false
@@ -2621,6 +2624,25 @@ export const NEXT_DECISION_RULES = [
       '--constitution',
       commandProjectPath(context.targetRoot, context.constitution.path),
     ],
+  },
+  {
+    state: 'entry_deferred',
+    kind: 'approval',
+    when: (context) => (
+      context.explicitEntryRequested
+      && context.entry?.valid === true
+      && context.gateAValid
+      && context.gateAApproved
+      && !context.gateCExists
+      && !entryMatchesCurrentScope(context)
+    ),
+    reason: (context) => (
+      `The new request is saved at ${context.entryArg}, but it differs from the scope currently being planned. The existing plan will not be advanced or replaced implicitly.`
+    ),
+    command: (context) => (
+      `Confirm whether to revise the current planned scope for the new request or save it for later. Run ${p2aCommandLine(P2A_PATHS, ['next', '--target', commandTarget(context.targetRoot)])} only if the user chooses to continue the existing plan.`
+    ),
+    decisionSummary: deferredEntryDecisionSummary,
   },
   {
     state: 'shape',
