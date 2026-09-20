@@ -194,11 +194,11 @@ function usage() {
     '  --iteration-id active|<id>  Iteration to close. Default: active. Only active is supported for now.',
     '',
     'open options:',
-    '  --iteration-id <id>   New iteration id. Defaults to the next available id.',
+    '  --iteration-id <id>   New iteration id. Defaults to iter-0001, iter-0002, ...',
     '  --idea <text>         Change idea for the new iteration. Required.',
     '',
     'replace-scope options:',
-    '  --iteration-id <id>   Replacement iteration id. Defaults to the next available id.',
+    '  --iteration-id <id>   Replacement iteration id. Defaults to iter-0001, iter-0002, ...',
     '  --idea <text>         Approved replacement scope. Required.',
     '  --reason <text>       Why the blocked scope is being replaced. Required.',
     '',
@@ -5118,30 +5118,29 @@ function pruneArchivedRunEvidenceAfterOpen(facts) {
   );
 }
 
-function generatedNextIterationId(artifactRoot, currentIterationId) {
+function generatedNextIterationId(artifactRoot, currentSpec) {
   const iterationsRoot = path.join(artifactRoot, 'iterations');
-  const existing = new Set(
-    readdirSync(iterationsRoot, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name),
-  );
-  const numbered = /^(.*?)(\d+)$/u.exec(currentIterationId);
-  if (numbered) {
-    const width = numbered[2].length;
-    let number = Number.parseInt(numbered[2], 10) + 1;
-    while (Number.isSafeInteger(number)) {
-      const candidate = `${numbered[1]}${String(number).padStart(width, '0')}`;
-      if (!existing.has(candidate)) return candidate;
-      number += 1;
+  // Called under the existing open/replace-scope locks. Files and dangling
+  // symlinks reserve names too; closed records survive missing directories.
+  const reserved = [
+    ...readdirSync(iterationsRoot),
+    currentSpec.active_iteration,
+    currentSpec.pending_iteration?.iteration_id,
+    currentSpec.last_closed_iteration?.iteration_id,
+    ...(currentSpec.closed_iterations ?? []).map((closed) => closed?.iteration_id),
+  ];
+  let highest = 0;
+  for (const id of reserved) {
+    if (typeof id !== 'string') continue;
+    const match = /^iter-(\d+)$/u.exec(id);
+    if (!match) continue;
+    const number = Number(match[1]);
+    if (!Number.isSafeInteger(number) || number >= Number.MAX_SAFE_INTEGER) {
+      throw new Error('iteration sequence exhausted; provide an explicit --iteration-id');
     }
+    highest = Math.max(highest, number);
   }
-  const base = `${currentIterationId}-next`;
-  if (!existing.has(base)) return base;
-  for (let suffix = 2; suffix < Number.MAX_SAFE_INTEGER; suffix += 1) {
-    const candidate = `${base}-${suffix}`;
-    if (!existing.has(candidate)) return candidate;
-  }
-  throw new Error('unable to allocate the next iteration id');
+  return `iter-${String(highest + 1).padStart(4, '0')}`;
 }
 
 function readyTaskIdsForScopeReplacement(taskGraph) {
@@ -5231,7 +5230,7 @@ function openLocked(args, artifactRoot, idea, options = {}) {
     assertArchivedBaselineForOpen(facts.state);
   }
   if (!args.iterationIdProvided) {
-    args.iterationId = generatedNextIterationId(artifactRoot, facts.state.activeIteration);
+    args.iterationId = generatedNextIterationId(artifactRoot, facts.state.currentSpec);
   }
   assertSafeIterationId(args.iterationId);
   if (facts.state.activeIteration === args.iterationId) {

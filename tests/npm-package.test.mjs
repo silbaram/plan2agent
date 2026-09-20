@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { spawnSync } from 'node:child_process';
@@ -419,6 +419,19 @@ test('the packed p2a runtime exposes its bin shim and supports core commands wit
     assert.doesNotMatch(packageSkill, /node \.plan2agent\/scripts\/p2a\.mjs tasks ready/);
     assert.match(packageSkill, /(^|[\s`])p2a context show/m);
     assert.doesNotMatch(packageSkill, /node \.plan2agent\/scripts\/p2a\.mjs context show/);
+    for (const reference of [
+      'p2a-harness/references/artifact-persistence-and-evidence.md',
+      'p2a-dev-execution/references/execution-lifecycle.md',
+      'p2a-dev-execution/references/verification-closeout.md',
+      'p2a-dev-execution/references/closeout-choices.md',
+      'p2a-spec/references/technology-reconnaissance.md',
+    ]) {
+      assert.equal(
+        readFileSync(path.join(targetRoot, '.agents', 'skills', reference), 'utf8'),
+        readFileSync(path.join(ROOT, '.agents', 'skills', reference), 'utf8'),
+        `installed reference must retain the packaged policy: ${reference}`,
+      );
+    }
     const manifestPath = path.join(targetRoot, '.plan2agent', 'manifest.json');
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
     assert.equal(manifest.provenance.packageName, 'plan2agent');
@@ -537,6 +550,7 @@ test('the packed p2a runtime exposes its bin shim and supports core commands wit
     const handoffConfig = JSON.parse(readFileSync(handoffConfigPath, 'utf8'));
     handoffConfig.runTracking.defaultIsolation = 'branch';
     handoffConfig.runTracking.branchPattern = 'review/<taskId>-<runId>';
+    handoffConfig.devExecution.reviewPasses.acceptance = 'off';
     writeFileSync(handoffConfigPath, `${JSON.stringify(handoffConfig, null, 2)}\n`, 'utf8');
 
     const handoffNestedRoot = path.join(handoffTargetRoot, 'src', 'nested');
@@ -612,6 +626,59 @@ test('the packed p2a runtime exposes its bin shim and supports core commands wit
     ]);
     assert.notEqual(unknownPackedContext.status, 0);
     assert.match(unknownPackedContext.stderr, /unknown run/);
+
+    // Exercise the installed runtime and authoring convention without touching
+    // a real project's history. Supplemental evidence remains after run GC.
+    const iterationId = 'iter-packed-context';
+    const evidenceDir = path.join(packedArtifactRoot, 'evidence', iterationId, packedContextRunId);
+    const notesDir = path.join(packedArtifactRoot, 'iterations', iterationId, 'notes');
+    const temporaryRoot = path.join(handoffTargetRoot, '.plan2agent', 'tmp');
+    mkdirSync(path.join(evidenceDir, 'logs'), { recursive: true });
+    mkdirSync(notesDir, { recursive: true });
+    mkdirSync(temporaryRoot, { recursive: true });
+    const temporaryDir = mkdtempSync(path.join(temporaryRoot, 'layout-smoke-'));
+    const sourceFile = 'src/layout-smoke.mjs';
+    writeFileSync(path.join(handoffTargetRoot, sourceFile),
+      'import assert from "node:assert/strict";\nconst label = (value) => `item-${value}`;\nassert.equal(label(42), "item-42");\nconsole.log("layout smoke passed");\n');
+    writeFileSync(path.join(notesDir, 'layout-review.md'), '# Layout review\nThe installed runtime owns this isolated fixture.\n');
+    const verified = runPacked(handoffTargetRoot, [
+      'runs', 'verify', '--artifacts', packedArtifactRoot, '--run-id', packedContextRunId,
+      '--test-command', `node ${sourceFile}`,
+    ]);
+    assert.equal(verified.status, 0, formatCommandResult(verified));
+    const verifiedRun = JSON.parse(readFileSync(path.join(packedArtifactRoot, 'runs', iterationId, `${packedContextRunId}.json`)));
+    const testOutput = verifiedRun.verification.find((entry) => entry.type === 'test').stdoutTail;
+    writeFileSync(path.join(temporaryDir, 'result.txt'), `${testOutput.trimEnd()}\n`);
+    copyFileSync(path.join(temporaryDir, 'result.txt'), path.join(evidenceDir, 'logs', 'test.log'));
+    const reportPath = path.join(evidenceDir, 'report.md');
+    writeFileSync(reportPath, `# Layout smoke\nIteration: ${iterationId}\nRun: ${packedContextRunId}\nVerified: node ${sourceFile}\n[Output](logs/test.log)\n`);
+    rmSync(temporaryDir, { recursive: true });
+    const finished = runPacked(handoffTargetRoot, [
+      'execute', 'finish', '--artifacts', packedArtifactRoot, '--run-id', packedContextRunId,
+      '--changed-file', sourceFile,
+    ]);
+    assert.equal(finished.status, 0, formatCommandResult(finished));
+    const finalRunId = 'run-packed-layout-final';
+    for (const command of [
+      ['execute', 'verify-final', '--task', 'task-001', '--agent-tool', 'manual'],
+      ['runs', 'verify', '--test-command', `node ${sourceFile}`],
+      ['execute', 'finish'],
+    ]) {
+      const result = runPacked(handoffTargetRoot, [
+        ...command, '--artifacts', packedArtifactRoot, '--run-id', finalRunId,
+      ]);
+      assert.equal(result.status, 0, formatCommandResult(result));
+    }
+    const closed = runPacked(handoffTargetRoot, ['iteration', 'close', '--artifacts', packedArtifactRoot]);
+    assert.equal(closed.status, 0, formatCommandResult(closed));
+    const opened = runPacked(handoffTargetRoot, [
+      'iteration', 'open', '--artifacts', packedArtifactRoot, '--idea', 'Continue the isolated layout smoke',
+    ]);
+    assert.equal(opened.status, 0, formatCommandResult(opened));
+    assert.equal(JSON.parse(readFileSync(path.join(packedArtifactRoot, 'current-spec.json'))).active_iteration, 'iter-0001');
+    assert.ok(existsSync(reportPath));
+    assert.equal(readFileSync(path.join(evidenceDir, 'logs', 'test.log'), 'utf8'), 'layout smoke passed\n');
+    assert.equal(existsSync(temporaryDir), false);
 
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });

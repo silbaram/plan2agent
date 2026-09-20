@@ -278,6 +278,10 @@ test('Git collection omits only untracked generated paths, retaining source and 
       '.buildlore/handoffs/result.md',
       '.buildlore/backups-source/new.js',
       '.plan2agent/artifacts/example/runs/run-new.json',
+      '.plan2agent/tmp/install-new/result.md',
+      '.plan2agent/tmp/tracked.txt',
+      '.plan2agent/tmp/staged.txt',
+      '.plan2agent/tmp-source/new.js',
       '.plan2agent/project.config.json',
       'src/new.js',
       'docs/guide.md',
@@ -286,12 +290,14 @@ test('Git collection omits only untracked generated paths, retaining source and 
       mkdirSync(path.dirname(path.join(workspace, file)), { recursive: true });
       writeFileSync(path.join(workspace, file), 'before\n');
     }
-    runGit(['add', ...files.slice(0, 3)]);
+    runGit(['add', ...files.slice(0, 3), '.plan2agent/tmp/tracked.txt']);
     runGit(['commit', '-qm', 'baseline']);
     writeFileSync(path.join(workspace, files[0]), 'after\n');
     rmSync(path.join(workspace, files[1]));
     runGit(['mv', files[2], '.buildlore/backups/renamed.json']);
     runGit(['add', '.buildlore/backups/staged.json']);
+    writeFileSync(path.join(workspace, '.plan2agent/tmp/tracked.txt'), 'after\n');
+    runGit(['add', '.plan2agent/tmp/staged.txt']);
 
     const config = { runTracking: { generatedPaths: ['./.buildlore//backups/', '.buildlore/handoffs'] } };
     const changed = collectGitChangedFiles(workspace, config);
@@ -300,6 +306,9 @@ test('Git collection omits only untracked generated paths, retaining source and 
       '.buildlore/backups/renamed.json',
       '.buildlore/backups/staged.json',
       '.buildlore/backups-source/new.js',
+      '.plan2agent/tmp/tracked.txt',
+      '.plan2agent/tmp/staged.txt',
+      '.plan2agent/tmp-source/new.js',
       '.plan2agent/project.config.json',
       'src/new.js',
       'docs/guide.md',
@@ -308,6 +317,10 @@ test('Git collection omits only untracked generated paths, retaining source and 
     assert.ok(normalizeChangedFiles(workspace, [
       ...changed, '.buildlore/backups/new.json',
     ]).includes('.buildlore/backups/new.json'), 'an explicit path remains authoritative');
+    assert.ok(!collectGitChangedFiles(workspace).includes('.plan2agent/tmp/install-new/result.md'));
+    assert.ok(normalizeChangedFiles(workspace, [
+      ...changed, '.plan2agent/tmp/install-new/result.md',
+    ]).includes('.plan2agent/tmp/install-new/result.md'));
     for (const generatedPaths of ['cache', ['..'], ['.'], ['/tmp'], ['cache/**'], [null]]) {
       assert.throws(() => collectGitChangedFiles(workspace, { runTracking: { generatedPaths } }));
     }

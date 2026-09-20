@@ -281,6 +281,7 @@ export function workspaceRevisionSha256(workspacePath, excludedPaths = []) {
     .filter((candidate) => candidate !== workspaceRoot && pathIsInside(workspaceRoot, candidate));
   const rootArtifactEntries = new Set([
     'runs',
+    'evidence',
     'visual-evidence',
     'iterations',
     'gate-a-intake',

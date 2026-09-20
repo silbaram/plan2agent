@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
@@ -140,7 +140,7 @@ async function waitForPath(filePath, timeoutMs = 5000) {
   }
 }
 
-function initializedArtifactRoot(label) {
+function initializedArtifactRoot(label, iterationId = null) {
   const artifactRoot = tempRoot(label);
   cpSync(path.join(E2E_FIXTURE_ROOT, 'webhook-api-service'), artifactRoot, { recursive: true });
   mkdirSync(path.join(artifactRoot, '.plan2agent'), { recursive: true });
@@ -152,8 +152,7 @@ function initializedArtifactRoot(label) {
     'init',
     '--artifacts',
     artifactRoot,
-    '--iteration-id',
-    'v1-mvp',
+    ...(iterationId ? ['--iteration-id', iterationId] : []),
   ], { cwd: ROOT, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
   return artifactRoot;
@@ -1509,6 +1508,115 @@ test('direct task transitions participate in the shared task-graph lock', async 
   assert.equal(result.status, 0, result.stderr);
   const graph = JSON.parse(readFileSync(graphPath, 'utf8'));
   assert.equal(graph.tasks.find((task) => task.id === 'task-001')?.status, 'in_progress');
+});
+
+for (const scenario of [
+  { name: 'default init', previous: null, expected: 'iter-0001' },
+  { name: 'legacy suffix chain', previous: `v25-wiki${'-next'.repeat(31)}`, expected: 'iter-0001' },
+  { name: 'sequence gaps', previous: 'iter-0002', reserved: ['iter-0007'], expected: 'iter-0008' },
+  { name: 'closed history without its directory', previous: 'iter-0002', closedId: 'iter-0042', expected: 'iter-0043' },
+  { name: 'five digit sequence', previous: 'iter-9999', expected: 'iter-10000' },
+  { name: 'explicit override', previous: 'iter-0002', explicit: 'release-install-fix', expected: 'release-install-fix' },
+]) {
+  test(`iteration open allocates a stable ID: ${scenario.name}`, () => {
+    const artifactRoot = initializedArtifactRoot('iteration-short-id', scenario.previous);
+    try {
+      closeInitializedIteration(artifactRoot);
+      const pointerPath = path.join(artifactRoot, 'current-spec.json');
+      const pointer = JSON.parse(readFileSync(pointerPath, 'utf8'));
+      if (!scenario.previous) assert.equal(pointer.active_iteration, 'v1-mvp');
+      const archivedRoot = path.join(artifactRoot, 'iterations', pointer.active_iteration);
+      const archivedBefore = artifactByteSnapshot(archivedRoot);
+      for (const id of scenario.reserved ?? []) mkdirSync(path.join(artifactRoot, 'iterations', id));
+      if (scenario.closedId) {
+        pointer.closed_iterations.push({
+          ...pointer.closed_iterations[0],
+          iteration_id: scenario.closedId,
+        });
+        writeFileSync(pointerPath, `${JSON.stringify(pointer, null, 2)}\n`);
+      }
+      const result = spawnSync(process.execPath, [
+        ITERATION_CLI, 'open', '--artifacts', artifactRoot, '--idea', 'Improve local installation',
+        ...(scenario.explicit ? ['--iteration-id', scenario.explicit] : []),
+      ], { cwd: ROOT, encoding: 'utf8' });
+      assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+      const opened = JSON.parse(readFileSync(pointerPath, 'utf8'));
+      assert.equal(opened.active_iteration, scenario.expected);
+      assert.equal(opened.pending_iteration.iteration_id, scenario.expected);
+      assert.deepEqual(opened.closed_iterations, pointer.closed_iterations);
+      assert.deepEqual(artifactByteSnapshot(archivedRoot), archivedBefore);
+      assert.ok(existsSync(path.join(artifactRoot, 'iterations', scenario.expected, 'iteration.json')));
+    } finally {
+      rmSync(artifactRoot, { recursive: true, force: true });
+    }
+  });
+}
+
+test('iteration open reserves file and dangling symlink names without overwriting them', (context) => {
+  const artifactRoot = initializedArtifactRoot('iteration-id-collisions');
+  try {
+    closeInitializedIteration(artifactRoot);
+    const file = path.join(artifactRoot, 'iterations', 'iter-0004');
+    const link = path.join(artifactRoot, 'iterations', 'iter-0008');
+    writeFileSync(file, 'retain this file\n');
+    try {
+      symlinkSync('missing-iteration', link);
+    } catch (error) {
+      if (['EPERM', 'EACCES', 'ENOTSUP'].includes(error.code)) {
+        context.skip(`symbolic links are unavailable: ${error.code}`);
+        return;
+      }
+      throw error;
+    }
+    const result = spawnSync(process.execPath, [
+      ITERATION_CLI, 'open', '--artifacts', artifactRoot, '--idea', 'Keep existing paths',
+    ], { cwd: ROOT, encoding: 'utf8' });
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    assert.equal(JSON.parse(readFileSync(path.join(artifactRoot, 'current-spec.json'))).active_iteration, 'iter-0009');
+    assert.equal(readFileSync(file, 'utf8'), 'retain this file\n');
+    assert.ok(lstatSync(link).isSymbolicLink());
+  } finally {
+    rmSync(artifactRoot, { recursive: true, force: true });
+  }
+});
+
+for (const reservedId of ['iter-9007199254740991', 'iter-99999999999999999999']) {
+  test(`iteration open rejects sequence exhaustion without mutation: ${reservedId}`, () => {
+    const artifactRoot = initializedArtifactRoot('iteration-id-exhausted');
+    try {
+      closeInitializedIteration(artifactRoot);
+      mkdirSync(path.join(artifactRoot, 'iterations', reservedId));
+      const before = artifactByteSnapshot(artifactRoot);
+      const result = spawnSync(process.execPath, [
+        ITERATION_CLI, 'open', '--artifacts', artifactRoot, '--idea', 'Do not round an unsafe sequence',
+      ], { cwd: ROOT, encoding: 'utf8' });
+      assert.notEqual(result.status, 0);
+      assert.match(`${result.stdout}${result.stderr}`, /sequence exhausted.*--iteration-id/u);
+      assert.deepEqual(artifactByteSnapshot(artifactRoot), before);
+    } finally {
+      rmSync(artifactRoot, { recursive: true, force: true });
+    }
+  });
+}
+
+test('concurrent default iteration opens create one short ID and reject pending retries', async () => {
+  const artifactRoot = initializedArtifactRoot('iteration-default-id-lock');
+  try {
+    closeInitializedIteration(artifactRoot);
+    const args = ['open', '--artifacts', artifactRoot, '--idea', 'Concurrent default iteration'];
+    const results = await Promise.all([iterationCliAsync(args), iterationCliAsync(args)]);
+    assert.equal(results.filter((result) => result.status === 0).length, 1);
+    const rejected = results.find((result) => result.status !== 0);
+    assert.match(`${rejected.stdout}${rejected.stderr}`, /open requires no pending_iteration/);
+    const pointer = JSON.parse(readFileSync(path.join(artifactRoot, 'current-spec.json')));
+    assert.equal(pointer.active_iteration, 'iter-0001');
+    assert.deepEqual(readdirSync(path.join(artifactRoot, 'iterations')).filter((name) => name.startsWith('iter-')), ['iter-0001']);
+    const retry = await iterationCliAsync(args);
+    assert.notEqual(retry.status, 0);
+    assert.match(`${retry.stdout}${retry.stderr}`, /open requires no pending_iteration/);
+  } finally {
+    rmSync(artifactRoot, { recursive: true, force: true });
+  }
 });
 
 test('iteration open rejects an effective spec pointer outside the artifact root', () => {

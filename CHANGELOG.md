@@ -6,6 +6,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.5.24] - 2026-09-20
+
+### Changed
+
+- Allocate short `iter-0001` sequence IDs for implicit iteration open and scope replacement, preserving initial and explicit IDs and historical artifact paths.
+- Include supplementary report locations and task-owned temporary workspace guidance in packaged planning and execution skills.
+
+### Fixed
+
+- Reserve iteration sequence names from files, symlinks, and current/closed records under the existing lifecycle locks.
+- Exclude untracked `.plan2agent/tmp` files from automatic change collection and managed root evidence from legacy workspace revisions, while retaining tracked and explicit changes.
+
 ## [0.5.23] - 2026-09-06
 
 ### Changed
@@ -367,7 +379,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Add package-runtime project initialization, managed provider assets, artifact validation, handoff, supervised execution, evaluation, and proposal workflows.
 - Ship canonical and generated integrations for Codex, Claude Code, and Gemini CLI.
 
-[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.5.23...HEAD
+[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.5.24...HEAD
+[0.5.24]: https://github.com/silbaram/plan2agent/compare/v0.5.23...v0.5.24
 [0.5.23]: https://github.com/silbaram/plan2agent/compare/v0.5.22...v0.5.23
 [0.5.22]: https://github.com/silbaram/plan2agent/compare/v0.5.21...v0.5.22
 [0.5.21]: https://github.com/silbaram/plan2agent/compare/v0.5.20...v0.5.21

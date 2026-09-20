@@ -70,6 +70,7 @@ Plan2Agent 문서는 사용자 흐름, CLI 사용법, 산출물 계약, 구현 �
 | Gate A-C 산출물 구조 이해하기 | [하네스 사용자 가이드](harness-guide.md) |
 | 짧은 아이디어 문서나 Radar handoff로 시작하기 | [진입 계약](entry-contract.md) |
 | 반복 구조와 변경분 task 흐름 이해하기 | [반복/고도화 개발 스펙](iteration-spec.md) |
+| 문서 이름·저장 위치·임시 자료 보관 규칙 정하기 | [산출물 이름과 디렉터리 규칙](artifact-naming-and-layout.md) |
 | adaptive 실행과 run lifecycle 이해하기 | [감독형 개발 실행 레퍼런스](supervised-execution.md) |
 | skill/subagent 구조를 수정하기 | [하네스 구현 기준](harness-spec.md) |
 | 승인·진행 문장을 평이하게 작성하기 | [사람에게 보이는 표현 작성 가이드](human-facing-writing-guide.md) |
@@ -86,6 +87,7 @@ Plan2Agent 문서는 사용자 흐름, CLI 사용법, 산출물 계약, 구현 �
 | `harness-guide.md` | 산출물/게이트 사용자 가이드 | Gate A-C 요약, 결정 원장, schema, evidence, 검증 (`p2a-harness` skill의 게이트 규칙 정본 링크 포함) |
 | `entry-contract.md` | 아이디어 문서 진입 계약 | entry 발견 우선순위, 검증, Radar 출처, 범위 확인 대화 |
 | `iteration-spec.md` | 반복 개발 구현 계약 | iteration layout, close/open, semantic diff, run tracking |
+| `artifact-naming-and-layout.md` | 신규 산출물 작성 규칙 | 기본 iteration ID 자동 할당, 정본·보조 증거·임시 환경의 위치, 보관과 기존 자료 적용 원칙; CLI와 agent 지침의 범위 구분 |
 | `supervised-execution.md` | 감독형 개발 실행 레퍼런스 | ready task 실행, 리뷰 패스 정책, monitor gate, planned checkpoint, retry recovery, proposal loop |
 | `harness-spec.md` | 하네스 구현 기준 | skills, subagents, mirror, 안전 정책 (`p2a-harness` skill을 게이트 규칙 정본으로 지정) |
 | `human-facing-writing-guide.md` | 사람용 표현 가이드 | 승인 화면의 3층 구조, Gate Markdown 요약, 비계약 task intent |

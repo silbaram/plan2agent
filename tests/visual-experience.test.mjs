@@ -1222,23 +1222,53 @@ describe('visual experience artifacts', () => {
     assert.deepEqual(classificationOnlyGraph.tasks.map((task) => task.targetArea), ['verification']);
   });
 
-  test('workspace revisions include ordinary top-level directories outside the artifact root', () => {
-    const root = mkdtempSync(path.join(tmpdir(), 'p2a-visual-workspace-revision-'));
-    try {
-      const artifactRoot = path.join(root, '.plan2agent', 'artifacts', 'reviewpane');
-      const applicationRunsDir = path.join(root, 'runs');
-      mkdirSync(artifactRoot, { recursive: true });
-      mkdirSync(applicationRunsDir, { recursive: true });
-      const applicationFile = path.join(applicationRunsDir, 'review-pane.js');
-      writeFileSync(applicationFile, 'export const label = "before";\n', 'utf8');
-      const before = workspaceRevisionSha256(root, [artifactRoot]);
-      writeFileSync(applicationFile, 'export const label = "after";\n', 'utf8');
-      const after = workspaceRevisionSha256(root, [artifactRoot]);
-      assert.notEqual(after, before);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
+  for (const directory of ['runs', 'evidence']) {
+    test(`workspace revisions include ordinary ${directory} directories outside the artifact root`, () => {
+      const root = mkdtempSync(path.join(tmpdir(), 'p2a-visual-workspace-revision-'));
+      try {
+        const artifactRoot = path.join(root, '.plan2agent', 'artifacts', 'reviewpane');
+        const applicationDir = path.join(root, directory);
+        mkdirSync(artifactRoot, { recursive: true });
+        mkdirSync(applicationDir, { recursive: true });
+        const applicationFile = path.join(applicationDir, 'review-pane.js');
+        writeFileSync(applicationFile, 'export const label = "before";\n', 'utf8');
+        const before = workspaceRevisionSha256(root, [artifactRoot]);
+        writeFileSync(applicationFile, 'export const label = "after";\n', 'utf8');
+        const after = workspaceRevisionSha256(root, [artifactRoot]);
+        assert.notEqual(after, before);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+  }
+
+  for (const legacy of [false, true]) {
+    test(`workspace revisions ignore managed evidence and tmp but retain source changes: ${legacy ? 'legacy' : 'standard'} root`, () => {
+      const root = mkdtempSync(path.join(tmpdir(), 'p2a-managed-evidence-revision-'));
+      try {
+        const artifactRoot = legacy ? root : path.join(root, '.plan2agent', 'artifacts', 'sample');
+        const evidenceDir = path.join(artifactRoot, 'evidence', 'iter-0001', 'run-test');
+        const temporaryDir = path.join(root, '.plan2agent', 'tmp', 'install-test');
+        const sourceDir = path.join(root, 'src', 'evidence');
+        mkdirSync(sourceDir, { recursive: true });
+        const sourceFile = path.join(sourceDir, 'app.js');
+        writeFileSync(sourceFile, 'export const value = 1;\n');
+        mkdirSync(artifactRoot, { recursive: true });
+        const before = workspaceRevisionSha256(root, [artifactRoot]);
+        mkdirSync(evidenceDir, { recursive: true });
+        mkdirSync(temporaryDir, { recursive: true });
+        writeFileSync(path.join(evidenceDir, 'report.md'), '# Verified\n');
+        writeFileSync(path.join(temporaryDir, 'output.json'), '{}\n');
+        assert.equal(workspaceRevisionSha256(root, [artifactRoot]), before);
+        rmSync(temporaryDir, { recursive: true });
+        assert.equal(workspaceRevisionSha256(root, [artifactRoot]), before);
+        writeFileSync(sourceFile, 'export const value = 2;\n');
+        assert.notEqual(workspaceRevisionSha256(root, [artifactRoot]), before);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+  }
 
   test('canonical workspace inference resolves artifact control-directory symlink aliases', (context) => {
     const root = mkdtempSync(path.join(tmpdir(), 'p2a-canonical-workspace-symlink-'));

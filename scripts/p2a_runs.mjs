@@ -2706,6 +2706,7 @@ function generatedPathMatcher(workspacePath, config) {
   }
   const generatedPaths = [
     '.plan2agent/artifacts',
+    '.plan2agent/tmp',
     ...configuredPaths,
   ].map((candidate) => normalizedWorkspaceRelativePath(workspacePath, candidate, { checkRealPath: false }));
   if (generatedPaths.some((candidate) => /[*?\[\]]/u.test(candidate))) {

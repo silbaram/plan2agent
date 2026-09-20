@@ -124,13 +124,16 @@ BuildLore는 iteration state machine 안에서 자동 실행되지 않는다. �
 
 ### 2-3. 레이아웃은 루트 인덱스 + current-spec + 반복별 게이트다
 
+다음 iteration의 기본 이름과 보조 보고서·임시 환경의 작성 규칙은 [산출물 이름과 디렉터리 규칙](artifact-naming-and-layout.md)을 따른다. `open`/`replace-scope`에서 ID를 생략하면 `iter-0001` 계열을 할당한다. 첫 `init` 기본값과 명시적 ID, 기존 정본 경로는 유지하며 임의 자료의 자동 청소는 제공하지 않는다.
+
 반복 개발 산출물은 `.plan2agent/artifacts/<project>/` 아래에 다음 구조로 둔다.
 
 ```text
 .plan2agent/artifacts/<project>/
   status.md                         # generated 반복 인덱스 view
   decisions.jsonl                  # append-only Gate/scope/constitution decision authority
-  current-spec.json                 # 현재 유효 spec 조합본, baseline-aware 기획 컨텍스트
+  current-spec.json                 # active iteration과 planning 상태 포인터
+  current-development-contract.json # 현재 실행 계약
   iterations/
     <iter-id>/
       gate-a-intake/

@@ -1485,7 +1485,7 @@ test('a blocked run records the bounded user decision and returns the task to re
       'utf8',
     ));
     const replacementIterationId = replacementCurrentSpec.active_iteration;
-    assert.notEqual(replacementIterationId, iterationId);
+    assert.equal(replacementIterationId, 'iter-0001');
     assert.equal(
       replacementCurrentSpec.pending_iteration?.replacement?.replaces_iteration,
       iterationId,
@@ -4057,10 +4057,10 @@ test('next skips historical composition while explicit administration can still 
       join(rootArtifact, 'current-spec.json'),
       'utf8',
     ));
-    assert.equal(currentSpec.active_iteration, 'v3');
+    assert.equal(currentSpec.active_iteration, 'iter-0001');
     assert.equal(currentSpec.pending_iteration?.baseline_iteration, 'v2');
     const nextIntake = JSON.parse(readFileSync(
-      join(rootArtifact, 'iterations', 'v3', 'gate-a-intake', 'intake.json'),
+      join(rootArtifact, 'iterations', 'iter-0001', 'gate-a-intake', 'intake.json'),
       'utf8',
     ));
     assert.match(nextIntake.summary, /^This iteration will make only the following change:/u);
@@ -4070,7 +4070,7 @@ test('next skips historical composition while explicit administration can still 
     );
     assert.match(
       currentSpec.pending_iteration?.baseline_effective_spec_ref ?? '',
-      /^iterations\/v3\/baseline\/gate-b-spec\/spec\.json$/,
+      /^iterations\/iter-0001\/baseline\/gate-b-spec\/spec\.json$/,
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
