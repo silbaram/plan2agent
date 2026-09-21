@@ -13,7 +13,7 @@
 
 ## 30초 만에 설치하기
 
-Plan2Agent를 사용하려면 Node.js 22 이상이 필요합니다.
+Plan2Agent를 사용하려면 Node.js 22.20.0 이상이 필요합니다.
 
 ```bash
 npm install -g plan2agent
@@ -105,6 +105,10 @@ system을 대체하지 않습니다.
     eval/
     proposals/
 ```
+
+외부 Agent Skill을 설치하면 팀이 추적하는 `p2a-skills.lock.json`은 프로젝트 root에 두고,
+검증된 copy는 `.agents/skills/`와 선택한 경우 `.claude/skills/`에 둡니다. ignored
+`.plan2agent/` manifest에는 로컬 설치 상태만 기록합니다.
 
 승인·철회 상태는 `decisions.jsonl`이 정본이고 기존 JSON `approval_audit`은 호환 사본으로
 유지됩니다. 모든 artifact는 패키지에 포함된 schema로 검증됩니다. 생성된 Markdown은 사람이
@@ -202,6 +206,33 @@ p2a buildlore context --prompt "다음 구현 계획을 준비해"
 sync는 지식 저장소를 commit하거나 push하지 않습니다. BuildLore publish는 별도의 검토 가능한
 Git workflow입니다.
 
+### 6. 프로젝트 단위 외부 Agent Skills 관리
+
+Plan2Agent는 고정된 `skills@1.7.0` package를 격리된 source adapter로 사용합니다. Git 또는
+프로젝트 내부 local skill을 먼저 검토한 뒤, P2A가 regular file만 선택한 provider 경로에 복사합니다.
+
+```bash
+p2a skills source vercel-labs/agent-skills --list
+p2a skills add vercel-labs/agent-skills \
+  --skill web-design-guidelines \
+  --tools codex,claude,gemini \
+  --dry-run
+p2a skills add vercel-labs/agent-skills \
+  --skill web-design-guidelines \
+  --tools codex,claude,gemini \
+  --apply --expect-plan <dry-run-plan-sha256>
+p2a skills list
+p2a doctor --dev --strict
+```
+
+root의 추적 가능한 `p2a-skills.lock.json`은 Git commit과 content/file hash를 고정합니다.
+로컬 manifest는 별도 `external-skill:<name>` 소유권을 기록하므로 P2A core asset은 계속
+`init`, `update`, `upgrade`가 관리합니다. Codex와 Gemini는 `.agents/skills` copy 하나를 공유하고,
+Claude를 선택한 경우에만 `.claude/skills` copy를 추가합니다. 설치 copy가 수정되면 update와
+remove가 중단되며 `p2a skills sync`는 누락된 copy만 복원합니다. 모든 apply에는 검토한 `--expect-plan` 해시가 필요합니다. 외부 skill instruction은 agent
+권한에 영향을 주므로 apply 전에 검토해야 합니다. update, 복구, 신뢰 경계는
+[외부 Agent Skills 관리](docs/external-skills.md)를 참고하세요.
+
 ## CLI 한눈에 보기
 
 Plan2Agent는 하나의 `p2a` entrypoint를 설치합니다.
@@ -226,6 +257,7 @@ Plan2Agent는 하나의 `p2a` entrypoint를 설치합니다.
 | `p2a eval` | 실행 증거를 grade, compare, analyze, generate, summarize합니다. |
 | `p2a proposals` | 개선 proposal을 검토하거나 회고 GitHub 이슈를 preview하고 명시적으로 발행합니다. |
 | `p2a buildlore` | 선택적 BuildLore 지식을 projection, 검사, 검색, 조회합니다. |
+| `p2a skills` | 외부 Agent Skill을 미리 보고 설치·고정·갱신·복원·제거합니다. |
 
 최상위 명령은 `p2a --help`로 확인할 수 있습니다. 자세한 option과 예시는
 [CLI 레퍼런스](docs/cli-reference.md)를 참고하세요.
@@ -287,7 +319,7 @@ session에서 실행되며 Plan2Agent는 provider API를 직접 호출하지 않
 
 ## Plan2Agent 개발하기
 
-저장소를 clone하고 Node.js 22 이상을 사용합니다. 개발 중에는 핵심 test와 provider parity를
+저장소를 clone하고 Node.js 22.20.0 이상을 사용합니다. 개발 중에는 핵심 test와 provider parity를
 확인합니다.
 
 ```bash

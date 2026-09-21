@@ -6,7 +6,7 @@
 
 - version은 [Semantic Versioning](https://semver.org/)을 따른다.
 - 사용자에게 보이는 변경은 [CHANGELOG](../CHANGELOG.md)의 `Unreleased`에 먼저 기록한다.
-- Node.js는 공식 지원 상태인 major만 지원한다. 현재 최소 version은 Node.js 22이며 CI는 Node.js 24에서 전체 회귀를, Node.js 22와 26에서 package·CLI 호환성 smoke를 실행한다.
+- Node.js는 공식 지원 상태인 major만 지원한다. 현재 최소 version은 upstream `skills@1.7.0` 계약에 맞춘 Node.js 22.20.0이며 CI는 Node.js 24에서 전체 회귀를, Node.js 22와 26에서 package·CLI 호환성 smoke를 실행한다.
 - npm package와 GitHub Release는 동일한 `package.json` version을 사용한다.
 - release tag는 `v<package-version>` 형식의 annotated tag다.
 

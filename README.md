@@ -13,7 +13,7 @@ that change that result, and let it guide planning, implementation, recovery, an
 
 ## Install in 30 seconds
 
-Plan2Agent requires Node.js 22 or newer.
+Plan2Agent requires Node.js 22.20.0 or newer.
 
 ```bash
 npm install -g plan2agent
@@ -106,6 +106,10 @@ Planning and execution state stays local to the project:
     eval/
     proposals/
 ```
+
+When external Agent Skills are installed, the team-tracked `p2a-skills.lock.json` stays at the
+project root while validated copies live under `.agents/skills/` and, when selected,
+`.claude/skills/`. The ignored `.plan2agent/` manifest records only the local installation state.
 
 `decisions.jsonl` is the source of truth for recorded approvals and revocations; the existing JSON
 approval audits remain compatible copies. All artifacts are validated against schemas shipped with the package.
@@ -232,6 +236,33 @@ p2a buildlore context --prompt "Prepare the next implementation plan"
 Synchronization does not commit or push knowledge. BuildLore publication remains a separate,
 reviewable Git workflow.
 
+### 6. Manage project-scoped external Agent Skills
+
+Plan2Agent uses the pinned `skills@1.7.0` package as an isolated source adapter. Preview a Git or
+project-local skill before P2A copies validated regular files into the selected provider paths:
+
+```bash
+p2a skills source vercel-labs/agent-skills --list
+p2a skills add vercel-labs/agent-skills \
+  --skill web-design-guidelines \
+  --tools codex,claude,gemini \
+  --dry-run
+p2a skills add vercel-labs/agent-skills \
+  --skill web-design-guidelines \
+  --tools codex,claude,gemini \
+  --apply --expect-plan <dry-run-plan-sha256>
+p2a skills list
+p2a doctor --dev --strict
+```
+
+The tracked root `p2a-skills.lock.json` pins Git revisions and content/file hashes. The local
+manifest records separate `external-skill:<name>` ownership, so core P2A assets remain owned by
+`init`, `update`, and `upgrade`. Codex and Gemini share one `.agents/skills` copy; Claude receives
+an additional `.claude/skills` copy only when selected. Update and removal stop on local drift, and
+`p2a skills sync` restores missing copies while preserving modified or extra files. Every apply requires the reviewed `--expect-plan` digest. Review external skill instructions before applying
+them because they influence an agent with that agent's permissions. See the
+[External Agent Skills guide](docs/external-skills.md) for update, recovery, and trust boundaries.
+
 ## CLI at a glance
 
 Plan2Agent installs one `p2a` entrypoint:
@@ -256,6 +287,7 @@ Plan2Agent installs one `p2a` entrypoint:
 | `p2a eval` | Grade, compare, analyze, generate, and summarize execution evidence. |
 | `p2a proposals` | Mine and review proposals, or preview and explicitly publish a retrospective GitHub issue. |
 | `p2a buildlore` | Project, check, search, and retrieve optional BuildLore knowledge. |
+| `p2a skills` | Preview, install, pin, update, restore, and remove external Agent Skills. |
 
 Run `p2a --help` for the top-level command surface and use the
 [CLI Reference](docs/cli-reference.md) for detailed options and examples.
@@ -316,7 +348,7 @@ services.
 
 ## Developing Plan2Agent
 
-Clone the repository and use Node.js 22 or newer. During development, run the core suite and the
+Clone the repository and use Node.js 22.20.0 or newer. During development, run the core suite and the
 provider parity check:
 
 ```bash

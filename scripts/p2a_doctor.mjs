@@ -30,6 +30,7 @@ import {
   discoverEntryDocument,
   discoverFeatureRadarPreflightRuns,
 } from './p2a_radar_preflight.mjs';
+import { inspectExternalSkillsState } from './p2a_external_skills.mjs';
 
 const RUNTIME_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -1129,6 +1130,18 @@ function buildDevReport(targetRoot, manifest, configResult) {
   checks.push(...devProviderAssetChecks(targetRoot, targets));
   checks.push(...capabilityReport.checks);
   checks.push(managedFilesIntegrityCheck(targetRoot, manifest));
+  const externalSkills = inspectExternalSkillsState(targetRoot, manifest);
+  checks.push(check(
+    'dev_external_skills_integrity',
+    'External skills integrity',
+    externalSkills.status,
+    externalSkills.status === 'pass'
+      ? externalSkills.total
+        ? `${externalSkills.checked} external skill(s) match the team lock and manifest ownership`
+        : 'no external skills are installed'
+      : `${externalSkills.issues.length} external skill integrity issue(s) require repair or review`,
+    externalSkills,
+  ));
 
   const manifestAiToolFiles = stringArrayValue(manifest?.aiToolFiles).map(normalizePath);
   if (manifestAiToolFiles.length) {
@@ -1384,7 +1397,12 @@ function nextActions(status, checks) {
   if (checks.some((item) => item.id === 'run_evidence_orphans' && item.status === 'warn')) {
     actions.push('Run p2a runs gc --dry-run to review orphan run evidence, then run p2a runs gc to remove it. Persistent mode also requires --force.');
   }
-  if (checks.some((item) => item.id.startsWith('dev_') && item.status === 'fail')) {
+  if (checks.some((item) => item.id === 'dev_external_skills_integrity' && item.status === 'fail')) {
+    actions.push('Run p2a skills sync --dry-run to review external skill repair, then apply only when the pinned sources reproduce the team lock.');
+  }
+  if (checks.some((item) => item.id.startsWith('dev_')
+    && item.id !== 'dev_external_skills_integrity'
+    && item.status === 'fail')) {
     actions.push('Regenerate or upgrade AI tool assets for the selected provider targets, then rerun p2a_doctor --dev.');
   }
   if (checks.some((item) => item.id === 'dev_provider_capabilities' && item.status === 'warn')) {

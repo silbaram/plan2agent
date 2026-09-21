@@ -16,6 +16,7 @@ Plan2Agent CLI는 기획 산출물 검증, 승인된 task graph 실행, agent ru
 | `p2a shape` | Gate ② constitution 상태, legacy style migration, 인용 승인 기록을 관리한다. |
 | `p2a iteration`, `p2a tasks`, `p2a runs`, `p2a execute` | 반복·task·run 실행 흐름을 관리한다. |
 | `p2a validate`, `p2a eval`, `p2a buildlore`, `p2a proposals` | 산출물 검증, 평가, 장기 지식, 개선 제안을 관리한다. |
+| `p2a skills` | 외부 Agent Skill source를 조회하고 project-scoped copy를 고정·갱신·복원·제거한다. |
 | `p2a doctor`, `p2a enhance`, `p2a update` | 프로젝트 상태를 진단하고 provider/config 자산을 관리한다. |
 | `p2a handoff` | 승인된 산출물을 별도 대상 프로젝트로 인계한다. |
 
@@ -49,7 +50,36 @@ p2a next
 p2a next --json --contract v2
 ```
 
-`p2a`의 하위 명령은 `decide`, `decisions`, `shape`, `eval`, `buildlore`, `execute`, `tasks`, `runs`, `iteration`, `proposals`, `validate`, `doctor`, `enhance`, `update`, `upgrade`, `handoff`다. `--target`을 생략하면 현재 작업 디렉터리를 대상으로 삼는다.
+`p2a`의 하위 명령은 `decide`, `decisions`, `shape`, `eval`, `buildlore`, `skills`, `execute`, `tasks`, `runs`, `iteration`, `proposals`, `validate`, `doctor`, `enhance`, `update`, `upgrade`, `handoff`다. `--target`을 생략하면 현재 작업 디렉터리를 대상으로 삼는다.
+
+### 외부 Agent Skills — `p2a skills`
+
+고정된 `skills@1.7.0` adapter로 GitHub/GitLab/Git URL 또는 프로젝트 내부 local source를 격리된 staging에 복사하고 검증한다. source 조회와 dry-run은 target을 바꾸지 않는다. write 명령은 `--dry-run`과 `--apply` 중 하나를 반드시 명시하며, apply에는 검토한 `--expect-plan` 해시가 필요하다.
+
+```bash
+p2a skills source vercel-labs/agent-skills --list --json
+
+p2a skills add vercel-labs/agent-skills \
+  --skill web-design-guidelines \
+  --tools codex,claude,gemini \
+  --dry-run
+p2a skills add vercel-labs/agent-skills \
+  --skill web-design-guidelines \
+  --tools codex,claude,gemini \
+  --apply --expect-plan <dry-run-plan-sha256>
+
+p2a skills list --json
+p2a skills update web-design-guidelines --dry-run
+p2a skills update web-design-guidelines --apply --expect-plan <dry-run-plan-sha256>
+p2a skills sync --dry-run
+p2a skills sync --apply --expect-plan <dry-run-plan-sha256>
+p2a skills remove web-design-guidelines --dry-run
+p2a skills remove web-design-guidelines --apply --expect-plan <dry-run-plan-sha256>
+```
+
+Codex와 Gemini는 `.agents/skills/<name>`의 `agents-shared` copy 하나를 공유한다. Claude를 선택하면 `.claude/skills/<name>`에 같은 바이트를 추가한다. root `p2a-skills.lock.json`은 source, resolved commit, content/file hash를 팀 선언으로 기록하고 manifest는 `external-skill:<name>` owner를 로컬 설치 상태로 기록한다. P2A core managed path와 기존 비소유 경로는 덮어쓰지 않는다.
+
+설치 파일이 수정되거나 추가되면 update/remove/sync는 중단한다. `sync`는 고정 source가 같은 digest를 재현할 때 누락된 provider copy만 복구한다. 중단된 transaction 복구는 `skills recover --dry-run`과 해시를 전달한 `--apply`로 명시적으로 실행한다. `p2a doctor --dev --strict`가 lock·manifest·filesystem의 세 방향 일치를 검사한다. 세부 trust boundary와 troubleshooting은 [외부 Agent Skills 관리](external-skills.md)를 본다.
 
 ### BuildLore 연동 — `p2a buildlore`
 

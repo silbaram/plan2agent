@@ -25,7 +25,9 @@ function parseNpmPackResult(stdout) {
 test('package metadata exposes the p2a global CLI and required runtime assets', () => {
   const packageJson = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   assert.equal(packageJson.bin.p2a, 'scripts/p2a.mjs');
-  assert.equal(packageJson.engines.node, '>=22');
+  assert.equal(packageJson.engines.node, '>=22.20.0');
+  assert.equal(packageJson.dependencies.skills, '1.7.0');
+  assert.equal(packageJson.dependencies.yaml, '2.8.3');
   assert.equal(packageJson.license, 'MIT');
   assert.ok(packageJson.keywords.includes('spec-driven-development'));
   assert.equal(packageJson.repository.url, 'git+https://github.com/silbaram/plan2agent.git');
@@ -318,6 +320,10 @@ test('package CLI help keeps scaffold hidden and uses installed command names', 
   assert.equal(doctorHelp.status, 0, formatCommandResult(doctorHelp));
   assert.match(doctorHelp.stdout, /p2a doctor/);
   assert.doesNotMatch(doctorHelp.stdout, /node scripts\/p2a_doctor\.mjs/);
+  const skillsHelp = runP2aFrom(ROOT, ['skills', '--help']);
+  assert.equal(skillsHelp.status, 0, formatCommandResult(skillsHelp));
+  assert.match(skillsHelp.stdout, /p2a skills source/);
+  assert.match(skillsHelp.stdout, /p2a skills sync/);
 
   for (const flag of ['--version', '-v']) {
     const version = runP2aFrom(ROOT, [flag]);
@@ -345,6 +351,8 @@ test('npm pack dry run includes the global CLI runtime', () => {
       'scripts/p2a_decisions.mjs',
       'scripts/p2a_handoff.mjs',
       'scripts/p2a_upgrade.mjs',
+      'scripts/p2a_skills.mjs',
+      'scripts/p2a_external_skills.mjs',
       'scripts/p2a_buildlore.mjs',
       'scripts/p2a_context.mjs',
       'scripts/p2a_continuations.mjs',
@@ -353,6 +361,7 @@ test('npm pack dry run includes the global CLI runtime', () => {
       'schemas/next.schema.json',
       'schemas/decisions.schema.json',
       'schemas/context-packet.schema.json',
+      'schemas/external-skills-lock.schema.json',
       '.agents/skills/p2a-next/SKILL.md',
     ]) {
       assert.ok(files.has(requiredPath), `${requiredPath} must be present in npm pack output`);
@@ -438,6 +447,32 @@ test('the packed p2a runtime exposes its bin shim and supports core commands wit
     assert.equal(manifest.provenance.packageVersion, PACKAGE_VERSION);
     assert.equal('toolkitRoot' in manifest.provenance, false);
 
+    const packedSkillRoot = path.join(targetRoot, 'external-source', 'skills', 'packed-skill');
+    mkdirSync(packedSkillRoot, { recursive: true });
+    writeFileSync(
+      path.join(packedSkillRoot, 'SKILL.md'),
+      '---\nname: packed-skill\ndescription: Packed runtime external skill fixture.\n---\n\n# Packed skill\n',
+      'utf8',
+    );
+    const packedSkillPreview = runPacked(targetRoot, [
+      'skills', 'add', './external-source', '--skill', 'packed-skill', '--dry-run', '--json',
+    ]);
+    assert.equal(packedSkillPreview.status, 0, formatCommandResult(packedSkillPreview));
+    assert.equal(JSON.parse(packedSkillPreview.stdout).applied, false);
+    assert.equal(existsSync(path.join(targetRoot, 'p2a-skills.lock.json')), false);
+    const packedSkillApply = runPacked(targetRoot, [
+      'skills', 'add', './external-source', '--skill', 'packed-skill', '--apply', '--json',
+      '--expect-plan', JSON.parse(packedSkillPreview.stdout).planDigest,
+    ]);
+    assert.equal(packedSkillApply.status, 0, formatCommandResult(packedSkillApply));
+    assert.equal(JSON.parse(packedSkillApply.stdout).applied, true);
+    assert.equal(existsSync(path.join(targetRoot, '.agents', 'skills', 'packed-skill', 'SKILL.md')), true);
+    const packedSkillDoctor = runPacked(targetRoot, ['doctor', '--dev', '--json']);
+    assert.equal(packedSkillDoctor.status, 0, formatCommandResult(packedSkillDoctor));
+    assert.equal(
+      JSON.parse(packedSkillDoctor.stdout).checks.find((check) => check.id === 'dev_external_skills_integrity').status,
+      'pass',
+    );
     const packageDoctor = runPacked(targetRoot, ['doctor', '--json']);
     assert.equal(packageDoctor.status, 0, formatCommandResult(packageDoctor));
     const packageDoctorReport = JSON.parse(packageDoctor.stdout);
@@ -459,6 +494,8 @@ test('the packed p2a runtime exposes its bin shim and supports core commands wit
     const updatedPackageManifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
     assert.equal(updatedPackageManifest.provenance.packageVersion, PACKAGE_VERSION);
     assert.equal('toolkitRoot' in updatedPackageManifest.provenance, false);
+    assert.deepEqual(updatedPackageManifest.externalSkills.map((skill) => skill.name), ['packed-skill']);
+    assert.equal(existsSync(path.join(targetRoot, '.agents', 'skills', 'packed-skill', 'SKILL.md')), true);
 
     updatedPackageManifest.provenance.packageVersion = '0.0.0-test';
     writeFileSync(manifestPath, `${JSON.stringify(updatedPackageManifest, null, 2)}\n`, 'utf8');
@@ -487,6 +524,16 @@ test('the packed p2a runtime exposes its bin shim and supports core commands wit
     const upgradedPackageManifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
     assert.equal(upgradedPackageManifest.provenance.packageVersion, PACKAGE_VERSION);
     assert.equal('toolkitRoot' in upgradedPackageManifest.provenance, false);
+    assert.deepEqual(upgradedPackageManifest.externalSkills.map((skill) => skill.name), ['packed-skill']);
+    assert.equal(existsSync(path.join(targetRoot, '.agents', 'skills', 'packed-skill', 'SKILL.md')), true);
+    const packedRemovePreview = runPacked(targetRoot, ['skills', 'remove', 'packed-skill', '--dry-run', '--json']);
+    assert.equal(packedRemovePreview.status, 0, formatCommandResult(packedRemovePreview));
+    const packedSkillRemove = runPacked(targetRoot, [
+      'skills', 'remove', 'packed-skill', '--apply', '--json',
+      '--expect-plan', JSON.parse(packedRemovePreview.stdout).planDigest,
+    ]);
+    assert.equal(packedSkillRemove.status, 0, formatCommandResult(packedSkillRemove));
+    assert.equal(existsSync(path.join(targetRoot, '.agents', 'skills', 'packed-skill')), false);
 
     const nestedRoot = path.join(targetRoot, 'src', 'nested');
     mkdirSync(nestedRoot, { recursive: true });

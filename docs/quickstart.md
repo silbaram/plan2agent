@@ -58,6 +58,17 @@ p2a next --details
 p2a doctor --dev
 ```
 
+프로젝트에 외부 Agent Skill을 추가할 때는 직접 복사하거나 `npx skills add`를 실행하지 않고 P2A의 source 조회와 dry-run을 사용한다.
+
+```bash
+p2a skills source <owner/repo> --list
+p2a skills add <owner/repo> --skill <name> --dry-run
+p2a skills add <owner/repo> --skill <name> --apply --expect-plan <dry-run-plan-sha256>
+p2a doctor --dev --strict
+```
+
+적용 전 `SKILL.md`와 포함 파일을 검토한다. 자세한 lock, provider path, update/remove/sync 규칙은 [외부 Agent Skills 관리](external-skills.md)를 본다.
+
 ## 개발이 끝나면
 
 P2A가 변경 결과와 통과한 검증을 요약하고 다음 선택을 제시한다.
@@ -78,6 +89,7 @@ P2A는 작업 크기와 위험에 따라 Direct/Planned 실행 또는 Orchestrat
 
 - [Adaptive Harness 사용자 흐름](adaptive-harness-user-flow.md) — Gate 승인부터 실행 방식 선택, context routing, 검증·종료까지의 전체 여정
 - [CLI 사용자 가이드](cli-reference.md) — 명령별 사용법, handoff와 proposal 흐름
+- [외부 Agent Skills 관리](external-skills.md) — 외부 스킬 source, team lock, 설치·갱신·복원·제거
 - [하네스 사용자 가이드](harness-guide.md) — Gate A-C, 산출물 schema, 검증과 문제 해결
 - [반복/고도화 개발 스펙](iteration-spec.md) — 반복 구조, close/open, 변경분 task 계약
 - [감독형 개발 실행 레퍼런스](supervised-execution.md) — ready task 실행, monitor gate, planned checkpoint, retry recovery

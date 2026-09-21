@@ -6,6 +6,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- Add project-scoped `p2a skills` source, add, list, update, remove, and sync commands backed by the pinned `skills@1.7.0` adapter, a tracked root lock, provider projections, drift-aware doctor checks, and rollback recovery.
+
+### Changed
+
+- Require Node.js 22.20.0 or newer to match the pinned upstream skills runtime.
+- Require a reviewed plan digest for external skills apply; keep sync and read-only commands from discarding local edits or recovering interrupted writes implicitly.
+
+### Fixed
+
+- Validate remote skill copies against immutable Git trees, reject case-fold collisions, protect core/external ownership in both directions, and journal provider preparation before any copies.
+- Install runtime dependencies before all CI test jobs.
+- Bind recovery plans to current files and metadata, preserve manifest-only ownership, and enforce external ownership during enhancement and clean-clone initialization.
+- Resolve annotated tags to commits and use deterministic raw Git checkout bytes across line-ending settings.
+- Preserve external skill ownership and inventory during handoff, and serialize existing-target handoffs with skill transactions.
+- Keep skill hashes and review plans stable across process locales, diagnose orphan and duplicate owners, and restore pinned `git://` sources correctly.
+
 ## [0.5.24] - 2026-09-20
 
 ### Changed
