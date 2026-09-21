@@ -21,6 +21,7 @@ Plan2Agent 문서는 사용자 흐름, CLI 사용법, 산출물 계약, 구현 �
 | agent 실행 결과 기록 | `p2a runs` | 현재 run 상세와 `runs/run-index.json`의 제한 회고 집계 |
 | 실행 회고 개선 후보 만들기 | `p2a proposals` | `proposals/<proposalId>.json`와 review/curation/approval artifact |
 | 장기 지식 projection·검색 | `p2a buildlore` | 별도 `knowledge/` Git 저장소의 project-scoped source/wiki |
+| 외부 Agent Skill 설치·고정·복원 | `p2a skills` | root team lock과 provider별 regular-file copy |
 
 ## 추천 읽기 순서
 
@@ -54,10 +55,13 @@ Plan2Agent 문서는 사용자 흐름, CLI 사용법, 산출물 계약, 구현 �
 10. [릴리스 절차](releasing.md)<br>
    npm package, Git tag, GitHub Release를 같은 version과 source commit으로 게시할 때 본다.
 
-11. [실사용 검증 체크리스트](dogfooding-checklist.md)<br>
+11. [외부 Agent Skills 관리](external-skills.md)<br>
+   Git/local source의 표준 스킬을 조회하고 dry-run, 적용, 업데이트, 복원, 제거할 때 본다.
+
+12. [실사용 검증 체크리스트](dogfooding-checklist.md)<br>
    adaptive 실행 모드, 절차 비용, 승인 후 자율 완료율과 게이트 가치를 실제 프로젝트에서 측정할 때 본다.
 
-12. [승인된 계약 기반 자율 개발 개선안](gate-driven-adaptive-execution-proposal.md)<br>
+13. [승인된 계약 기반 자율 개발 개선안](gate-driven-adaptive-execution-proposal.md)<br>
    사용자가 기획을 승인하고 하네스가 검증한 뒤, AI가 규칙 안에서 구현·검증을 자율 완수하도록 전환하는 제안이다.
 
 ## 목적별 바로가기
@@ -67,6 +71,7 @@ Plan2Agent 문서는 사용자 흐름, CLI 사용법, 산출물 계약, 구현 �
 | 제품을 처음 이해하고 바로 써보기 | [Quickstart](quickstart.md) |
 | Gate 승인부터 adaptive 개발 종료까지 전체 흐름 보기 | [Adaptive Harness 사용자 흐름](adaptive-harness-user-flow.md) |
 | 명령어를 찾아 실행하기 | [CLI 사용자 가이드](cli-reference.md) |
+| 외부 Agent Skill을 프로젝트에 안전하게 설치하기 | [외부 Agent Skills 관리](external-skills.md) |
 | Gate A-C 산출물 구조 이해하기 | [하네스 사용자 가이드](harness-guide.md) |
 | 짧은 아이디어 문서나 Radar handoff로 시작하기 | [진입 계약](entry-contract.md) |
 | 반복 구조와 변경분 task 흐름 이해하기 | [반복/고도화 개발 스펙](iteration-spec.md) |
@@ -92,6 +97,7 @@ Plan2Agent 문서는 사용자 흐름, CLI 사용법, 산출물 계약, 구현 �
 | `harness-spec.md` | 하네스 구현 기준 | skills, subagents, mirror, 안전 정책 (`p2a-harness` skill을 게이트 규칙 정본으로 지정) |
 | `human-facing-writing-guide.md` | 사람용 표현 가이드 | 승인 화면의 3층 구조, Gate Markdown 요약, 비계약 task intent |
 | `releasing.md` | 릴리스 운영 checklist | Node 지원 정책, CHANGELOG, npm publish, Git tag, GitHub Release, smoke test |
+| `external-skills.md` | 외부 Agent Skills 사용자 가이드 | upstream adapter, team lock, ownership, dry-run/apply, update/remove/sync, 신뢰 경계 |
 | `dogfooding-checklist.md` | 실사용 검증 체크리스트 | adaptive 모드 선택, 절차 비용, 사용자 개입, 게이트·검증 evidence의 실효성 측정 |
 | `gate-driven-adaptive-execution-proposal.md` | 설계 제안 | 사용자 승인·하네스 검증·AI 자율 개발의 권한 경계, 선택형 task, UI 검증과 단계적 migration |
 

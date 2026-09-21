@@ -1,6 +1,7 @@
 import './constitution.test.mjs';
 import './decisions.test.mjs';
 import './doctor.test.mjs';
+import './external-skills.test.mjs';
 import './context-audit.test.mjs';
 import './context-routes.test.mjs';
 import './context-packet.test.mjs';

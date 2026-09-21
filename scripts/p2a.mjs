@@ -48,6 +48,7 @@ const TOOLKIT_COMMANDS = new Map([
   ['enhance', { script: 'p2a_handoff.mjs', forwardsCommand: true, defaultTargetWhenEmbedded: true }],
   ['update', { script: 'p2a_handoff.mjs', forwardsCommand: true, defaultTargetWhenEmbedded: true }],
   ['upgrade', { script: 'p2a_upgrade.mjs', forwardsCommand: true, defaultTargetWhenEmbedded: true }],
+  ['skills', { script: 'p2a_skills.mjs', forwardsCommand: true, defaultTargetWhenEmbedded: true }],
   ['handoff', { script: 'p2a_handoff.mjs', forwardsCommand: false, defaultTargetWhenEmbedded: false }],
 ]);
 
@@ -63,6 +64,7 @@ function usage() {
     '  p2a doctor [--target <dir>] [--dev|--context] [--json] [--strict]',
     '  p2a update [--target <dir>] [--dry-run|--apply]',
     '  p2a upgrade [--target <dir>] (--dry-run|--apply)',
+    '  p2a skills <source|add|list|update|remove|sync> [options]',
     '  p2a enhance <capability> [--target <dir>] [--dry-run] [--overwrite]',
     '  p2a eval <grade|compare|analyze|generate|digest> [options]',
     '  p2a buildlore <status|sync|check|search|context|compile|query> [options]',
@@ -159,6 +161,11 @@ function withDefaultTarget(args) {
 
 function withDefaultToolkitTarget(command, args) {
   if (hasFlag(args, '--target') || hasFlag(args, '--help') || hasFlag(args, '-h')) return args;
+  if (command === 'skills') {
+    return args.length > 1
+      ? [args[0], args[1], '--target', P2A_PATHS.projectRoot, ...args.slice(2)]
+      : args;
+  }
   if (command === 'enhance' && args.length > 1 && !args[1].startsWith('-')) {
     return [args[0], args[1], '--target', P2A_PATHS.projectRoot, ...args.slice(2)];
   }

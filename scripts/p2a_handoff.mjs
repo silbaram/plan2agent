@@ -538,6 +538,49 @@ function normalizeManagedFileRecords(records) {
   return [...recordsByPath.values()].sort((left, right) => left.path.localeCompare(right.path));
 }
 
+function assertExternalSkillPlanOwnership(plan, manifest, targetRoot) {
+  if (existsSync(path.join(targetRoot, '.plan2agent', 'tmp', 'external-skills-transaction.json'))) {
+    throw new Error('external skills transaction requires p2a skills recover before core changes');
+  }
+  const protectedPaths = new Set([
+    ...(manifest.managedFiles ?? []).filter((record) => record.owner?.startsWith('external-skill:')).map((record) => record.path),
+    ...(manifest.externalSkillFiles ?? []),
+    ...(manifest.externalSkills ?? []).flatMap((record) => record.installedPaths ?? []),
+  ].filter((value) => typeof value === 'string').map((value) => normalizePath(value).toLowerCase()));
+  const lockPath = path.join(targetRoot, 'p2a-skills.lock.json');
+  if (existsSync(lockPath)) {
+    const lock = JSON.parse(readFileSync(lockPath, 'utf8'));
+    for (const record of Object.values(lock.skills ?? {})) {
+      for (const installedPath of record.installedPaths ?? []) {
+        protectedPaths.add(normalizePath(installedPath).toLowerCase());
+      }
+    }
+  }
+  for (const item of plan) {
+    const target = normalizePath(item.targetRelative).toLowerCase();
+    for (const external of protectedPaths) {
+      if (target === external || target.startsWith(`${external}/`) || external.startsWith(`${target}/`)) {
+        throw new Error(`core plan collides with external skill ownership: ${item.targetRelative}`);
+      }
+    }
+  }
+}
+
+function preserveExternalSkillInventory(plan, manifest) {
+  const item = plan.find((candidate) => isManifestTarget(candidate.targetRelative));
+  if (!item) return;
+  const data = item.data ?? JSON.parse(item.content);
+  for (const key of ['externalSkills', 'externalSkillFiles']) {
+    if (manifest[key] !== undefined) data[key] = manifest[key];
+  }
+  data.managedFiles = mergeManagedFileRecords(
+    (manifest.managedFiles ?? []).filter((record) => record.owner?.startsWith('external-skill:')),
+    data.managedFiles,
+  );
+  item.content = `${JSON.stringify(data, null, 2)}\n`;
+  if (item.data) item.data = data;
+}
+
 function mergeManagedFileRecords(existingRecords, nextRecords) {
   const recordsByPath = new Map(normalizeManagedFileRecords(existingRecords).map((record) => [record.path, record]));
   for (const record of normalizeManagedFileRecords(nextRecords)) recordsByPath.set(record.path, record);
@@ -3560,6 +3603,7 @@ function buildUpgradeDryRunReport(args, targetRoot) {
     { legacyRuntime },
   );
   pushRetiredScaffoldFileCandidates(plan, targetRoot, manifest, args);
+  assertExternalSkillPlanOwnership(plan, manifest, targetRoot);
   const items = plan.map(compareUpgradePlanItem);
   const summary = summarizeUpgradeItems(items);
   const failures = items.filter((item) => item.status === 'conflict' || item.status === 'error');
@@ -5411,36 +5455,44 @@ export function main(argv = process.argv.slice(2)) {
       if (!existsSync(targetRoot) || !lstatSync(targetRoot).isDirectory()) {
         throw new Error(`--target must be an existing scaffold project directory: ${targetRoot}`);
       }
-      const plan = args.enhancement === 'dev-skills'
-        ? buildEnhanceDevSkillsPlan(args, targetRoot)
-        : buildEnhanceCapabilityPlan(args, targetRoot);
-      assertEnhanceNoConflicts(plan, args.overwrite, args.enhancement);
-      if (args.enhancement === 'dev-skills') printEnhanceDevSkillsPlan(plan, args, targetRoot);
-      else printEnhanceCapabilityPlan(plan, args, targetRoot);
-      if (args.dryRun) return 0;
-      writePlan(plan);
-      console.log(`enhance ${args.enhancement} complete`);
-      return 0;
+      const enhance = () => {
+        const plan = args.enhancement === 'dev-skills'
+          ? buildEnhanceDevSkillsPlan(args, targetRoot)
+          : buildEnhanceCapabilityPlan(args, targetRoot);
+        const manifest = readUpgradeJsonFile(path.join(targetRoot, '.plan2agent', 'manifest.json'), '.plan2agent/manifest.json', 'enhance');
+        assertExternalSkillPlanOwnership(plan, manifest, targetRoot);
+        assertEnhanceNoConflicts(plan, args.overwrite, args.enhancement);
+        if (args.enhancement === 'dev-skills') printEnhanceDevSkillsPlan(plan, args, targetRoot);
+        else printEnhanceCapabilityPlan(plan, args, targetRoot);
+        if (args.dryRun) return 0;
+        writePlan(plan);
+        console.log(`enhance ${args.enhancement} complete`);
+        return 0;
+      };
+      return args.dryRun ? enhance() : withRunStoreLocks([path.join(targetRoot, '.plan2agent')], enhance);
     }
 
     if (args.command === 'update' || args.command === 'upgrade') {
       if (!existsSync(targetRoot) || !lstatSync(targetRoot).isDirectory()) {
         throw new Error(`--target must be an existing scaffold project directory: ${targetRoot}`);
       }
-      const report = buildUpgradeDryRunReport(args, targetRoot);
       if (args.apply) {
-        const applyReport = buildUpgradeApplyReport(args, targetRoot, report);
-        try {
-          executeUpgradeApply(targetRoot, applyReport, report);
-        } catch (error) {
-          applyReport.status = 'failed';
-          applyReport.error = errorDetail(error);
-          applyReport.nextActions = ['Inspect the apply report, restore any partially applied files if needed, then rerun update/upgrade after resolving the failure.'];
-        }
-        const writtenReport = writeUpgradeApplyReport(targetRoot, publicUpgradeApplyReport(applyReport));
-        printUpgradeApplyReport(writtenReport);
-        return ['blocked', 'failed'].includes(writtenReport.status) ? 1 : 0;
+        return withRunStoreLocks([path.join(targetRoot, '.plan2agent')], () => {
+          const report = buildUpgradeDryRunReport(args, targetRoot);
+          const applyReport = buildUpgradeApplyReport(args, targetRoot, report);
+          try {
+            executeUpgradeApply(targetRoot, applyReport, report);
+          } catch (error) {
+            applyReport.status = 'failed';
+            applyReport.error = errorDetail(error);
+            applyReport.nextActions = ['Inspect the apply report, restore any partially applied files if needed, then rerun update/upgrade after resolving the failure.'];
+          }
+          const writtenReport = writeUpgradeApplyReport(targetRoot, publicUpgradeApplyReport(applyReport));
+          printUpgradeApplyReport(writtenReport);
+          return ['blocked', 'failed'].includes(writtenReport.status) ? 1 : 0;
+        });
       }
+      const report = buildUpgradeDryRunReport(args, targetRoot);
       const publicReport = publicUpgradeReport(report);
       if (args.dryRun) {
         printUpgradeDryRunReport(publicReport);
@@ -5463,13 +5515,22 @@ export function main(argv = process.argv.slice(2)) {
       if (existsSync(targetRoot) && !lstatSync(targetRoot).isDirectory()) {
         throw new Error(`--target must be a directory path, but a non-directory exists: ${targetRoot}`);
       }
-      const plan = buildScaffoldPlan(args, targetRoot);
-      assertNoConflicts(plan, args.overwrite);
-      printScaffoldPlan(plan, args, targetRoot);
-      if (args.dryRun) return 0;
-      writePlan(plan);
-      console.log(`${args.command} complete`);
-      return 0;
+      const initialize = () => {
+        const plan = buildScaffoldPlan(args, targetRoot);
+        const manifestPath = path.join(targetRoot, '.plan2agent', 'manifest.json');
+        const manifest = existsSync(manifestPath) ? JSON.parse(readFileSync(manifestPath, 'utf8')) : {};
+        assertExternalSkillPlanOwnership(plan, manifest, targetRoot);
+        if (existsSync(manifestPath)) preserveExternalSkillInventory(plan, manifest);
+        assertNoConflicts(plan, args.overwrite);
+        printScaffoldPlan(plan, args, targetRoot);
+        if (args.dryRun) return 0;
+        writePlan(plan);
+        console.log(`${args.command} complete`);
+        return 0;
+      };
+      // A new project must finish preflight before creating any local state.
+      const p2aDir = path.join(targetRoot, '.plan2agent');
+      return args.dryRun || !existsSync(p2aDir) ? initialize() : withRunStoreLocks([p2aDir], initialize);
     }
 
     const artifactsRoot = path.resolve(args.artifacts);
@@ -5508,6 +5569,10 @@ export function main(argv = process.argv.slice(2)) {
         sourceInfo,
         { record, createdAt },
       );
+      const manifestPath = path.join(targetRoot, '.plan2agent', 'manifest.json');
+      const manifest = existsSync(manifestPath) ? JSON.parse(readFileSync(manifestPath, 'utf8')) : {};
+      assertExternalSkillPlanOwnership(plan, manifest, targetRoot);
+      if (existsSync(manifestPath)) preserveExternalSkillInventory(plan, manifest);
       assertNoConflicts(plan, args.overwrite);
       printPlan(plan, args, artifactsRoot, targetRoot, sourceInfo);
       if (args.dryRun) return 0;
@@ -5533,12 +5598,19 @@ export function main(argv = process.argv.slice(2)) {
       return 0;
     };
 
-    if (!isIterativeArtifactRoot(artifactsRoot)) return executeHandoff();
+    // Serialize target metadata changes with external skill transactions. New
+    // targets finish preflight before creating .plan2agent, as init does.
+    const targetP2aDir = path.join(targetRoot, '.plan2agent');
+    const targetLockDirs = !args.dryRun && existsSync(targetP2aDir) ? [targetP2aDir] : [];
+    if (!isIterativeArtifactRoot(artifactsRoot)) {
+      return withRunStoreLocks(targetLockDirs, executeHandoff);
+    }
 
     const initialSourceInfo = resolveHandoffSource(artifactsRoot, args);
     const maintenanceGraphPath = maintenanceTaskGraphSourcePath(artifactsRoot);
     const runsDir = path.join(artifactsRoot, 'runs');
     const lockDirs = [
+      ...targetLockDirs,
       path.join(artifactsRoot, 'iterations'),
       path.dirname(initialSourceInfo.paths.taskGraph),
     ];

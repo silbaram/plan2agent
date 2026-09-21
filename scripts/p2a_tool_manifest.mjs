@@ -6,6 +6,8 @@ export const REPO_ONLY_SCRIPT_FILES = [
   'p2a_handoff.mjs',
   'p2a_handoff_portability.mjs',
   'p2a_upgrade.mjs',
+  'p2a_skills.mjs',
+  'p2a_external_skills.mjs',
   'sync_cli_assets.mjs',
   'check_cli_parity.mjs',
   'run_fixtures.mjs',

@@ -32,6 +32,8 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           package-manager-cache: false
+      - name: Install dependencies
+        run: npm ci
       - name: Run core test suite
         if: matrix.node == 24
         run: npm test
@@ -51,6 +53,8 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
+      - name: Install dependencies
+        run: npm ci
       - name: Run full fixture suite
         run: npm run test:full
 
@@ -72,5 +76,7 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
+      - name: Install dependencies
+        run: npm ci
       - name: Run package and upgrade smoke tests
         run: npm run test:package
