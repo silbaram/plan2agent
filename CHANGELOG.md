@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-21
+
 ### Added
 
 - Add project-scoped `p2a skills` source, add, list, update, remove, and sync commands backed by the pinned `skills@1.7.0` adapter, a tracked root lock, provider projections, drift-aware doctor checks, and rollback recovery.
@@ -23,6 +25,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Resolve annotated tags to commits and use deterministic raw Git checkout bytes across line-ending settings.
 - Preserve external skill ownership and inventory during handoff, and serialize existing-target handoffs with skill transactions.
 - Keep skill hashes and review plans stable across process locales, diagnose orphan and duplicate owners, and restore pinned `git://` sources correctly.
+
+### Compatibility and migration
+
+- Node.js 22.0–22.19 is no longer supported. Upgrade to Node.js 22.20.0 or newer before installing this release.
+- Existing P2A projects need no artifact migration. Preview managed project updates with `p2a upgrade --target . --dry-run` before applying them.
+- External skills are opt-in. Track `p2a-skills.lock.json` with the project and use `p2a skills sync` to restore missing installations after cloning.
+- Every external skills mutation, including sync and recovery, requires a fresh dry-run followed by `--apply --expect-plan <plan-sha256>`.
 
 ## [0.5.24] - 2026-09-20
 
@@ -397,7 +406,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Add package-runtime project initialization, managed provider assets, artifact validation, handoff, supervised execution, evaluation, and proposal workflows.
 - Ship canonical and generated integrations for Codex, Claude Code, and Gemini CLI.
 
-[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.5.24...HEAD
+[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/silbaram/plan2agent/compare/v0.5.24...v0.6.0
 [0.5.24]: https://github.com/silbaram/plan2agent/compare/v0.5.23...v0.5.24
 [0.5.23]: https://github.com/silbaram/plan2agent/compare/v0.5.22...v0.5.23
 [0.5.22]: https://github.com/silbaram/plan2agent/compare/v0.5.21...v0.5.22
