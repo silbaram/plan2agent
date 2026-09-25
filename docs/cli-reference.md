@@ -15,7 +15,7 @@ Plan2Agent CLI는 기획 산출물 검증, 승인된 task graph 실행, agent ru
 | `p2a decide`, `p2a decisions` | Gate ①·범위 변경을 append-only 원장에 기록하고 결정 계보를 조회한다. |
 | `p2a shape` | Gate ② constitution 상태, legacy style migration, 인용 승인 기록을 관리한다. |
 | `p2a iteration`, `p2a tasks`, `p2a runs`, `p2a execute` | 반복·task·run 실행 흐름을 관리한다. |
-| `p2a validate`, `p2a eval`, `p2a buildlore`, `p2a proposals` | 산출물 검증, 평가, 장기 지식, 개선 제안을 관리한다. |
+| `p2a validate`, `p2a eval`, `p2a knowledge`, `p2a buildlore`, `p2a proposals` | 산출물 검증, 평가, 완료 자료 고정, 장기 지식, 개선 제안을 관리한다. |
 | `p2a skills` | 외부 Agent Skill source를 조회하고 project-scoped copy를 고정·갱신·복원·제거한다. |
 | `p2a doctor`, `p2a enhance`, `p2a update` | 프로젝트 상태를 진단하고 provider/config 자산을 관리한다. |
 | `p2a handoff` | 승인된 산출물을 별도 대상 프로젝트로 인계한다. |
@@ -31,10 +31,10 @@ Plan2Agent 본체 개발에서만 `scripts/sync_cli_assets.mjs`, `scripts/check_
 5. `p2a execute status/finish`로 run 상태 확인, verification, run finish, task 전이를 묶어 기록한다. 설정된 검사만 실행하고 같은 run에서 수정·재검증한다. Close 시 docs/metadata, isolated code, high-risk integration 공통 profile을 사용하며 실제 통합 위험이 있을 때만 별도 final full run을 연다.
 6. 실패, blocked monitor verdict, verification gap이 쌓이면 `p2a proposals mine/review/curate/draft-patch/approve-draft/digest`로 개선 proposal queue, curator review artifact, approval-ready curation artifact, non-applying patch draft, 승인 artifact를 만든다. proposal 적용은 승인된 maintenance task를 별도 실행해서 진행한다.
 7. `p2a eval grade/compare/analyze/generate/digest`로 run acceptance 증거, iteration regression, 실패 클러스터를 평가하고 proposal/maintenance/delta draft 경로로 연결한다.
-8. 장기 보존이나 회고 검색이 필요하면 BuildLore의 별도 `knowledge/` Git 저장소를 연결한다. `p2a buildlore sync --dry-run`으로 `.plan2agent/artifacts/<project-id>/` projection을 먼저 검토하고, `p2a buildlore sync`로 sanitizer를 통과한 source를 기록한다. 검색과 context는 project-scoped이며 `lexical`, `semantic`, `hybrid` mode를 사용할 수 있다. sync는 Git commit이나 push를 자동 수행하지 않는다.
+8. 장기 보존이나 회고 검색이 필요하면 BuildLore의 별도 지식 Git 저장소를 연결한다. 기존 projection은 `p2a buildlore sync --dry-run`으로 `.plan2agent/artifacts/<project-id>/`를 검토한 뒤 명시적으로 적용한다. 읽기는 `memory`와 generation에 고정된 `lookup`으로 수행한다. 연결된 source의 search는 `lexical`을 사용하며 legacy hub의 검색 mode와 구분한다. sync는 Git commit이나 push를 자동 수행하지 않는다.
 
-BuildLore는 local-first·Git-backed 장기 지식 도구다. P2A adapter는 BuildLore CLI를 shell 없이 실행하고 projection·검색·context 진입점만 제공한다.
-정상 첫 개발은 BuildLore/LLM Wiki를 자동 조회하지 않는다. retry 또는 사용자가 명시적으로 검색을 요청한 경우에만 선택적으로 조회하며, unavailable/empty 결과는 현재 contract 실행을 막지 않고 retrieval 결과가 contract를 자동 변경하지도 않는다.
+BuildLore는 local-first·Git-backed 장기 지식 도구다. P2A adapter는 BuildLore CLI를 shell 없이 실행하고 projection·검색·memory·근거 조회 진입점을 제공한다.
+설정된 프로젝트의 실행 담당자는 첫 시도에도 관련 기억을 제한적으로 읽을 수 있다. CLI가 모든 실행에 자동 조회를 삽입하는 것은 아니다. 미설정·unavailable·empty·시간/출력 예산 초과는 현재 contract 실행을 막지 않고, 조회 결과나 방향 의견이 contract와 승인 상태를 자동 변경하지도 않는다.
 
 ## 2. 전역 공통 진입점 — `p2a`
 
@@ -50,7 +50,7 @@ p2a next
 p2a next --json --contract v2
 ```
 
-`p2a`의 하위 명령은 `decide`, `decisions`, `shape`, `eval`, `buildlore`, `skills`, `execute`, `tasks`, `runs`, `iteration`, `proposals`, `validate`, `doctor`, `enhance`, `update`, `upgrade`, `handoff`다. `--target`을 생략하면 현재 작업 디렉터리를 대상으로 삼는다.
+`p2a`의 하위 명령은 `decide`, `decisions`, `shape`, `eval`, `knowledge`, `buildlore`, `skills`, `execute`, `tasks`, `runs`, `iteration`, `proposals`, `validate`, `doctor`, `enhance`, `update`, `upgrade`, `handoff`다. `--target`을 생략하면 현재 작업 디렉터리를 대상으로 삼는다.
 
 ### 외부 Agent Skills — `p2a skills`
 
@@ -83,7 +83,7 @@ Codex와 Gemini는 `.agents/skills/<name>`의 `agents-shared` copy 하나를 공
 
 ### BuildLore 연동 — `p2a buildlore`
 
-BuildLore 자체에서 `knowledge/` repository attach와 project 등록을 마친 뒤 P2A capability를 활성화한다. `project.config.json.projectId`가 등록한 BuildLore project ID와 같아야 한다.
+BuildLore 자체에서 지식 workspace 또는 기존 `knowledge/` repository와 project를 준비하고 필요한 source 연결을 마친 뒤 P2A capability를 활성화한다. `project.config.json.projectId`가 연결된 BuildLore project ID와 같아야 한다. P2A 읽기 명령은 연결을 생성하거나 복구하지 않는다.
 
 ```bash
 p2a enhance buildlore
@@ -92,14 +92,59 @@ p2a buildlore sync --dry-run --json
 p2a buildlore sync
 p2a buildlore check
 p2a buildlore search --query "실패 원인" --mode lexical
-p2a buildlore context --prompt "다음 구현 계획을 준비해"
+p2a buildlore memory --task "다음 구현 계획을 준비해" --progressive --max-bytes 8192 --json
+p2a buildlore lookup --kind evidence --id <canonical-id> --expect-generation <generation-digest> --json
+p2a buildlore lookup --kind fact --ids <canonical-id>,<canonical-id> --expect-generation <generation-digest> --max-bytes 8192 --json
 ```
 
-`--project`를 생략하면 `project.config.json`, 그다음 `manifest.json`의 `projectId`를 사용한다. 실행 파일은 기본 `buildlore`이며 `BUILDLORE_BIN` 또는 `project.config.json.buildlore.command`로 단일 executable path를 지정할 수 있다. 고정 인자가 필요한 개발 checkout은 `buildlore.commandArgs`를 사용한다. adapter는 `status`, `sync`, `check`, `search`, `context`, `compile`, `query`만 제공한다. knowledge commit/push와 parent submodule pin은 BuildLore에서 계획·검토·실행한다.
+`--project`를 생략하면 `project.config.json`, `manifest.json`, 연결 source의 `.buildlore/connection.json` 순서로 project ID를 사용한다. 연결과 요청한 프로젝트가 다르면 조회하지 않는다. 연결 marker가 있는데 손상되거나 실제 registry와 맞지 않으면 legacy 저장소로 우회하지 않는다. 연결의 실제 유효성과 source identity는 BuildLore CLI가 검증한다. 여러 프로젝트를 가진 지식 workspace에서는 project ID를 추측하지 않는다.
+
+연결된 source의 `status`는 `connection status`, 나머지는 기존 `knowledge status`로 실행한다. `memory`·`lookup`은 `wiki memory`·`wiki lookup`으로 전달한다. 연결 source와 직접 지식 workspace에서 기존 `context --prompt`는 `wiki memory --task`로 연결하고 legacy hub에서는 기존 context를 유지한다. `status` 성공만으로 승인된 기억이 존재한다고 판단하지 않는다.
+
+`memory --task`는 UTF-8 1~2,048 bytes이며 `--progressive`로 필요한 근거 목록부터 읽는다. `--cursor`는 progressive에서만 사용하고 이어 읽을 때 `--expect-generation`으로 같은 generation을 지정한다. `lookup`은 `e1` 같은 짧은 별칭이 아니라 memory registry의 canonical SHA-256 ID와 반환된 generation digest를 사용한다. `--id` 한 개 또는 `--ids` 최대 16개를 지정하며 `--max-bytes`는 memory 또는 batch lookup에서 2,048~65,536 bytes다. 반환된 검증 revision과 현재 코드가 다르면 과거 근거로 구분한다.
+
+`status/search/context/memory/lookup`은 기본 15초, 표준출력·오류 각각 최대 256 KiB로 제한한다. `--timeout-ms 1..60000`으로 시간 예산을 바꿀 수 있다. 시간·출력 초과나 실패한 조회의 부분 stdout은 결과로 내보내지 않으며 명령은 비정상 종료한다. 실행 담당자는 이 실패를 작업 실패나 승인 요청으로 바꾸지 않고 현재 코드와 사용자 요청으로 계속한다. 기존 sync·compile·query 등의 명시 실행 동작에는 이 읽기 제한을 적용하지 않는다.
+
+실행 파일은 기본 `buildlore`이며 `BUILDLORE_BIN` 또는 `project.config.json.buildlore.command`로 단일 executable path를 지정할 수 있다. 고정 인자가 필요한 개발 checkout은 `buildlore.commandArgs`를 사용한다. knowledge 쓰기·commit/push와 parent submodule pin은 별도 권한으로 BuildLore에서 처리하며 읽기가 이를 암묵적으로 실행하지 않는다.
 
 옵션 없는 `p2a next --json`은 기존 consumer를 위한 엄격한 `p2a.next.v1` 계약을 유지한다. 사람이 읽는 `p2a next` 출력은 v2를 기본으로 사용하고 `[한눈에]`와 `[권장 다음 행동]`만 보여 준다. Gate 이름, state/reason, 정확한 하위 명령과 artifact 경로는 기본 화면에서 숨기며 `p2a next --details`의 `[내부 실행 정보]` 또는 JSON에서 확인한다. 이 표현층은 v1/v2 JSON payload를 수정하지 않는다. 타입이 지정된 상태 enum과 안정적인 `reasonCode`가 필요한 agent consumer는 `--contract v2`를 명시하며, 출력은 `next-v2.schema.json`의 `p2a.next.v2`를 따른다.
 
 `p2a.next.v2`의 skill action은 표시 문자열과 별도로 `skill`/`args`를 제공하고, 모든 응답은 `continuation`을 object 또는 `null`로 명시한다. 범위·프로젝트 원칙·구현 계획 승인은 사용자에게 보여 줄 `decisionSummary`와 재개용 `argv`, 정확히 한 번 치환할 `quotePlaceholder`를 함께 제공한다. Agent는 사용자가 해당 결정을 명시적으로 승인한 뒤 placeholder에 그 발화를 그대로 넣어 한 번만 실행하므로 표시 문장을 명령으로 다시 해석하지 않는다. `after_command_success` continuation이 붙은 start/resume/review/accept action은 argv에 `--json`을 포함한다. 성공 stdout은 `execution-result.schema.json`의 단일 `p2a.execution_result.v1` 문서이며, 호출자는 exit code가 0이고 `outcome=succeeded`, `runStatus=started`일 때만 그 `runId`를 후속 처리에 사용한다. 기본 v1 action argv와 field set은 바뀌지 않는다.
+
+### 완료 자료 고정 — `p2a knowledge capture`
+
+현재 작업의 완료 내용과 검증 근거를 로컬 고정본으로 만든다. BuildLore가 없어도 고정할 수 있으며, 이 명령 자체는 지식저장소에 쓰거나 개발 상태·승인·원장을 변경하지 않는다.
+
+```bash
+p2a knowledge capture --artifacts .plan2agent/artifacts/<project-id> --iteration <closed-iteration-id> --json
+p2a knowledge capture --artifacts .plan2agent/artifacts/<project-id> --task <done-maintenance-task-id> --summary "완료 내용" --json
+```
+
+`--iteration`과 `--task` 중 하나만 지정한다. 반복 개발은 현재 계약이 선택한 종료 반복과 일치해야 하고, 유지보수는 선택한 완료 task의 불변 계약·의도·검증 근거를 사용한다. 다른 유지보수 task나 feature 기준을 완료한 것으로 취급하지 않는다. 승인된 참조 묶음이 있으면 snapshot·사용 기록·선언된 참조 파일까지 해시를 검증해 함께 고정한다. 필요한 원본·해시·검증이 없거나 맞지 않으면 고정을 거부하며 task 완료 상태는 바꾸지 않는다. 지원되는 근거는 JSON·Markdown·일반 텍스트이며 필수 시각·바이너리 근거를 누락한 채 성공하지 않는다.
+
+요약은 기존 목표·의도 또는 명시한 `--summary`를 사용한다. 결정·교훈·남은 일을 자동으로 지어내지 않으며 현재 capture의 해당 배열은 비워 둔다. 선택 작업만 담은 graph/index/결정 출처 snapshot은 별도 형식을 표시한다. 이 경우 `sourceDigest`는 포함된 snapshot 본문의 해시이며 원본 파일 전체의 해시라고 해석하지 않는다. 과거 승인 기록을 새로운 작업의 승인으로 재생하지 않는다.
+
+고정본은 artifact root의 `handoffs/pending/<sha256>.json`에 저장한다. 같은 내용의 재실행은 같은 고정본을 재사용하며, 이미 만든 고정본을 나중의 공용 문서 내용으로 덮어쓰지 않는다. 이 파일은 **정제 전 로컬 자료**이므로 commit·공유하지 않는다. 자동 완료 hook은 아직 없으므로 기본 `active_only` 보관 정책에서는 다음 iteration을 열거나 다음 maintenance task를 시작해 이전 run이 정리되기 **전에** 명시적으로 capture해야 한다. 이후 전송 재시도는 고정된 파일을 사용한다.
+
+### 완료 지식 보존 — `p2a buildlore handoff`
+
+```bash
+p2a buildlore handoff import --file <capture-file> --json
+p2a buildlore handoff import --file <capture-file> --commit --json
+p2a buildlore handoff list --work-id <work-id> --limit 20 --json
+p2a buildlore handoff read --id sha256:<64-hex> --json
+p2a buildlore handoff verify --id sha256:<64-hex> --json
+```
+
+앞의 BuildLore project 연결·실행 파일 설정을 사용한다. 직접 BuildLore CLI를 쓰면 `buildlore handoff <action> --project <project-id> ...`이며 연결된 source·별도 지식 workspace·기존 hub를 지원한다. 이 명령이 추가된 BuildLore 버전이 필요하다.
+
+`import`는 최대 1 MiB의 regular JSON 파일을 읽어 프로젝트와 digest를 검증하고, 전체 인계를 sanitizer로 정제한 뒤 지식저장소의 `projects/<project-id>/handoffs/objects/<sha256>.json`에 변경 불가능한 내용 주소 객체로 보존한다. symlink·경로 이탈·잘못된 프로젝트·변조된 digest·자격 증명 의심 값은 거부한다. 원문 digest와 정제된 본문 digest는 별도이며, 정제된 기준을 원본 실행 계약과 동일하다고 주장하지 않는다.
+
+기본 보존은 `storage: stored`, `commit: null`이며 Git 보존을 주장하지 않는다. `--commit`은 해당 객체만 로컬 commit하고 다른 staged/unstaged 변경을 포함하지 않는다. 이미 같은 객체가 HEAD에 보존되어 있으면 그 commit을 확인한다. 기존 hub의 지식 submodule HEAD가 이 commit으로 상위 저장소의 pin보다 앞서더라도 보존 객체 import·read·verify·list는 가능하며 pin을 자동 변경하지 않는다. 어느 명령도 push·위키 생성·승인·현재 기준 변경을 수행하지 않는다. 모든 객체와 확인 기록은 `wikiStatus: pending`, `cleanupEligible: false`다.
+
+`read`는 원본이 아닌 보존된 본문·구조화 기준을 읽고, `verify`는 내용 digest와 현재 지식저장소 HEAD의 보존 여부를 확인한다. `list`는 같은 프로젝트의 후보만 반환하고 `--work-id`로 제한할 수 있다(`--limit` 1~100, 기본 20). 목록 정렬은 기준의 선후관계나 적용 권한이 아니다. `repository.id`는 입력의 출처 메타데이터이며 검증된 원격 저장소 식별자가 아니다. 검증 대상 revision·내용 digest가 없으면 `null`로 남기며 관찰한 HEAD를 검증 증거로 대체하지 않는다.
+
+adapter의 읽기는 기본 15초 제한이다. `handoff read`만 최대 2 MiB, `list`·`verify`는 최대 256 KiB이며 `--timeout-ms`를 지원한다. 읽기가 실패해도 개발은 현재 코드와 사용자 요청으로 계속한다. 자동 capture·보존 source를 이용한 위키 재컴파일·다음 개발 기준 복구·참조 전환·원본 정리는 후속 범위다. **독립 조회 성공만으로 실제 개발 문서를 삭제하면 안 된다.**
 
 ### 결정 원장 — `p2a decide`, `p2a decisions`
 

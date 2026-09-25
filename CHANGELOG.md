@@ -6,6 +6,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-25
+
+### Added
+
+- Add explicit `p2a knowledge capture` snapshots for completed iterations and maintenance tasks, plus BuildLore completion-handoff import/list/read/verify forwarding. Preserve pending knowledge separately from approved Wiki memory; automatic lifecycle capture and artifact cleanup remain unimplemented.
+
+- Add bounded, project-scoped BuildLore `memory` and generation-bound `lookup` reads, with connected-source status and knowledge-workspace context routing.
+
+### Changed
+
+- Let execution owners consult relevant configured memory from the first attempt and provide concise progress and direction advice without adding approval gates, reviewers, or reports. Keep knowledge failures advisory and writes explicit.
+
+### Compatibility and migration
+
+- Node.js 22.20.0 remains the minimum. Preview existing project updates with `p2a upgrade --target . --dry-run` before applying them.
+- BuildLore memory, lookup, and handoff commands require a BuildLore version that supports them. They are optional; this release does not automatically capture completed work or remove development artifacts.
+
 ## [0.6.0] - 2026-09-21
 
 ### Added
@@ -406,7 +423,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Add package-runtime project initialization, managed provider assets, artifact validation, handoff, supervised execution, evaluation, and proposal workflows.
 - Ship canonical and generated integrations for Codex, Claude Code, and Gemini CLI.
 
-[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/silbaram/plan2agent/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/silbaram/plan2agent/compare/v0.5.24...v0.6.0
 [0.5.24]: https://github.com/silbaram/plan2agent/compare/v0.5.23...v0.5.24
 [0.5.23]: https://github.com/silbaram/plan2agent/compare/v0.5.22...v0.5.23

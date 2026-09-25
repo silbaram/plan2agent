@@ -212,8 +212,9 @@ local comparisons.
 
 [BuildLore](https://github.com/silbaram/buildlore) is a local-first, Git-backed knowledge tool.
 The current Plan2Agent contract remains the local execution source of truth. BuildLore owns optional
-long-term knowledge projected from completed development; normal first-attempt execution does not
-query it and remains available when BuildLore or an LLM Wiki is unavailable.
+long-term knowledge projected from completed development. When configured and relevant, the
+execution owner can consult it from the first attempt, explain progress, and offer evidence-based
+direction advice without adding an approval gate. Missing or unavailable knowledge does not stop development.
 
 After attaching a BuildLore `knowledge/` repository and registering the same project ID, enable the
 adapter and preview projection from `.plan2agent/artifacts/<project-id>/`:
@@ -226,15 +227,42 @@ p2a buildlore sync
 ```
 
 BuildLore selects supported approved planning and execution evidence, sanitizes it, and writes
-reviewable knowledge sources. Retrieval is explicit and project-scoped:
+reviewable knowledge sources. A connected source repository or knowledge workspace can read approved,
+project-scoped memory without synchronizing or generating a Wiki:
 
 ```bash
 p2a buildlore search --query "authentication decision" --mode lexical
-p2a buildlore context --prompt "Prepare the next implementation plan"
+p2a buildlore memory --task "Prepare the next implementation plan" --progressive --json
+p2a buildlore lookup --kind evidence --id <canonical-evidence-id> --expect-generation <generation-digest> --json
 ```
+
+Use canonical evidence IDs from the memory registry, not its short aliases, and keep lookup bound
+to the returned generation. Reads default to a 15-second timeout and 256 KiB output limit;
+`--timeout-ms` can set a 1–60,000 ms budget. Connected `status` uses the connection API;
+legacy `knowledge status` and projection commands remain available for existing installations.
 
 Synchronization does not commit or push knowledge. BuildLore publication remains a separate,
 reviewable Git workflow.
+
+To preserve a completed iteration independently of Wiki approval, explicitly capture it before
+opening the next iteration, then import the returned local `bundlePath` into BuildLore:
+
+```bash
+p2a knowledge capture --artifacts .plan2agent/artifacts/<project-id> --iteration <iteration-id> --json
+p2a buildlore handoff import --file <capture-file> --commit --json
+p2a buildlore handoff list --work-id <iteration-id> --json
+p2a buildlore handoff read --id <handoff-id> --json
+p2a buildlore handoff verify --id <handoff-id> --json
+```
+
+Use `--task <maintenance-task-id>` instead of `--iteration` for completed maintenance.
+Capture creates an unsanitized local retry bundle; do not commit or share it. BuildLore sanitizes
+before preservation and rejects suspected credentials. `--commit` explicitly commits only the
+preserved object locally; omitting it stores the object without creating a commit. Neither mode
+pushes, approves a Wiki, or changes the next development baseline. Reads work from the preserved
+object, but automatic capture, archived-source compilation, baseline restoration, and document
+cleanup are not yet connected: keep the original development artifacts (`cleanupEligible: false`).
+See the [CLI reference](docs/cli-reference.md#완료-자료-고정--p2a-knowledge-capture) for limits.
 
 ### 6. Manage project-scoped external Agent Skills
 
@@ -287,6 +315,7 @@ Plan2Agent installs one `p2a` entrypoint:
 | `p2a eval` | Grade, compare, analyze, generate, and summarize execution evidence. |
 | `p2a proposals` | Mine and review proposals, or preview and explicitly publish a retrospective GitHub issue. |
 | `p2a buildlore` | Project, check, search, and retrieve optional BuildLore knowledge. |
+| `p2a knowledge capture` | Freeze completed work locally for a separate sanitized knowledge import. |
 | `p2a skills` | Preview, install, pin, update, restore, and remove external Agent Skills. |
 
 Run `p2a --help` for the top-level command surface and use the
