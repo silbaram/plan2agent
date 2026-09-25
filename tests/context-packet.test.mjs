@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import {
   cpSync,
   mkdirSync,
@@ -258,6 +259,19 @@ test('started run packets bind command continuation and explicit closeout phase'
       'execution.lifecycle',
       'execution.provider-confinement',
     ]);
+
+    // Owner-start must deliver the complete installed lifecycle guidance, not
+    // metadata alone or an obsolete copy that omits first-attempt assistance.
+    const lifecycle = owner.sources.find((source) => source.routeId === 'execution.lifecycle');
+    const lifecycleBody = readFileSync(path.join(fixture.targetRoot, lifecycle.path), 'utf8');
+    assert.equal(lifecycle.bytes, Buffer.byteLength(lifecycleBody));
+    assert.equal(lifecycle.sha256, createHash('sha256').update(lifecycleBody).digest('hex'));
+    const ownerModel = runContext(fixture, [
+      '--continuation', 'execution.owner-start',
+      '--run-id', runId,
+    ]);
+    assert.equal(ownerModel.status, 0, ownerModel.stderr);
+    assert.ok(ownerModel.stdout.includes(lifecycleBody.trimEnd()));
 
     const closeout = jsonPacket(runContext(fixture, [
       '--phase', 'verify-closeout',

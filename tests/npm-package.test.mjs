@@ -92,7 +92,8 @@ test('BuildLore adapter runtime and user documentation preserve the local explic
   const cliReference = readFileSync(path.join(ROOT, 'docs', 'cli-reference.md'), 'utf8');
   assert.match(cliReference, /BuildLore는 local-first·Git-backed 장기 지식 도구/);
   assert.match(cliReference, /sync는 Git commit이나 push를 자동 수행하지 않는다/);
-  assert.match(cliReference, /knowledge commit\/push와 parent submodule pin은 BuildLore에서 계획·검토·실행/);
+  assert.match(cliReference, /knowledge 쓰기·commit\/push와 parent submodule pin은 별도 권한으로 BuildLore에서 처리/);
+  assert.match(cliReference, /읽기가 이를 암묵적으로 실행하지 않는다/);
 });
 
 test('checkout init preserves the legacy co-located runtime', () => {
@@ -354,6 +355,7 @@ test('npm pack dry run includes the global CLI runtime', () => {
       'scripts/p2a_skills.mjs',
       'scripts/p2a_external_skills.mjs',
       'scripts/p2a_buildlore.mjs',
+      'scripts/p2a_knowledge_handoff.mjs',
       'scripts/p2a_context.mjs',
       'scripts/p2a_continuations.mjs',
       'scripts/p2a_schema.mjs',
@@ -361,6 +363,7 @@ test('npm pack dry run includes the global CLI runtime', () => {
       'schemas/next.schema.json',
       'schemas/decisions.schema.json',
       'schemas/context-packet.schema.json',
+      'schemas/knowledge-handoff-input.schema.json',
       'schemas/external-skills-lock.schema.json',
       '.agents/skills/p2a-next/SKILL.md',
     ]) {
@@ -555,6 +558,13 @@ test('the packed p2a runtime exposes its bin shim and supports core commands wit
     const decisionsHelp = runPacked(nestedRoot, ['decisions', '--help']);
     assert.equal(decisionsHelp.status, 0, formatCommandResult(decisionsHelp));
     assert.match(decisionsHelp.stdout, /p2a decisions --why/);
+
+    const knowledgeHelp = runPacked(nestedRoot, ['knowledge', '--help']);
+    assert.equal(knowledgeHelp.status, 0, formatCommandResult(knowledgeHelp));
+    assert.match(knowledgeHelp.stdout, /knowledge capture/);
+    const completionHelp = runPacked(nestedRoot, ['buildlore', 'handoff', '--help']);
+    assert.equal(completionHelp.status, 0, formatCommandResult(completionHelp));
+    assert.match(completionHelp.stdout, /handoff import/);
 
     const nestedEvalAnalyze = runPacked(nestedRoot, ['eval', 'analyze', '--json']);
     assert.equal(nestedEvalAnalyze.status, 0, formatCommandResult(nestedEvalAnalyze));

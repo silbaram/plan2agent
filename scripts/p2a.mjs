@@ -37,6 +37,7 @@ const RUNTIME_COMMANDS = new Map([
   ['proposals', { script: 'p2a_proposals.mjs' }],
   ['eval', { script: 'p2a_eval.mjs' }],
   ['buildlore', { script: 'p2a_buildlore.mjs' }],
+  ['knowledge', { script: 'p2a_knowledge_handoff.mjs' }],
   ['reference', { script: 'p2a_reference.mjs' }],
   ['validate', { script: 'validate_artifacts.mjs' }],
 ]);
@@ -67,7 +68,8 @@ function usage() {
     '  p2a skills <source|add|list|update|remove|sync> [options]',
     '  p2a enhance <capability> [--target <dir>] [--dry-run] [--overwrite]',
     '  p2a eval <grade|compare|analyze|generate|digest> [options]',
-    '  p2a buildlore <status|sync|check|search|context|compile|query> [options]',
+    '  p2a buildlore <status|memory|lookup|handoff|sync|check|search|context|compile|query> [options]',
+    '  p2a knowledge capture --artifacts <root> (--iteration <id> | --task <id>) [options]',
     '  p2a reference snapshot --entry <path> --artifacts <dir> [--target <dir>] [--json]',
     '  p2a execute <prepare|plan|start|review|accept|retry|resume|status|finish> [options]',
     '  p2a context show --artifacts <dir> (--continuation <id>|--phase <phase>) --provider <provider> [options]',

@@ -184,6 +184,8 @@ proposal 흐름은 근거가 있는 결과를 사람이 검토하는 maintenance
 
 [BuildLore](https://github.com/silbaram/buildlore)는 local-first·Git 기반 지식 도구입니다.
 Plan2Agent artifact는 계속 로컬 실행 상태의 정본입니다.
+설정된 프로젝트에서는 첫 시도부터 관련 기억을 제한적으로 참고하고, 개발 진행과 방향에 대한
+의견을 설명합니다. 조언만으로 승인을 추가하지 않으며 지식 조회가 실패해도 개발을 이어갑니다.
 
 BuildLore의 `knowledge/` 저장소를 연결하고 같은 project ID를 등록한 다음 adapter를
 활성화하고 `.plan2agent/artifacts/<project-id>/` projection을 미리 확인합니다.
@@ -196,15 +198,40 @@ p2a buildlore sync
 ```
 
 BuildLore는 지원되는 승인 기획·실행 evidence를 선택하고 sanitizer를 거쳐 검토 가능한 지식
-source로 기록합니다. 검색은 명시적이며 project 단위로 격리됩니다.
+source로 기록합니다. 연결된 source나 지식 workspace의 승인된 기억은 동기화나 위키 생성 없이
+project 단위로 격리해 읽을 수 있습니다.
 
 ```bash
 p2a buildlore search --query "인증 결정" --mode lexical
-p2a buildlore context --prompt "다음 구현 계획을 준비해"
+p2a buildlore memory --task "다음 구현 계획을 준비해" --progressive --json
+p2a buildlore lookup --kind evidence --id <canonical-evidence-id> --expect-generation <generation-digest> --json
 ```
+
+근거는 memory registry의 짧은 별칭 대신 canonical ID를 사용하고 같은 generation에 고정해
+조회합니다. 읽기는 기본 15초·256 KiB로 제한하며 `--timeout-ms`로 1~60,000ms를 지정할 수 있습니다.
+연결된 source의 status는 connection API를 사용하고 기존 저장소의 status와 projection 명령은 유지합니다.
 
 sync는 지식 저장소를 commit하거나 push하지 않습니다. BuildLore publish는 별도의 검토 가능한
 Git workflow입니다.
+
+위키 승인과 별도로 완료 자료를 보존하려면 다음 iteration을 열기 전에 명시적으로 고정하고,
+반환된 로컬 `bundlePath`를 BuildLore에 전달합니다.
+
+```bash
+p2a knowledge capture --artifacts .plan2agent/artifacts/<project-id> --iteration <iteration-id> --json
+p2a buildlore handoff import --file <capture-file> --commit --json
+p2a buildlore handoff list --work-id <iteration-id> --json
+p2a buildlore handoff read --id <handoff-id> --json
+p2a buildlore handoff verify --id <handoff-id> --json
+```
+
+완료된 유지보수는 `--iteration` 대신 `--task <maintenance-task-id>`를 지정합니다.
+capture의 로컬 재시도 파일은 정제 전 자료이므로 commit하거나 공유하지 않습니다. BuildLore가
+보존 전에 정제하며 자격 증명 의심 값은 저장을 거부합니다. `--commit`을 명시하면 보존 객체만
+로컬 commit하고, 생략하면 파일만 저장합니다. push·위키 승인·다음 개발 기준 변경은 하지 않습니다.
+보존 객체 자체의 독립 조회는 가능하지만 자동 capture·보존 source 기반 위키 갱신·기준 복구·문서
+정리는 아직 연결되지 않았으므로 원본 개발 자료는 유지합니다(`cleanupEligible: false`).
+제약은 [CLI 참고서](docs/cli-reference.md#완료-자료-고정--p2a-knowledge-capture)에 설명합니다.
 
 ### 6. 프로젝트 단위 외부 Agent Skills 관리
 
@@ -257,6 +284,7 @@ Plan2Agent는 하나의 `p2a` entrypoint를 설치합니다.
 | `p2a eval` | 실행 증거를 grade, compare, analyze, generate, summarize합니다. |
 | `p2a proposals` | 개선 proposal을 검토하거나 회고 GitHub 이슈를 preview하고 명시적으로 발행합니다. |
 | `p2a buildlore` | 선택적 BuildLore 지식을 projection, 검사, 검색, 조회합니다. |
+| `p2a knowledge capture` | 완료 자료를 로컬에 고정해 별도의 정제·지식 보존에 전달합니다. |
 | `p2a skills` | 외부 Agent Skill을 미리 보고 설치·고정·갱신·복원·제거합니다. |
 
 최상위 명령은 `p2a --help`로 확인할 수 있습니다. 자세한 option과 예시는

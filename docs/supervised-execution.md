@@ -282,7 +282,9 @@ p2a runs record --run-id <id> --artifacts <root> \
 
 Phase 0의 일회성 task-decomposition A/B 평가는 고정 seed·prompt·verification·UI capture matrix로 수행했고, 그 결과와 한계는 [개선 제안서 §13](gate-driven-adaptive-execution-proposal.md#13-평가-기록과-운영-계측)에 보존한다. 평가는 production `p2a execute` lifecycle 전체를 재현하지 않았으며, 의사결정 완료 뒤 전용 runner·fixture·schema·회귀 테스트를 저장소에서 제거했다. 이후 운영 비교는 실제 run의 `p2a eval digest` telemetry를 사용하고 과거 A/B를 기본 테스트나 phase별 절차로 반복하지 않는다. 당시 사용한 baseline seal CLI와 schema도 제품 runtime과 대상 프로젝트 배포 표면에 남기지 않는다.
 
-같은 task의 latest run이 `failed` 또는 `blocked`이면 먼저 해당 로컬 run의 failure class, localization, verification evidence를 직접 확인한다. 이미 commit된 BuildLore 지식이 실제로 도움이 될 때만 같은 프로젝트를 한 번 명시적으로 검색하고, 명확히 유사한 mitigation만 적용해 조회한 source를 run note에 남긴다. 재시도를 이유로 BuildLore sync·compile·commit·push를 암묵적으로 수행하지 않으며 첫 시도에는 검색하지 않는다.
+같은 task의 latest run이 `failed` 또는 `blocked`이면 먼저 해당 로컬 run의 failure class, localization, verification evidence를 직접 확인한다. BuildLore가 설정되어 있고 현재 목표와 관련 있다면 첫 시도·재개에도 제한된 `memory` 조회와 필요한 근거의 generation-bound `lookup`을 사용할 수 있다. 과거 기억은 현재 코드·실행 증거를 대체하지 않으며, 재시도에는 명확히 유사한 mitigation만 적용하고 근거를 기존 run note에 남긴다. 미설정·빈 결과·조회 실패·예산 초과이면 현재 작업을 계속한다. 조회를 이유로 sync·compile·승인·commit·push를 암묵적으로 수행하지 않는다.
+
+실행 담당자는 기능 진전·검증 결과·주요 선택·반복 실패 때 현재 상황과 다음 행동을 짧게 설명한다. 방향 우려는 관찰·목표에 미치는 영향·권고·이어갈 행동으로 제시하되 의견만으로 개발을 차단하거나 새 승인·reviewer·보고서를 요구하지 않는다. 사용자가 다른 방향을 선택하면 최신 선택을 반영하고 새 근거 없이 같은 권고를 반복하지 않는다. 실제 범위 변경과 외부 권한 경계는 기존 경로를 유지한다.
 
 `p2a execute start/status/finish`와 직접 `p2a runs start/finish` 출력 footer에는 copy-paste 가능한 `resume`, `status`, `finish`, `review` 명령이 남는다. `resume`은 `p2a execute resume --run-id <run-id>`로 같은 run의 launcher prompt를 다시 출력한다. 실행 계획과 Launcher는 사람에게 task `intent`와 실패 시 행동을 `[한눈에]`로 먼저 보여주고, 실행 명령 뒤에 정확한 envelope·acceptance·경계를 `[세부 계약]`으로 유지한다. `intent`는 task contract hash와 완료 판정에서 제외된다. `review`의 `p2a proposals mine --run-id <run-id>`는 회고 후보를 쓰는 별도 승인 필요 작업이며, `p2a next`가 자동 실행하지 않는다.
 
