@@ -6,6 +6,29 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-30
+
+### Added
+
+- Add read-only development briefings to `p2a next` for active and recoverable blocked runs, including reported changes, checkpoint outcomes, revision-bound checks, completion criteria, and recorded follow-up.
+- Extract attributed decisions, assumptions, deferred work, implementation lessons, and labelled completion notes into `p2a knowledge capture`, with pointers and digests for the frozen source evidence.
+
+### Changed
+
+- Consolidate the v1 and v2 next-response contracts into `next.schema.json`, selecting validation rules by `schema_version` while preserving existing CLI defaults and response formats.
+
+### Fixed
+
+- Retain executed timeout failures in progress briefings and completion lessons, and preserve original source indices when omitting blank change summaries.
+- Use the persisted run-index order to resolve tied completion timestamps and avoid retaining superseded follow-up notes.
+- Keep incident histories scoped to the same task and execution kind, and preserve explicitly linked review findings and remediation as completion lessons.
+
+### Compatibility and migration
+
+- Node.js 22.20.0 remains the minimum. Preview existing project updates with `p2a upgrade --target . --dry-run` before applying them.
+- Schema consumers must use `schemas/next.schema.json` for both `p2a.next.v1` and `p2a.next.v2`; the separate `next-v2.schema.json` is retired. Use `p2a upgrade --target . --apply --prune` to remove an unchanged retired managed schema; locally modified copies remain protected.
+- Completion capture remains an explicit command. Automatic lifecycle capture, knowledge publication, and artifact cleanup are not introduced by this release.
+
 ## [0.7.0] - 2026-09-25
 
 ### Added
@@ -423,7 +446,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Add package-runtime project initialization, managed provider assets, artifact validation, handoff, supervised execution, evaluation, and proposal workflows.
 - Ship canonical and generated integrations for Codex, Claude Code, and Gemini CLI.
 
-[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/silbaram/plan2agent/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/silbaram/plan2agent/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/silbaram/plan2agent/compare/v0.5.24...v0.6.0
 [0.5.24]: https://github.com/silbaram/plan2agent/compare/v0.5.23...v0.5.24
