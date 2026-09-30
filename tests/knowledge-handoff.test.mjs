@@ -75,7 +75,7 @@ function addReferenceBundle(artifactRoot) {
   writeJson(specPath, spec);
 }
 
-function fixture(t, { closed = true, maintenance = false, referenceBundle = false } = {}) {
+function fixture(t, { closed = true, maintenance = false, referenceBundle = false, notes = [] } = {}) {
   const projectRoot = mkdtempSync(path.join(tmpdir(), 'p2a-knowledge-capture-'));
   t.after(() => rmSync(projectRoot, { recursive: true, force: true }));
   const artifactRoot = path.join(projectRoot, '.plan2agent', 'artifacts', 'webhook-api-service');
@@ -93,6 +93,7 @@ function fixture(t, { closed = true, maintenance = false, referenceBundle = fals
     writeJson(graphPath, graph);
     ok(runExecute(['verify-final', '--artifacts', artifactRoot, '--task', graph.tasks[0].id, '--run-id', 'run-capture-final', '--agent-tool', 'manual']));
     ok(runRuns(['verify', '--artifacts', artifactRoot, '--run-id', 'run-capture-final', '--test-command', 'node -e "console.log(123)"']));
+    if (notes.length) ok(runRuns(['record', '--artifacts', artifactRoot, '--run-id', 'run-capture-final', ...notes.flatMap((note) => ['--note', note])]));
     ok(runExecute(['finish', '--artifacts', artifactRoot, '--run-id', 'run-capture-final']));
     ok(runIteration(['close', '--artifacts', artifactRoot]));
   }
@@ -131,7 +132,9 @@ test('closed feature capture is frozen, bounded, deterministic and pending, neve
     assert.equal(source.sourceDigest, sha(source.body));
     assert.equal(path.isAbsolute(source.ref), false);
   }
-  assert.deepEqual(bundle.knowledge.decisions, []);
+  assert.ok(bundle.knowledge.decisions.length > 0);
+  assert.match(bundle.knowledge.decisions.join('\n'), /Recorded rationale:/);
+  assert.match(bundle.knowledge.decisions.join('\n'), /#\/clarifying_question_disposition\/0; sha256:/);
   const second = captureKnowledge(f.options);
   assert.equal(second.reused, true);
   assert.equal(second.inputDigest, receipt.inputDigest);
@@ -150,6 +153,25 @@ test('capture refuses active feature and does not create pending bundles or clos
   assert.throws(() => captureKnowledge(f.options), /closed iteration/);
   assert.equal(existsSync(path.join(f.artifactRoot, 'handoffs')), false);
   assert.equal(readFileSync(path.join(f.artifactRoot, 'current-spec.json'), 'utf8'), before);
+});
+
+test('capture extracts labelled completion notes with pointers into frozen run evidence', (t) => {
+  const notes = [
+    'decision: Keep the public adapter because callers already depend on it.',
+    'lesson: Concurrent requests exposed a gap in the sequential test.',
+    'remaining: Production load has not been tested.',
+  ];
+  const f = fixture(t, { notes });
+  const receipt = captureKnowledge(f.options);
+  const bundle = readJson(path.join(f.projectRoot, receipt.bundlePath));
+  const runSource = bundle.sources.find((item) => item.ref.endsWith('/run-capture-final.json'));
+  for (const [index, category] of ['decisions', 'lessons', 'remaining'].entries()) {
+    const extracted = bundle.knowledge[category].find((item) => item.includes(notes[index].split(': ')[1]));
+    assert.ok(extracted, category);
+    assert.ok(extracted.includes(`${runSource.ref}#/notes/${JSON.parse(runSource.body).notes.indexOf(notes[index])}; ${runSource.sourceDigest}`));
+  }
+  assert.equal(receipt.wikiApproved, false);
+  assert.equal(receipt.cleanupEligible, false);
 });
 
 test('missing selected evidence fails without changing done status and retry succeeds after restore', (t) => {

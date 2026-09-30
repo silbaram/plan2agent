@@ -54,6 +54,8 @@ Missing configuration, unavailable/offline storage, empty results, stale generat
 
 Explain the current goal and immediate next action when starting or resuming needs context. Update the user when a usable outcome is implemented or verified, a consequential design choice or new fact appears, failures repeat, scope grows, or the user asks about status. Usually two to four sentences and one important concern are enough. Follow the host's progress-update cadence without creating a report for every edit or tool call.
 
+For an active or recoverable blocked run, `p2a next --json --contract v2` includes a read-only `briefing`: reported changes, checkpoint outcomes with current passing evidence, latest checks with revision freshness, recorded follow-up, and the existing decision boundary. Use its source pointers to ground the progress explanation. `reportedChanges` are owner reports; `completionCriteria` are requirements, not an assessment of their completion. Only executed current passes support a current check claim. Historical or unknown checks need fresh evidence before making current claims; a historical check alone does not reopen a completed checkpoint. The briefing never replaces `command` as routing authority and a passing command alone does not establish every acceptance criterion.
+
 Distinguish four inputs instead of blending them into certainty:
 
 - Current intent: the latest user request and choices, interpreted with the active execution contract.
@@ -64,6 +66,8 @@ Distinguish four inputs instead of blending them into certainty:
 Ask whether the change helps solve the current user problem. Unnecessary structure or dependencies, repeated fixes without testing the cause, or tests unlike real usage may justify a concern; file count, a revised plan, or disagreement with old Wiki prose alone does not establish drift. Explain **observation → impact on the goal → advice → next authorized action**. Advice alone does not mark work blocked or failed, create a new approval gate, start another reviewer, or require a report. Continue authorized development without waiting for a response; preserve real scope, verification, and external-authority boundaries.
 
 Reflect the user's changed direction through the existing contract-update path when needed. If the user defers advice or chooses differently, remember that choice and do not repeat the same recommendation without new evidence or changed impact. Keep only resume-critical intent, deferred advice, and next action in existing notes, not additional progress/review/summary documents.
+
+When a reusable implementation decision, observed lesson, or unresolved follow-up is established, record it in the existing run using `p2a runs record --artifacts <dir> --run-id <id> --note 'decision: <choice and recorded reason>'`, `lesson: <observation and its limits>`, or `remaining: <unresolved follow-up>`. These optional labelled notes are owner reports, not approval or executed proof; ordinary unlabelled notes keep their existing meaning. Record diagnosis, correction, and recurrence checks through the existing structured failure-detail options when applicable. Completion capture extracts these records with source pointers; it does not infer reasons from raw logs.
 
 Describe progress in user-visible capabilities and verified scope, not percentages guessed from file or task counts. Test definitions are not executed evidence. At completion, separate implemented outcomes, actual verification, and unresolved issues; mention knowledge handoff or cleanup only when actually performed.
 

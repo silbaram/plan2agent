@@ -15,6 +15,7 @@ For a direct review or request to summarize, write, or register an identified re
 
 1. Run `p2a next --json --contract v2` from the target project. Pass `--project-id <id>` when the user selected a project, and `--idea <request>` or `--entry <path>` for an actual new change request. Reviewing completed work or summarizing/registering an existing retrospective is not a new feature idea.
 2. Read the returned `command`, `continuation`, and reason. Explain the understood outcome, material decision if any, and next action in product language. Keep state ids, run ids, hashes, and artifact paths internal unless requested.
+   When `briefing` is present, use it to distinguish reported changes, outcomes backed by current checkpoint checks, historical/unconfirmed checks, and remaining work. Its facts are advisory; follow `command` for the authorized action. Do not equate a passing check with coverage of all completion criteria.
 3. Execute the authorized action below, then rerun `next` after it completes unless the result is terminal or a closeout choice is still pending. If project selection is required, ask for one of the displayed project ids.
 
 ## Authority and dispatch

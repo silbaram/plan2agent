@@ -567,8 +567,8 @@
       "id": "schema.next-contract",
       "owner": "schema",
       "root": "runtime",
-      "path": "schemas/next-v2.schema.json",
-      "condition": "An agent requests the typed p2a next v2 contract.",
+      "path": "schemas/next.schema.json",
+      "condition": "A p2a next v1 or v2 response is inspected or validated.",
       "stages": [
         "entry",
         "gate-a",

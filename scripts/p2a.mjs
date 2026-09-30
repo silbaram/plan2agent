@@ -12,6 +12,7 @@ import { p2aCommandLine } from './p2a_run_commands.mjs';
 import { buildInfo, buildNext } from './p2a_next_service.mjs';
 import { atomicWriteText } from './p2a_run_store.mjs';
 import { assertFinalFullVerificationReady } from './p2a_final_verification_gate.mjs';
+import { renderDevelopmentBrief } from './p2a_development_brief.mjs';
 
 export {
   buildInfo,
@@ -559,6 +560,7 @@ function humanOutputLanguage(next, context) {
     context.spec?.product,
     context.task?.intent,
     context.task?.title,
+    next.briefing?.goal,
     context.completion?.outcomes,
     next.command?.decisionSummary,
   ].filter((value) => value !== null && value !== undefined);
@@ -620,7 +622,8 @@ function humanNextSummaryEnglish(next, context) {
     ? normalizedSentence(context.spec.product.goals[0])
     : null;
   const taskIntent = normalizedSentence(context.task?.intent)
-    ?? normalizedSentence(context.task?.title);
+    ?? normalizedSentence(context.task?.title)
+    ?? normalizedSentence(next.briefing?.goal);
   const decisionSummary = Array.isArray(next.command?.decisionSummary)
     ? next.command.decisionSummary.map(normalizedSentence).filter(Boolean)
     : [];
@@ -853,7 +856,8 @@ function humanNextSummary(next, context) {
     ? normalizedSentence(context.spec.product.goals[0])
     : null;
   const taskIntent = normalizedSentence(context.task?.intent)
-    ?? normalizedSentence(context.task?.title);
+    ?? normalizedSentence(context.task?.title)
+    ?? normalizedSentence(next.briefing?.goal);
   const decisionSummary = Array.isArray(next.command?.decisionSummary)
     ? next.command.decisionSummary.map(normalizedSentence).filter(Boolean)
     : [];
@@ -1318,6 +1322,7 @@ export function renderNextHuman(
     '',
     language === 'ko' ? '[한눈에]' : '[At a glance]',
     ...humanNextSummary(next, resolvedContext),
+    ...renderDevelopmentBrief(next.briefing, language),
     '',
     language === 'ko' ? '[권장 다음 행동]' : '[Recommended next action]',
     ...humanRecommendedAction(next, resolvedContext),

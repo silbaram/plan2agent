@@ -120,6 +120,10 @@ test('checkout init preserves the legacy co-located runtime', () => {
     assert.ok(manifest.scriptFiles.includes('.plan2agent/scripts/p2a_continuations.mjs'));
     assert.ok(manifest.scriptFiles.includes('.plan2agent/scripts/p2a_schema.mjs'));
     assert.ok(manifest.schemaFiles.includes('.plan2agent/schemas/next.schema.json'));
+    assert.deepEqual(
+      manifest.schemaFiles.filter((file) => path.basename(file).startsWith('next')),
+      ['.plan2agent/schemas/next.schema.json'],
+    );
     assert.ok(manifest.schemaFiles.includes('.plan2agent/schemas/constitution.schema.json'));
     assert.ok(manifest.schemaFiles.includes('.plan2agent/schemas/decisions.schema.json'));
     assert.ok(manifest.schemaFiles.includes('.plan2agent/schemas/context-packet.schema.json'));
@@ -344,6 +348,10 @@ test('npm pack dry run includes the global CLI runtime', () => {
     });
     assert.equal(packed.status, 0, formatCommandResult(packed));
     const files = new Set(parseNpmPackResult(packed.stdout).files.map((file) => file.path));
+    assert.deepEqual(
+      [...files].filter((file) => /^schemas\/next.*\.schema\.json$/.test(file)),
+      ['schemas/next.schema.json'],
+    );
     for (const requiredPath of [
       'package.json',
       'LICENSE',

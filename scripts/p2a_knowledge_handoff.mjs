@@ -23,6 +23,7 @@ import {
 } from './p2a_monitor_gate.mjs';
 import { readRequiredAcceptanceReviewEvidence } from './p2a_acceptance_review_gate.mjs';
 import { assertFinalFullVerificationReady } from './p2a_final_verification_gate.mjs';
+import { extractCompletionKnowledge } from './p2a_completion_knowledge.mjs';
 
 export const MAX_KNOWLEDGE_HANDOFF_BYTES = 1024 * 1024;
 const schemaPath = fileURLToPath(new URL('../schemas/knowledge-handoff-input.schema.json', import.meta.url));
@@ -394,14 +395,21 @@ function captureLocked(options, projectRoot, artifactRoot) {
     }
   }
   approvalProvenance(reader, artifactRoot, iterationId, taskId, completedAt);
+  const sources = reader.sources();
+  const knowledge = extractCompletionKnowledge({
+    summary: options.summary ?? summary,
+    sources,
+    specRef: taskId ? null : relative(projectRoot, expectedSpec),
+    intakeRef: taskId ? null : relative(projectRoot, path.join(artifactRoot, 'iterations', iterationId, 'gate-a-intake', 'intake.json')),
+  });
   const bundle = {
     schemaVersion: 'buildlore.completion-input.v1', projectId,
     workId: taskId ?? iterationId, workKind: taskId ? 'maintenance' : 'iteration', completedAt,
     repository: capturedRepository(projectId, [completionEvidence]), predecessor: null,
     affectedAreas: [...new Set(Array.isArray(areas) ? areas : [areas])].filter(Boolean).sort(), supersedes: [],
     baseline,
-    knowledge: { summary: options.summary ?? summary, decisions: [], lessons: [], remaining: [] },
-    sources: reader.sources(),
+    knowledge,
+    sources,
   };
   const schema = JSON.parse(readFileSync(schemaPath, 'utf8'));
   validateSchema(bundle, schema);

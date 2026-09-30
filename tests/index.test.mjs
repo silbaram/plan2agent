@@ -17,6 +17,7 @@ import './harness-update-style-contract.test.mjs';
 import './handoff-portability.test.mjs';
 import './buildlore-integration.test.mjs';
 import './knowledge-handoff.test.mjs';
+import './development-assistant.test.mjs';
 import './spec-supersession.test.mjs';
 import './run-retention.test.mjs';
 import './monitor-telemetry.test.mjs';

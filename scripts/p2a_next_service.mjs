@@ -36,7 +36,8 @@ import {
   continuationDescriptor,
   runtimePacketModeForContext,
 } from './p2a_continuations.mjs';
-import { compareRunEvidence, taskGraphRefMatchesGraph } from './p2a_run_paths.mjs';
+import { compareRunEvidence, runFilePath, taskGraphRefMatchesGraph } from './p2a_run_paths.mjs';
+import { inspectDevelopmentBrief } from './p2a_development_brief.mjs';
 import { assertFinalVisualReviewRunReady } from './p2a_visual_review_gate.mjs';
 import { assertFinalAcceptanceReviewRunReady } from './p2a_acceptance_review_gate.mjs';
 import { iterationVerificationStatus } from './p2a_final_verification_gate.mjs';
@@ -3323,6 +3324,23 @@ function resolveNextDecision(
   if (contract === 'v2') {
     payload.reasonCode = action.state;
     payload.continuation = action.continuation ?? null;
+    const briefingRun = action.state === 'run_started'
+      ? context.startedRun
+      : action.state === 'tasks_blocked'
+        ? context.blockedUserDecisionRun ?? context.retryableBlockedRun
+        : null;
+    if (briefingRun) {
+      const runsDir = context.detail.runs.runsDir;
+      payload.briefing = inspectDevelopmentBrief({
+        run: briefingRun,
+        task: context.gates.taskGraph.tasks.find((task) => task.id === briefingRun.taskId),
+        sourceRef: relativeToTarget(targetRoot, runFilePath(runsDir, briefingRun.runId)),
+        runsDir,
+        artifactRoot: context.artifactRoot,
+        graphPath: context.gates.taskGraphPath,
+        requiresUserDecision: command.kind === 'approval',
+      });
+    }
     if (action.state === 'iteration_review_or_close_required') {
       payload.retrospective = {
         enabled: context.retrospectivePolicy.enabled,

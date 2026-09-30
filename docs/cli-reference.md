@@ -52,6 +52,8 @@ p2a next --json --contract v2
 
 `p2a`의 하위 명령은 `decide`, `decisions`, `shape`, `eval`, `knowledge`, `buildlore`, `skills`, `execute`, `tasks`, `runs`, `iteration`, `proposals`, `validate`, `doctor`, `enhance`, `update`, `upgrade`, `handoff`다. `--target`을 생략하면 현재 작업 디렉터리를 대상으로 삼는다.
 
+진행 중인 run이나 기록된 복구 대상이 있는 blocked 상태에서는 `p2a next`가 기록된 변경, 현재 작업 파일에서 통과한 검사, 남은 확인을 함께 설명한다. `--json --contract v2`의 선택적 `briefing`에는 각 항목의 근거 위치와 검사별 `current|historical|unknown` freshness를 담는다. 동일 검사의 최신 시도를 사용하고, 파일이 바뀌면 이전 검사와 체크포인트 결과를 현재 통과로 표시하지 않는다. 수동 기록·미실행·revision 미확인도 현재 실행 증거로 인정하지 않는다. `reportedChanges`는 담당자 설명이고 `completionCriteria`는 판정할 기준이며, 검사 통과만으로 모든 사용자 동작이 검수됐다고 주장하지 않는다. 브리핑은 조회 시점의 설명 자료로서 상태·승인·다음 명령을 변경하지 않는다. 기본 v1 JSON 형식은 유지한다.
+
 ### 외부 Agent Skills — `p2a skills`
 
 고정된 `skills@1.7.0` adapter로 GitHub/GitLab/Git URL 또는 프로젝트 내부 local source를 격리된 staging에 복사하고 검증한다. source 조회와 dry-run은 target을 바꾸지 않는다. write 명령은 `--dry-run`과 `--apply` 중 하나를 반드시 명시하며, apply에는 검토한 `--expect-plan` 해시가 필요하다.
@@ -107,7 +109,7 @@ p2a buildlore lookup --kind fact --ids <canonical-id>,<canonical-id> --expect-ge
 
 실행 파일은 기본 `buildlore`이며 `BUILDLORE_BIN` 또는 `project.config.json.buildlore.command`로 단일 executable path를 지정할 수 있다. 고정 인자가 필요한 개발 checkout은 `buildlore.commandArgs`를 사용한다. knowledge 쓰기·commit/push와 parent submodule pin은 별도 권한으로 BuildLore에서 처리하며 읽기가 이를 암묵적으로 실행하지 않는다.
 
-옵션 없는 `p2a next --json`은 기존 consumer를 위한 엄격한 `p2a.next.v1` 계약을 유지한다. 사람이 읽는 `p2a next` 출력은 v2를 기본으로 사용하고 `[한눈에]`와 `[권장 다음 행동]`만 보여 준다. Gate 이름, state/reason, 정확한 하위 명령과 artifact 경로는 기본 화면에서 숨기며 `p2a next --details`의 `[내부 실행 정보]` 또는 JSON에서 확인한다. 이 표현층은 v1/v2 JSON payload를 수정하지 않는다. 타입이 지정된 상태 enum과 안정적인 `reasonCode`가 필요한 agent consumer는 `--contract v2`를 명시하며, 출력은 `next-v2.schema.json`의 `p2a.next.v2`를 따른다.
+옵션 없는 `p2a next --json`은 기존 consumer를 위한 엄격한 `p2a.next.v1` 계약을 유지한다. 사람이 읽는 `p2a next` 출력은 v2를 기본으로 사용하고 `[한눈에]`와 `[권장 다음 행동]`만 보여 준다. Gate 이름, state/reason, 정확한 하위 명령과 artifact 경로는 기본 화면에서 숨기며 `p2a next --details`의 `[내부 실행 정보]` 또는 JSON에서 확인한다. 이 표현층은 v1/v2 JSON payload를 수정하지 않는다. 타입이 지정된 상태 enum과 안정적인 `reasonCode`가 필요한 agent consumer는 `--contract v2`를 명시한다. 두 응답 버전은 모두 `next.schema.json`을 사용하며, `schema_version`에 따라 `p2a.next.v1` 또는 `p2a.next.v2`의 검증 규칙을 적용한다.
 
 `p2a.next.v2`의 skill action은 표시 문자열과 별도로 `skill`/`args`를 제공하고, 모든 응답은 `continuation`을 object 또는 `null`로 명시한다. 범위·프로젝트 원칙·구현 계획 승인은 사용자에게 보여 줄 `decisionSummary`와 재개용 `argv`, 정확히 한 번 치환할 `quotePlaceholder`를 함께 제공한다. Agent는 사용자가 해당 결정을 명시적으로 승인한 뒤 placeholder에 그 발화를 그대로 넣어 한 번만 실행하므로 표시 문장을 명령으로 다시 해석하지 않는다. `after_command_success` continuation이 붙은 start/resume/review/accept action은 argv에 `--json`을 포함한다. 성공 stdout은 `execution-result.schema.json`의 단일 `p2a.execution_result.v1` 문서이며, 호출자는 exit code가 0이고 `outcome=succeeded`, `runStatus=started`일 때만 그 `runId`를 후속 처리에 사용한다. 기본 v1 action argv와 field set은 바뀌지 않는다.
 
@@ -120,9 +122,22 @@ p2a knowledge capture --artifacts .plan2agent/artifacts/<project-id> --iteration
 p2a knowledge capture --artifacts .plan2agent/artifacts/<project-id> --task <done-maintenance-task-id> --summary "완료 내용" --json
 ```
 
+capture는 선택한 작업의 자료에서 `knowledge.decisions`, `lessons`, `remaining`을 자동 추출한다. 승인 intake의 답변, 승인 spec의 해결 내용·선택/기각 이유, 보류한 항목과 가정을 사용한다. 질문의 영향 설명을 선택 이유로 대신하지 않으며, 기록되지 않은 이유는 미기록으로 표시한다. 가정은 미검증, 보류 항목은 미예정으로 구분한다. 유지보수 capture는 다른 기능의 기획 결정을 가져오지 않는다.
+
+실행 중 다음처럼 기존 notes에 재사용할 내용을 남길 수 있다.
+
+```bash
+p2a runs record --artifacts <root> --run-id <id> \
+  --note 'decision: 기존 호출부 호환성을 유지하기 위해 어댑터를 유지했다.' \
+  --note 'lesson: 순차 요청만으로는 재현되지 않았고 동시 요청에서 실패를 관찰했다.' \
+  --note 'remaining: 운영 부하 수준의 검증은 수행하지 않았다.'
+```
+
+labelled note는 실행 담당자의 기록으로 표시한다. 같은 작업·실행 종류의 이전 run에 남긴 `remaining:`은 최신 run이 있으면 추출하지 않는다. 완료 시각이 같으면 고정된 run index의 순서로 최신 실행을 판단한다. 구조화된 재현·진단·수정·재발 방지 내용과 실제 검사 실패→통과 이력도 교훈에 담되, 단순 재시도 성공만으로 원인이나 해결책을 확정하지 않는다. 실패와 후속 수정은 같은 작업·실행 종류 안에서 연결하며, 리뷰에 따른 수정은 명시적인 `reviewRemediation` 관계와 기록된 지적 사항을 근거로 포함한다. 각 항목에는 고정본 `sources`의 경로, JSON Pointer, 본문 digest가 붙는다. 일반 notes와 stdout에서 임의로 원인을 추론하지 않는다. 추출할 근거가 없으면 배열은 비워 둔다. 기존 `--summary`와 BuildLore 전달 형식은 유지한다.
+
 `--iteration`과 `--task` 중 하나만 지정한다. 반복 개발은 현재 계약이 선택한 종료 반복과 일치해야 하고, 유지보수는 선택한 완료 task의 불변 계약·의도·검증 근거를 사용한다. 다른 유지보수 task나 feature 기준을 완료한 것으로 취급하지 않는다. 승인된 참조 묶음이 있으면 snapshot·사용 기록·선언된 참조 파일까지 해시를 검증해 함께 고정한다. 필요한 원본·해시·검증이 없거나 맞지 않으면 고정을 거부하며 task 완료 상태는 바꾸지 않는다. 지원되는 근거는 JSON·Markdown·일반 텍스트이며 필수 시각·바이너리 근거를 누락한 채 성공하지 않는다.
 
-요약은 기존 목표·의도 또는 명시한 `--summary`를 사용한다. 결정·교훈·남은 일을 자동으로 지어내지 않으며 현재 capture의 해당 배열은 비워 둔다. 선택 작업만 담은 graph/index/결정 출처 snapshot은 별도 형식을 표시한다. 이 경우 `sourceDigest`는 포함된 snapshot 본문의 해시이며 원본 파일 전체의 해시라고 해석하지 않는다. 과거 승인 기록을 새로운 작업의 승인으로 재생하지 않는다.
+요약은 기존 목표·의도 또는 명시한 `--summary`를 사용한다. 결정·교훈·남은 일은 선택한 작업의 기록에서 근거와 함께 추출하며, 추출할 근거가 없는 배열은 비워 둔다. 선택 작업만 담은 graph/index/결정 출처 snapshot은 별도 형식을 표시한다. 이 경우 `sourceDigest`는 포함된 snapshot 본문의 해시이며 원본 파일 전체의 해시라고 해석하지 않는다. 과거 승인 기록을 새로운 작업의 승인으로 재생하지 않는다.
 
 고정본은 artifact root의 `handoffs/pending/<sha256>.json`에 저장한다. 같은 내용의 재실행은 같은 고정본을 재사용하며, 이미 만든 고정본을 나중의 공용 문서 내용으로 덮어쓰지 않는다. 이 파일은 **정제 전 로컬 자료**이므로 commit·공유하지 않는다. 자동 완료 hook은 아직 없으므로 기본 `active_only` 보관 정책에서는 다음 iteration을 열거나 다음 maintenance task를 시작해 이전 run이 정리되기 **전에** 명시적으로 capture해야 한다. 이후 전송 재시도는 고정된 파일을 사용한다.
 

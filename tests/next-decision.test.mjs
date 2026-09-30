@@ -42,8 +42,7 @@ import {
 } from '../scripts/p2a_run_paths.mjs';
 import { productRevisionExcludedPaths } from '../scripts/p2a_verification_profile.mjs';
 
-const NEXT_V1_SCHEMA = JSON.parse(readFileSync(new URL('../schemas/next.schema.json', import.meta.url), 'utf8'));
-const NEXT_SCHEMA = JSON.parse(readFileSync(new URL('../schemas/next-v2.schema.json', import.meta.url), 'utf8'));
+const NEXT_SCHEMA = JSON.parse(readFileSync(new URL('../schemas/next.schema.json', import.meta.url), 'utf8'));
 
 function writeJson(filePath, value) {
   mkdirSync(dirname(filePath), { recursive: true });
@@ -4012,7 +4011,7 @@ test('next skips historical composition while explicit administration can still 
     const legacyResult = runP2a(['next', '--target', root, '--json']);
     assert.equal(legacyResult.status, 0, `${legacyResult.stdout}${legacyResult.stderr}`);
     const legacyBeforeCompose = JSON.parse(legacyResult.stdout);
-    assert.doesNotThrow(() => validateSchema(legacyBeforeCompose, NEXT_V1_SCHEMA));
+    assert.doesNotThrow(() => validateSchema(legacyBeforeCompose, NEXT_SCHEMA));
     assert.equal(legacyBeforeCompose.state, 'iteration_complete');
     assert.deepEqual(legacyBeforeCompose.command.argv, [
       'iteration', 'open', '--artifacts', artifactPath(root),
@@ -4576,13 +4575,14 @@ test('next returns exact commands for cache, webhook, and e2e fixture states', (
 });
 
 test('next schema declares the CLI, skill, and approval command shapes', () => {
-  assert.equal(NEXT_SCHEMA.properties.schema_version.const, 'p2a.next.v2');
-  assert.deepEqual(NEXT_SCHEMA.properties.command.oneOf.map((variant) => variant.properties.kind.const), [
+  const v2Schema = NEXT_SCHEMA.$defs.v2;
+  assert.equal(v2Schema.properties.schema_version.const, 'p2a.next.v2');
+  assert.deepEqual(v2Schema.properties.command.oneOf.map((variant) => variant.properties.kind.const), [
     'cli',
     'skill',
     'approval',
   ]);
-  assert.ok(NEXT_SCHEMA.properties.command.oneOf[2].properties.options);
+  assert.ok(v2Schema.properties.command.oneOf[2].properties.options);
   const reviewOrClosePayload = {
     schema_version: 'p2a.next.v2',
     generatedAt: '2026-08-22T00:00:00.000Z',
@@ -4872,13 +4872,13 @@ test('next v2 exposes structured skill and command-bound continuation without di
   assert.equal(startedRule.continuation({ startedRun: { mode: 'planned' } }).mode, 'planned');
 });
 
-test('next keeps the strict v1 JSON contract by default and exposes reasonCode only in v2', () => {
+test('next uses one schema for strict v1 and v2 responses while keeping v1 as the JSON default', () => {
   const root = project();
   try {
     const legacyResult = runP2a(['next', '--target', root, '--json']);
     assert.equal(legacyResult.status, 0, `${legacyResult.stdout}${legacyResult.stderr}`);
     const legacy = JSON.parse(legacyResult.stdout);
-    assert.doesNotThrow(() => validateSchema(legacy, NEXT_V1_SCHEMA));
+    assert.doesNotThrow(() => validateSchema(legacy, NEXT_SCHEMA));
     assert.equal(legacy.schema_version, 'p2a.next.v1');
     assert.equal('reasonCode' in legacy, false);
     assert.equal('continuation' in legacy, false);
@@ -4887,6 +4887,29 @@ test('next keeps the strict v1 JSON contract by default and exposes reasonCode o
     assert.doesNotThrow(() => validateSchema(typed, NEXT_SCHEMA));
     assert.equal(typed.reasonCode, typed.state);
     assert.equal(typed.continuation, null);
+
+    for (const [key, value] of [['reasonCode', legacy.state], ['continuation', null]]) {
+      assert.throws(
+        () => validateSchema({ ...legacy, [key]: value }, NEXT_SCHEMA),
+        /contains unsupported keys/,
+      );
+      const incompleteV2 = { ...typed };
+      delete incompleteV2[key];
+      assert.throws(
+        () => validateSchema(incompleteV2, NEXT_SCHEMA),
+        /missing required keys/,
+      );
+    }
+    for (const payload of [legacy, typed]) {
+      assert.throws(
+        () => validateSchema({ ...payload, unexpected: true }, NEXT_SCHEMA),
+        /contains unsupported keys/,
+      );
+      assert.throws(
+        () => validateSchema({ ...payload, schema_version: 'p2a.next.v3' }, NEXT_SCHEMA),
+        /schema_version/,
+      );
+    }
   } finally {
     remove(root);
   }
