@@ -1256,6 +1256,7 @@ test('an explicit new entry pauses instead of auto-starting current approved wor
     assert.match(payload.reason, /will not be started or replaced implicitly/u);
     assert.ok(payload.command.decisionSummary.some((item) => /Saved the new request/u.test(item)));
     assert.doesNotMatch(JSON.stringify(payload.command), /execute start/u);
+    assert.ok(payload.agentGuidance.some((item) => /not permission to start, replace, or execute/u.test(item)));
   } finally {
     remove(root);
   }
@@ -1447,6 +1448,8 @@ test('a blocked run records the bounded user decision and returns the task to re
     ]);
     assert.match(payload.reason, /public payment API/u);
     assert.match(payload.reason, /revert that change|replacement scope/u);
+    assert.ok(payload.agentGuidance.some((item) => /reopens only task task-001/u.test(item)));
+    assert.ok(payload.agentGuidance.some((item) => /leave the task blocked/u.test(item)));
 
     const human = runP2a(['next', '--target', root]);
     assert.equal(human.status, 0, `${human.stdout}${human.stderr}`);
@@ -1474,6 +1477,8 @@ test('a blocked run records the bounded user decision and returns the task to re
       true,
     );
     assert.match(replacement.reason, /without closing that incomplete iteration/u);
+    assert.ok(replacement.agentGuidance.some((item) => /only after explicit user approval/u.test(item)));
+    assert.ok(replacement.agentGuidance.some((item) => item.includes(`--entry ${replacementEntry}`)));
 
     const replaced = runP2a(replacement.command.argv);
     assert.equal(replaced.status, 0, `${replaced.stdout}${replaced.stderr}`);
@@ -2288,9 +2293,11 @@ test('a generated retrospective report does not stale final verification but oth
       '# Product note\n',
       'utf8',
     );
-    assertAction(next(root), 'relevant_verification_required', 'cli', [
+    const relevant = next(root);
+    assertAction(relevant, 'relevant_verification_required', 'cli', [
       'execute', 'verify-final', '--scope', 'relevant', '--artifacts', artifactPath(root),
     ]);
+    assert.ok(relevant.agentGuidance.some((item) => /do not substitute the product-wide suite/u.test(item)));
   } finally {
     remove(root);
   }
@@ -3009,6 +3016,7 @@ test('current routing ignores composition gaps and malformed historical composit
       'iteration', 'open', '--artifacts', artifactPath(root),
       '--idea', '<change idea>',
     ]);
+    assert.ok(invalidPayload.agentGuidance.some((item) => /replace `<change idea>` with it verbatim/u.test(item)));
     assert.match(invalidResult.stderr, /historical:reads: 0/);
   } finally {
     remove(root);
@@ -3887,6 +3895,7 @@ test('next reports flat execution complete when proposal mining is disabled', ()
     const payload = next(root);
     assertAction(payload, 'flat_execution_complete', 'approval');
     assert.equal(JSON.stringify(payload).includes('"--proposals",null'), false);
+    assert.ok(payload.agentGuidance.some((item) => /no iteration to close, and stop/u.test(item)));
     const human = runP2a(['next', '--target', root]);
     assert.equal(human.status, 0, `${human.stdout}${human.stderr}`);
     assert.match(human.stdout, /요청한 개발과 검증이 완료되었습니다/u);
@@ -4939,4 +4948,6 @@ test('p2a-next skill delegates to the CLI without duplicating decision rules', (
   assert.match(skill, /wait for explicit authorization for that pending action/);
   assert.doesNotMatch(skill, /Never execute a CLI command when `requiresApproval` is true/);
   assert.doesNotMatch(skill, /gate-a|ready task|iteration init/i);
+  assert.match(skill, /`agentGuidance`/);
+  assert.doesNotMatch(skill, /entry_deferred|tasks_blocked|relevant_verification_required|flat_execution_complete/);
 });

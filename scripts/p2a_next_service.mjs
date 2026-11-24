@@ -2892,6 +2892,11 @@ export const NEXT_DECISION_RULES = [
       '--reason',
       `User requested a replacement scope instead of bounded recovery for task ${context.blockedUserDecisionRun.taskId}.`,
     ],
+    agentGuidance: (context) => [
+      `Explain that task ${context.blockedUserDecisionRun.taskId} and its run evidence stay preserved; the replacement does not rewrite that history.`,
+      'Execute this command only after explicit user approval for replacing the blocked scope.',
+      `After it succeeds, rerun ${p2aCommandLine(P2A_PATHS, ['next', '--target', commandTarget(context.targetRoot), '--entry', context.entryArg])} with the same entry.`,
+    ],
   },
   {
     state: 'entry_deferred',
@@ -2917,6 +2922,11 @@ export const NEXT_DECISION_RULES = [
       `Continue the current approved work with ${p2aCommandLine(P2A_PATHS, ['next', '--target', commandTarget(context.targetRoot)])}, or leave it paused. After the current iteration closes, resume the saved request with ${p2aCommandLine(P2A_PATHS, ['next', '--target', commandTarget(context.targetRoot), '--entry', context.entryArg])}.`
     ),
     decisionSummary: deferredEntryDecisionSummary,
+    agentGuidance: [
+      'The saved request is not permission to start, replace, or execute current work.',
+      'Present the decision summary and let the user choose; preserve existing artifacts and approvals until they do.',
+      'Plain `p2a next` without the entry resumes the existing work.',
+    ],
   },
   {
     state: 'gate_c_validated_needs_iteration_init',
@@ -3024,6 +3034,12 @@ export const NEXT_DECISION_RULES = [
     decisionSummary: (context) => context.blockedUserDecisionRun
       ? blockedUserDecisionSummary(context.blockedUserDecisionRun)
       : null,
+    agentGuidance: (context) => context.blockedUserDecisionRun
+      ? [
+          `The approval command records the user's answer and reopens only task ${context.blockedUserDecisionRun.taskId}; continue with \`p2a next\` afterwards.`,
+          'If the answer changes product scope instead, leave the task blocked and pass the replacement request through `p2a next --idea` or `--entry`.',
+        ]
+      : null,
   },
   {
     state: 'final_visual_review_required',
@@ -3102,6 +3118,9 @@ export const NEXT_DECISION_RULES = [
       '--artifacts',
       context.artifactArg,
     ],
+    agentGuidance: [
+      'Run exactly this relevant check; do not substitute the product-wide suite.',
+    ],
   },
   {
     state: 'final_verification_required',
@@ -3156,6 +3175,11 @@ export const NEXT_DECISION_RULES = [
         ? completionOptions(context)
         : null
     ),
+    agentGuidance: (context) => (
+      context.detail.layout.kind === 'iteration'
+        ? null
+        : ['Report completion and its verification evidence, explain that this layout has no iteration to close, and stop without an approval prompt.']
+    ),
   },
   {
     state: 'iteration_composition_required',
@@ -3197,6 +3221,11 @@ export const NEXT_DECISION_RULES = [
       '--idea',
       nextIterationIdea(context),
     ],
+    agentGuidance: (context) => (
+      nextIterationIdea(context) === '<change idea>'
+        ? ['Wait for the user\'s next concrete change request and replace `<change idea>` with it verbatim; the CLI allocates the iteration id.']
+        : null
+    ),
   },
 ];
 
@@ -3205,6 +3234,13 @@ function resolveNextRuleValue(value, context) {
 }
 
 function actionForNextRule(rule, context) {
+  const action = baseActionForNextRule(rule, context);
+  const guidance = resolveNextRuleValue(rule.agentGuidance ?? null, context);
+  if (Array.isArray(guidance) && guidance.length) action.agentGuidance = guidance;
+  return action;
+}
+
+function baseActionForNextRule(rule, context) {
   const state = resolveNextRuleValue(rule.state, context);
   const kind = resolveNextRuleValue(rule.kind, context);
   const reason = rule.reason(context);
@@ -3324,6 +3360,7 @@ function resolveNextDecision(
   if (contract === 'v2') {
     payload.reasonCode = action.state;
     payload.continuation = action.continuation ?? null;
+    if (action.agentGuidance?.length) payload.agentGuidance = action.agentGuidance;
     const briefingRun = action.state === 'run_started'
       ? context.startedRun
       : action.state === 'tasks_blocked'
