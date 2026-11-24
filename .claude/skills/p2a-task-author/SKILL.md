@@ -29,13 +29,13 @@ The canonical conditions live in `.agents/context-routes.json`.
 5. Persist only `iterations/<active_iteration>/gate-c-task-graph/task-graph.draft.json`.
 6. Validate `gate-c-draft`; promote only validator-clean content.
 
-## Boundaries
+## Principles
 
-- Every task is backed by actual effective-spec fields and has concrete acceptance criteria.
-- Every newly authored task adds a one-sentence human `intent` in the approved product spec's primary language after its contract is complete; intent never replaces acceptance criteria or validation evidence.
-- Do not create product scope, cross-iteration dependencies, or duplicate existing work.
-- Do not replace an active graph after task or run history exists.
-- Do not change application code, dependencies, approval artifacts, or canonical graph bytes directly.
-- If the requested work changes product meaning, return it to a new feature iteration rather than encoding it as a task.
+The graph only divides approved work for execution and recovery; it never decides what the product is.
+
+- **Every task traces to the approved spec.** Back each task with actual effective-spec fields and concrete acceptance criteria. Work that would add product scope or change product meaning returns to a new feature iteration instead of becoming a task.
+- **Tasks stay inside this iteration and do not repeat finished work.** Keep dependencies within the draft and check code signals and existing tasks for duplicates.
+- **Intent explains; acceptance decides.** Add a one-sentence human `intent` in the approved product spec's primary language after the contract is complete; it never replaces acceptance criteria or validation evidence.
+- **The CLI owns canonical state.** Change only the draft file; application code, dependencies, approval artifacts, and canonical graph bytes change through their own owners. The CLI refuses to replace a graph once execution history exists.
 
 Return the draft path, validation outcome, promotion outcome when applicable, and any exact blocker.

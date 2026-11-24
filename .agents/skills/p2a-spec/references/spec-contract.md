@@ -60,7 +60,7 @@ Each intake question id appears exactly once with `id`, `status`, `rationale`, `
 
 Only `ND-n` ids belong in `open_decisions`. Promote an unresolved blocking `CQ-n` to `ND-n` and keep the spec draft. Map canonical answered, assumed, or not-applicable intake values directly instead of replacing them with generic assumptions.
 
-Route every answered high-impact decision to the exact `product.*` or `implementation.*` fields it affects. Treat a legacy `interview` object as opaque compatibility data. Never inspect it for routing.
+Route every answered high-impact decision to the exact `product.*` or `implementation.*` fields it affects. Ignore any `interview` object in intake; it is opaque legacy data, not a routing or blocking input.
 
 ## Approval
 

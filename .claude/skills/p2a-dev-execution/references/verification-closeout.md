@@ -2,7 +2,7 @@
 
 Read this reference when the implementation outcome is ready for executable verification and run closeout.
 
-Before discarding a task-owned temporary environment, preserve necessary logs, reproduction commands and non-reproducible evidence in `<artifact-root>/evidence/<iteration-id>/<run-id>/`, unless the CLI supplies another path. Keep referenced evidence intact and avoid duplicating canonical reports. A supplementary report should identify its target and result even after run GC. Remove only the exact temporary directories this task created and no longer needs; retain resumable work. Do not sweep `.plan2agent/tmp`, historical artifacts, or other owners' environments.
+Before discarding a task-owned temporary environment, move necessary logs, reproduction commands, and non-reproducible evidence into the run evidence directory described in `execution-lifecycle.md`; a supplementary report should still identify its target and result after run GC. Then remove only the exact temporary directories this task created and no longer needs, keeping resumable work and never sweeping `.plan2agent/tmp`, historical artifacts, or other owners' environments.
 
 ## Executed verification
 
@@ -21,13 +21,13 @@ p2a runs verify --run-id <id> --artifacts <dir> \
   --verify-command 'custom:git diff --check'
 ```
 
-Do not invent verification labels or use `source: manual`/`exitCode: null` as a substitute for execution. Every attempt is append-only. Correct code or the environment and rerun the same check in the same started run; its latest decisive result at the current revision controls completion while earlier failures remain visible. After the workspace revision changes, an older failed command remains history but is not a current obligation unless that command is still configured or fails again at the current revision.
+Only executed checks count as evidence, because close and every later claim depend on it: do not invent verification labels or use `source: manual`/`exitCode: null` as a substitute for execution. Every attempt is append-only. After a failure, correct code or the environment and rerun the same check in the same started run; the CLI selects the latest decisive result at the current revision, and earlier failures remain visible as history.
 
-When a final verification or review command could not start because of the execution environment, preserve its unavailable evidence and run the exact `p2a execute retry --artifacts <root> --run-id <run-id>` recovery command. It finishes the old final run as `environment_failure` and starts a replacement bound to the same task and canonical workspace. The implementation task remains done. Reopen implementation only when executed product behavior fails or the review finds a product defect.
+Classify a failure by what actually happened, because the class decides whether implementation reopens:
 
-A child-process spawn error is an environment failure even if the runtime reports exit status zero. An executed product failure in a final verification/review run reopens implementation and must not be relabeled `environment_failure`. During a started implementation run, correct and reverify ordinary failures in that same run instead of reopening or creating a replacement run.
-
-A validated blocking visual or acceptance review is also a product failure and takes precedence over unrelated unavailable command evidence.
+- Environment failure: a final verification or review command could not start (a child-process spawn error counts even when the runtime reports exit status zero). Preserve the unavailable evidence and run the exact `p2a execute retry --artifacts <root> --run-id <run-id>` recovery command; the implementation task remains done.
+- Product failure: executed product behavior fails, or a validated visual or acceptance review blocks. This reopens implementation, must not be relabeled `environment_failure`, and takes precedence over unrelated unavailable command evidence.
+- During a started implementation run, correct and reverify ordinary failures in that same run instead of reopening or creating a replacement run.
 
 Shell composition must propagate every evidence-producing command's status. Avoid pipelines or command substitutions that can turn an unavailable command into a false pass. Preflight absolute executables with `test -x`, use a status-preserving wrapper, and inspect non-empty `stderrTail` before finish.
 
@@ -58,9 +58,9 @@ p2a execute finish --run-id <id> --artifacts <dir> \
 
 Verification flags and explicit commands may be passed to `finish` instead of a separate verify call.
 
-For `failed` or `blocked`, include a supported `--failure-class` and only that class's required detail. `verification_failed`, `scope_violation`, `implementation_incomplete`, and `other` require reproduction, localization, and a guard. `test_flake`, `missing_dependency`, and `environment_failure` require reproduction and a retry guard; command errors and retry conditions are collected automatically when evidence provides them. Supported classes are `verification_failed`, `test_flake`, `scope_violation`, `missing_dependency`, `environment_failure`, `implementation_incomplete`, and `other`. Use `other` only when no specific class applies. Use `test_flake` only when the same check passes without code or environment changes.
+For `failed` or `blocked`, pass the most specific `--failure-class` with the `--repro-*`, `--localization`, and `--guard` details you actually observed. The CLI checks which details that class requires and collects command errors and retry conditions from evidence; if it refuses, add exactly what its error names. Use `other` only when no specific class applies, and `test_flake` only when the same check passes without code or environment changes.
 
-Iteration close evaluates two independent obligations. `product_full` is bound to the current product revision: isolated code may reuse a canonical implementation pass, while high-risk or multi-task/worktree integration requires a canonical final full run. `workspace_relevant` is bound to the current workspace revision. A full pass at that same workspace satisfies both; if only docs/metadata changes afterward, keep the product pass and run only `p2a execute verify-final --scope relevant --artifacts <dir>`. That relevant run must record an actually executed `scope: related` command. Use structured project `relatedVerification` when configured; otherwise P2A runs its packaged UTF-8/JSON/readability integrity check against the selected files. Any later product-file change invalidates the product pass and requires full verification again.
+Iteration close needs current executed evidence for both the product revision and the workspace revision. The CLI tracks which obligation is satisfied, and `p2a next` returns the exact final verification command when one is missing. When it asks only for a relevant check after docs/metadata changes, run that command rather than the product-wide suite.
 
 If a monitor blocks the run, finish with monitor-sourced structured failure evidence; do not mark the task done directly.
 

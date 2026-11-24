@@ -20,7 +20,7 @@ The main dev-execution owner calls `p2a execute start` once per selected task, o
 p2a execute start \
   --artifacts <dir> \
   --task <task-id> \
-  --agent-tool codex \
+  --agent-tool <implementer> \
   --isolation worktree \
   --worktree <fresh-task-worktree> \
   --base-ref <batch-base> \
@@ -58,8 +58,6 @@ If spawn, scope review, integration, verification, or a required monitor gate fa
 ### 5. Recompute ready only after the batch harvest
 
 After every selected task has been harvested or given a truthful non-done disposition, run `p2a tasks ready` again. Start the next batch from the latest canonical integration head. A dependent task must not start from its predecessor's isolated task branch or from the old batch base.
-
-Do not produce new style or milestone sidecars. Historical sidecars remain readable, while integrated verification plus any activated acceptance or required visual contract provide the active completion evidence.
 
 ### 6. Preserve recoverability and clean up safely
 

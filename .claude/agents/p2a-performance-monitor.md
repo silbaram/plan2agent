@@ -13,7 +13,7 @@ Independently review a completed Plan2Agent dev-execution run and gate whether t
 
 Inputs:
 - Target task, including `id` and `acceptanceCriteria`.
-- The latest run log for that task at `runs/<run-index entry runRef>`, normally `runs/<iteration_id>/<run_id>.json` with legacy flat refs still readable, including `verification`, `changedFiles`, `status`, and `workspaceRef`.
+- The latest run log for that task at `runs/<run-index entry runRef>`, including `verification`, `changedFiles`, `status`, and `workspaceRef`.
 - The run's `.monitor-gate.json` sidecar. For new gates, it binds the rule source as `ruleContract.source`, `ruleContract.ref`, and `ruleContract.sha256`, lists enforceable `ruleContract.ruleIds`, and lists every required verdict array in `requiredConcernFields`.
 - The complete approved `.plan2agent/constitution.json` named by that rule contract, including architecture, stack, prohibitions, and style. An unmigrated project may instead provide the complete legacy `.plan2agent/style.md`. Read the exact source at `ruleContract.ref`; the lifecycle CLI independently re-hashes it before finish.
 
