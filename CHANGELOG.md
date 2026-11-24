@@ -6,6 +6,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-24
+
+### Added
+
+- Add an optional top-level `agentGuidance` array to `p2a.next.v2` responses so agents receive state-specific handling (deferred entries, blocked-scope replacement, user-decision recovery, relevant-only verification, flat completion, and the next-iteration change idea) from the CLI instead of skill prose.
+
+### Changed
+
+- Slim the managed harness skills, references, and agent definitions: remove prose that restated CLI-enforced rules, drop legacy interview/style/milestone guidance, rewrite boundary prohibitions as principles with reasons, and give each topic a single owning reference. The Direct execution read path shrinks by about 11%.
+- Replace hardcoded `--agent-tool codex` start examples with an implementer placeholder (`claude`, `codex`, or `manual`).
+- Describe `status.md` as a CLI-generated view that agents must not hand-write or edit.
+
+### Compatibility and migration
+
+- Node.js 22.20.0 remains the minimum. Preview existing project updates with `p2a upgrade --target . --dry-run` before applying them.
+- `schemas/next.schema.json` now allows `agentGuidance` on `p2a.next.v2`. Consumers validating v2 responses against an older managed copy must refresh it with `p2a upgrade --target . --apply`; `p2a.next.v1` responses are unchanged.
+
 ## [0.8.0] - 2026-09-30
 
 ### Added
@@ -446,7 +463,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Add package-runtime project initialization, managed provider assets, artifact validation, handoff, supervised execution, evaluation, and proposal workflows.
 - Ship canonical and generated integrations for Codex, Claude Code, and Gemini CLI.
 
-[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/silbaram/plan2agent/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/silbaram/plan2agent/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/silbaram/plan2agent/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/silbaram/plan2agent/compare/v0.5.24...v0.6.0
