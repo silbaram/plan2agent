@@ -37,7 +37,7 @@ Use lowercase kebab-case topic names and relative evidence links. Preserve refer
 
 ## Status projection
 
-`status.md` is readable projection, not approval authority. Generate it from canonical artifacts with a literal `Progress:` line, active iteration, next action, Gate states, planning validation, and numbered sections for understanding, decisions, specification, tasks, and readiness.
+`status.md` is a readable view, not approval authority. Iteration commands regenerate it from canonical artifacts, and it carries the active-iteration marker the CLI reads, so do not hand-write or edit it; read `p2a next` for state.
 
 ## Evidence ids
 
