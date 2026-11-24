@@ -25,6 +25,8 @@ For a direct review or request to summarize, write, or register an identified re
 - For `kind: approval` without options, present `decisionSummary` and obtain explicit approval. Replace only the exact `quotePlaceholder` argument with the verbatim user utterance and execute once. A legacy payload without `argv` returns to the owning `p2a-harness` approval procedure; never parse a command from human display text.
 - For approval `options`, present the choices unless the user already selected one. Follow the closeout reference below only for this closeout interaction or a direct review/retrospective/report/issue request. Review alone is read-only even if an older payload marks remediation automatic; an explicit request to fix authorizes the linked remediation action. Report writing, GitHub publication, and iteration close are distinct outcomes, each satisfied by its corresponding user request.
 
+When the payload includes `agentGuidance`, follow it for this state. It can narrow or end the dispatch above, such as asking first or stopping without a prompt, but never authorizes more than the returned command.
+
 Do not reuse approval for a different action or changed state. Let the CLI validate approval records and transitions.
 
 ## Progressive reference routing
@@ -36,12 +38,3 @@ Do not reuse approval for a different action or changed state. Let the CLI valid
 For an `immediate` continuation, request its reference packet once with `p2a context show --artifacts <dir> --continuation <id> --provider <provider>`. For `after_command_success`, first execute the returned argv and validate its single `p2a.execution_result.v1` JSON result: exit zero, `outcome: succeeded`, and `runStatus: started`. Then bind its `runId` to the context request. Do not parse human output or individually reopen packet-managed references.
 
 Pass `--prepare-mode` unchanged to the execution skill. Adaptive mode selection and compatibility work-item preparation do not need another product approval.
-
-## Request and recovery boundaries
-
-- `iteration_complete`: the next concrete user change request authorizes the returned action and supplies its one `<change idea>` placeholder verbatim. The CLI allocates the iteration id.
-- `entry_deferred`: the request is saved, not permission to replace or execute current work. Ask whether to revise the current planned scope or keep the request for later, as directed by the returned decision summary. Preserve existing artifacts and approvals until the choice; plain `next` resumes existing work.
-- `blocked_scope_replacement_ready`: explain preservation of old task/run evidence, execute `replace-scope` only with explicit approval, then rerun `next` with the same `--entry`.
-- `tasks_blocked`: the returned approval command records the answer and reopens only that task. Continue with `next`; if the answer changes product scope instead, leave it blocked and pass the replacement request through `--idea` or `--entry`.
-- `relevant_verification_required`: run the returned relevant check; do not substitute a product-wide suite when only docs/metadata changed.
-- `flat_execution_complete`: report completion and verification, explain there is no iteration to close, and stop.
