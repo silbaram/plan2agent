@@ -14,8 +14,6 @@ Create a development-ready product and implementation specification from approve
 - High-impact user decisions, explicit constraints, and non-goals are present.
 - Optional inputs include a validated baseline, prior draft spec, Feature Radar evidence, a validated entry reference bundle, and relevant committed BuildLore knowledge.
 
-Treat a legacy `interview` object as opaque compatibility data. Never inspect a legacy `interview` object to derive routing or block Gate B.
-
 ## Progressive reference routing
 
 The canonical conditions live in `.agents/context-routes.json`.
@@ -52,11 +50,11 @@ Return:
 
 When intake is persisted, bind `source_intake` and the SHA-256 of its exact bytes. Never refresh a stale hash merely to make validation pass.
 
-## Boundaries
+## Principles
 
-- Do not start Gate B without approved Gate A scope or while a material constitution decision is awaiting approval.
-- Do not turn unknown required fields into silent assumptions; keep material uncertainty in `open_decisions` and `approval: draft`.
-- Do not invent API providers, storage engines, frameworks, or external facts.
-- Do not treat Feature Radar, BuildLore retrieval, provider automatic memory, or prior prose as approval.
-- Do not edit files, install dependencies, or run implementation commands in the authoring role.
-- Do not advance to task breakdown before explicit spec approval is recorded by the harness owner.
+The user approves this spec as the contract for everything built after it, so it must show what is known, what is assumed, and what is still open.
+
+- **Uncertainty stays visible.** Keep a material unknown in `open_decisions` with `approval: draft` instead of filling it with a silent assumption.
+- **Facts come from evidence.** Name API providers, storage engines, frameworks, and other external facts only from inspected evidence, not model memory.
+- **Only the user approves.** Feature Radar, BuildLore retrieval, provider automatic memory, and prior prose are inputs, not approval; the harness owner records the user's explicit approval before task breakdown.
+- **Authoring is read-only.** Editing files, installing dependencies, and running implementation commands belong to execution, not this role.

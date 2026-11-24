@@ -30,19 +30,19 @@ The canonical load conditions are recorded in `.agents/context-routes.json`. Rea
 
 ## Direct/Planned runtime packet entry
 
-For a structured Direct/Planned continuation, use `p2a context show` once and consume the returned reference bodies instead of reopening packet-managed paths individually:
+For a structured Direct/Planned continuation, request `p2a context show` once and use the returned reference bodies instead of reopening packet-managed paths:
 
-- `execution.prepare`: bind the current immediate action with `--continuation execution.prepare`.
+- `execution.prepare`: pass `--continuation execution.prepare`.
 - `execution.owner-start`, `execution.visual-review`, or `execution.acceptance-review`: first require a successful `p2a.execution_result.v1` with `runStatus=started`, then pass its `runId` with the returned continuation id.
-- Retry, verification/closeout, visual, acceptance, and monitor judgment during a started run may request an explicit `--phase <phase> --run-id <id>` packet. The owner still decides when implementation is ready for a read-only phase.
+- During a started run, retry, verification/closeout, visual, acceptance, and monitor work may request `--phase <phase> --run-id <id>`; the owner still decides when implementation is ready for a read-only phase.
 
-The packet supplies canonical references; it does not grant approval, write, finish, deployment, credential, or external-cost authority. Orchestrated and batch execution continue to use the declared reference routing above until separately evaluated.
+A packet supplies references, not approval, write, finish, deployment, credential, or external-cost authority. Orchestrated and batch execution use the reference routing above.
 
 ## Core procedure
 
 1. Inspect the approved envelope and repository evidence. For adaptive preparation, use the preparation context and select Direct, Planned, or Orchestrated without requesting a new product approval.
 2. Confirm the ready work item, inspect retry evidence when applicable, and preserve one run identity through start or resume.
-3. Apply the resolved provider confinement plus any approved constitution; otherwise treat repository conventions or legacy style as advisory guidance.
+3. Apply the resolved provider confinement plus any approved constitution; otherwise treat repository conventions as advisory guidance.
 4. Implement the envelope objective inside the assigned workspace. Correct ordinary implementation, test, and UI drift autonomously.
 5. Execute only configured or explicit verification. Planned runs also verify every checkpoint in order and may retry a failed checkpoint in the same run after correction.
 6. Apply only the conditional visual, acceptance, or monitor path selected by policy and the approved contract.
@@ -51,20 +51,12 @@ The packet supplies canonical references; it does not grant approval, write, fin
 
 Return to Gate B instead of implementing only when satisfying the objective requires changing product meaning, acceptance, approved scope, or constitution. Handle external authority through `references/provider-confinement.md`, not product reapproval.
 
-Act as the user's development assistant as well as the execution owner: explain meaningful progress and offer evidence-based direction advice while continuing authorized work. Follow the progress, direction, and optional BuildLore reading guidance in `references/execution-lifecycle.md`; advice does not add an approval gate, reviewer, or report.
-
 Keep Gate labels, run ids, hashes, artifact paths, and verification-profile ids internal unless the user asks for diagnostic detail. Ordinary retryable implementation failures should be corrected and rechecked without asking the user to operate the lifecycle.
 
 ## Lifecycle ownership
 
-The foreground owner controls run start, verification, checkpoint, finish, task transition, integration, and lifecycle evidence. A spawned implementer performs scoped edits and local self-checks only. Review agents are independent and read-only unless their approved protocol explicitly writes a lifecycle sidecar through the foreground owner.
-
-Generated or historical style/milestone review artifacts remain readable, but new runs do not create standalone style or milestone passes. Style belongs to the constitution and optional monitor contract.
-
-## Supervised Batch Owner Procedure
-
-Read this section only when running two or more independent ready tasks. Freeze one ready snapshot, then read `references/batch-execution.md` and follow it. If independent confinement, serial integration ownership, or a clean canonical integration branch is unavailable, fall back to the single-task procedure.
+The foreground owner controls run start, verification, checkpoint, finish, task transition, integration, and lifecycle evidence. A spawned implementer performs scoped edits and local self-checks only. Review agents are independent and read-only unless their approved protocol explicitly writes a lifecycle sidecar through the foreground owner. For two or more independent ready tasks, follow `references/batch-execution.md`; if independent confinement, serial integration ownership, or a clean canonical integration branch is unavailable, fall back to the single-task procedure.
 
 ## Completion contract
 
-Do not claim completion until real commands verify the required outcome and the lifecycle command records the result. Report implemented changes, exact changed files, command outcomes, and the recommended task state. Preserve every failed attempt append-only; for the same check at the current revision, the latest decisive attempt controls completion.
+Do not claim completion until real commands verify the required outcome and the lifecycle command records the result. Report implemented changes, exact changed files, command outcomes, and the recommended task state.

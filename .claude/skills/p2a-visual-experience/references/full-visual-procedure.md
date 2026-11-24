@@ -4,7 +4,7 @@ Read only for `design_scope: full` with `design_timing: current_iteration`.
 
 ## Screen contract
 
-For every screen define stable id/name/route, user goal and entry points, one primary action, secondary actions, ordered information regions, required states, success exit, responsive rules, and accessibility requirements.
+For every screen define stable id/name/route, user goal and entry points, one primary action, secondary actions, ordered information regions, required states (normal plus applicable empty, loading, error, and success), success exit, responsive rules, and accessibility requirements.
 
 Every text-bearing screen includes explicitly named `content-stress-<case>` states covering applicable extremes: realistically longest string, empty or one-character value, maximum supported list length, and longest expected locale string. These are approval surfaces, not optional fixture examples.
 

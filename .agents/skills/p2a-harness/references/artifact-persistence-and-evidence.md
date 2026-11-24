@@ -25,15 +25,11 @@ Downstream stages validate every incoming path and hash. Missing, outside-root, 
 
 Persist atomically where supported and validate JSON immediately. Do not promote by renaming an unvalidated draft. Preserve task/run lineage when replacing graphs; after execution begins, use a new iteration or maintenance lane.
 
-For greenfield co-located work, approve scope/spec, follow `p2a next`, create the selected Gate C record, then run `p2a iteration init`. Do not configure a transient root-level graph.
-
 ## Supplementary files
 
 Keep CLI-provided paths and existing IDs. Omit `--iteration-id` on open/replace-scope for the short `iter-0001` sequence; do not rename history or append `-next` yourself.
 
-When a supplementary report is needed without a run, use `iterations/<iteration-id>/notes/<topic>.md` and optional `<topic>/` attachments. With a run, use `evidence/<iteration-id>/<run-id>/report.md`, with optional `logs/` and `attachments/`. Paths are relative to the artifact root; maintenance uses `maintenance` as its iteration ID. Without an iteration, retain the existing Gate/Radar paths. Do not create an iteration or run merely to store a report.
-
-Use lowercase kebab-case topic names and relative evidence links. Preserve referenced evidence; use an unused numeric suffix for another attempt. Do not add topic/date folders at the artifact root, duplicate final/latest summaries, or empty report scaffolds. Keep source copies and installed dependencies in task-owned temporary directories, not artifacts.
+A supplementary report without a run goes in `iterations/<iteration-id>/notes/<topic>.md` (lowercase kebab-case topic, optional `<topic>/` attachments); with a run, use `evidence/<iteration-id>/<run-id>/report.md`. Paths are relative to the artifact root, links stay relative, and an existing report is preserved by giving the next one an unused numeric suffix. Without an iteration, keep the existing Gate/Radar paths. Do not create an iteration or run merely to store a report, add topic/date folders at the artifact root, or keep source copies and dependencies in artifacts.
 
 ## Status projection
 

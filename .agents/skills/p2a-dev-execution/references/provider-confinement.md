@@ -22,16 +22,16 @@ The approved Gate B execution envelope authorizes in-scope implementation and ve
 
 When the target product is the Plan2Agent repository, canonical `.agents/`, scripts, schemas, tests, and docs are product files. Generated provider mirrors must still be produced from their canonical source. In an application repository, installed Plan2Agent harness and integration files are outside application implementation scope.
 
-## Prohibitions
+## Principles
 
-- Do not change Gate artifacts or requirements to make implementation easier.
-- Do not install dependencies without evidence from the approved task, existing project conventions, or explicit user approval.
-- Do not run interactive scaffolders that may overwrite a non-empty co-located project.
-- Do not access, print, or exfiltrate `.env` files, credentials, or tokens.
-- Do not hide failing verification or manufacture passing evidence.
-- Do not perform remote push, PR creation, remote merge, deployment, or other external writes as part of an implementation run. A separate explicit request is handled by the foreground assistant within its existing tool/provider permissions and the requested targets, not delegated to an implementer or treated as implicit development approval.
-- Do not modify `.plan2agent/constitution.json` or `.plan2agent/style.md` during implementation.
-- Do not self-modify skills or agents as a retrospective side effect. A skill change is allowed only when it is the approved product objective itself.
+Each principle protects something the user relies on after the run; when a case is unclear, act in the direction of its reason.
+
+- **The approved contract stays fixed while you implement.** The user approved those Gate artifacts, requirements, `.plan2agent/constitution.json`, and `.plan2agent/style.md`; do not change them during implementation, even to make implementation easier. A needed change returns to Gate B where the user can see it.
+- **Evidence must be real.** Later close decisions trust recorded results, so never hide failing verification or manufacture passing evidence.
+- **The user's environment is not yours to reshape.** Install dependencies only with evidence from the approved task, existing project conventions, or explicit user approval, and do not run interactive scaffolders that may overwrite a non-empty co-located project.
+- **Secrets stay unread.** Do not access, print, or exfiltrate `.env` files, credentials, or tokens.
+- **External effects need their own request.** Remote push, PR creation, remote merge, deployment, and other external writes are not part of an implementation run. A separate explicit request is handled by the foreground assistant within its existing tool/provider permissions and the requested targets, not delegated to an implementer or treated as implicit development approval.
+- **The harness does not rewrite itself.** Change skills or agents only when that change is the approved product objective, never as a retrospective side effect.
 
 ## Constitution and style
 

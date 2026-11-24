@@ -17,7 +17,7 @@ Rules:
 - For material current technology choices, use `.agents/skills/p2a-spec/references/technology-reconnaissance.md`; reuse the owner's supplied reference.
 - Keep plans decision-complete enough for task breakdown.
 - Preserve unresolved choices in `open_decisions`; do not generate a task graph while they remain.
-- Route each answered `needs_user_decision` into every implementation field named by its canonical `affected_fields`; use the current ledger item's `blocks` when `affected_fields` is absent. Never inspect a legacy `interview` object to derive routing. Leave product-field routing to the product spec author and do not substitute generic architecture entries.
+- Route each answered `needs_user_decision` into every implementation field named by its canonical `affected_fields`; use the current ledger item's `blocks` when `affected_fields` is absent. Ignore any `interview` object in intake. Leave product-field routing to the product spec author and do not substitute generic architecture entries.
 - Use `.agents/skills/p2a-spec/references/spec-contract.md` to verify implementation-relevant `CQ-n` dispositions before approval.
 - Identify interfaces, data flow, dependencies, edge cases, and verification needs.
 - If a Markdown view is requested, structure it with the standard section skeleton where sections mirror `spec_json.implementation` fields.

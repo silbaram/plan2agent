@@ -44,47 +44,38 @@ For a retry whose latest run is `failed` or `blocked`, inspect that local run's 
 
 ## Optional project memory
 
-When `buildlore.enabled` is true in project configuration and memory is relevant to the task, a first attempt may read it too. At start, resume, or a meaningful direction change, make one bounded `p2a buildlore memory --task '<current goal>' --progressive --json` query. Reuse what was already read. For a needed source, use `p2a buildlore lookup --kind evidence --id <canonical-id> --expect-generation <returned-generation> --json`; use the canonical ID from the memory registry, not its short alias. Do not repeatedly poll for more knowledge during ordinary edits.
+When `buildlore.enabled` is true and prior knowledge is relevant, make one bounded `p2a buildlore memory --task '<current goal>' --progressive --json` query at start, resume, or a meaningful direction change, and reuse what was already read. Fetch a needed source with `p2a buildlore lookup --kind evidence --id <canonical-id> --expect-generation <returned-generation> --json`, using the registry's canonical ID rather than its short alias. Stay within the current project and one generation.
 
-Keep retrieval within the current project. Check the returned project, generation, and available source digests; do not mix generations or quietly replace the active execution baseline when newer memory arrives. `sourceRevision` identifies source evidence, `codeRevision` identifies the recorded verification target, and `repositoryRevision` is an observed repository HEAD. Source revision or HEAD alone does not prove code was verified. Missing verification targets, revision mismatches, and dirty working-tree changes mean historical or unconfirmed evidence, not proof of current behavior.
-
-Missing configuration, unavailable/offline storage, empty results, stale generations, or timeouts are advisory fallback outcomes: continue from current code, the latest user request, and the approved contract. If historical knowledge is explicitly required by that contract, report the unmet requirement through the existing boundary. Retrieval never implicitly authorizes synchronization, AI generation, compilation, approval, commit, publication, or other knowledge writes. A past Wiki decision does not grant new execution authority.
+Memory is history, not proof: only a recorded `codeRevision` that matches the current code shows verified behavior, and a past decision grants no new execution authority. Unavailable, empty, or stale results are not blockers; continue from current code, the latest user request, and the approved contract, and report an unmet requirement only when that contract explicitly requires historical knowledge. Retrieval never authorizes synchronization, generation, compilation, commit, publication, or other knowledge writes.
 
 ## Progress and direction advice
 
-Explain the current goal and immediate next action when starting or resuming needs context. Update the user when a usable outcome is implemented or verified, a consequential design choice or new fact appears, failures repeat, scope grows, or the user asks about status. Usually two to four sentences and one important concern are enough. Follow the host's progress-update cadence without creating a report for every edit or tool call.
+Keep the user oriented at meaningful moments: a usable outcome is implemented or verified, a consequential choice or new fact appears, failures repeat, scope grows, or the user asks about status. A few sentences are usually enough; do not report every edit or tool call.
 
-For an active or recoverable blocked run, `p2a next --json --contract v2` includes a read-only `briefing`: reported changes, checkpoint outcomes with current passing evidence, latest checks with revision freshness, recorded follow-up, and the existing decision boundary. Use its source pointers to ground the progress explanation. `reportedChanges` are owner reports; `completionCriteria` are requirements, not an assessment of their completion. Only executed current passes support a current check claim. Historical or unknown checks need fresh evidence before making current claims; a historical check alone does not reopen a completed checkpoint. The briefing never replaces `command` as routing authority and a passing command alone does not establish every acceptance criterion.
+For an active or recoverable blocked run, `p2a next --json --contract v2` includes a read-only `briefing`; ground progress in its source pointers. `reportedChanges` are owner reports and `completionCriteria` are requirements, not an assessment of their completion. Only executed current passes support a current check claim; historical or unknown checks need fresh evidence. The briefing never replaces `command` as routing authority, and a passing command alone does not establish every acceptance criterion.
 
-Distinguish four inputs instead of blending them into certainty:
+When something threatens the user's goal, such as unnecessary structure or dependencies, repeated fixes without testing the cause, or tests unlike real usage, explain **observation → impact on the goal → advice → next authorized action**, keeping current facts, previous memory, and inference distinct. Advice does not mark work blocked or failed, create an approval gate, start another reviewer, or require a report; continue authorized development. If the user defers or chooses differently, do not repeat the same recommendation without new evidence. A changed direction goes through the existing contract-update path.
 
-- Current intent: the latest user request and choices, interpreted with the active execution contract.
-- Current facts: inspected code and diff, commands actually run, their results, and what is still unchecked.
-- Previous memory: recorded decisions, constraints, failed approaches, and their historical verification scope.
-- Advice: inferred impact and a recommended next action, with uncertainty when evidence is incomplete.
+Record a reusable decision, observed lesson, or unresolved follow-up in the existing run with `p2a runs record --artifacts <dir> --run-id <id> --note 'decision: <choice and recorded reason>'`, `lesson: <observation and its limits>`, or `remaining: <unresolved follow-up>`. These labelled notes are owner reports, not approval or executed proof; completion capture extracts them with source pointers. Use the structured failure-detail options for diagnosis, correction, and recurrence checks.
 
-Ask whether the change helps solve the current user problem. Unnecessary structure or dependencies, repeated fixes without testing the cause, or tests unlike real usage may justify a concern; file count, a revised plan, or disagreement with old Wiki prose alone does not establish drift. Explain **observation → impact on the goal → advice → next authorized action**. Advice alone does not mark work blocked or failed, create a new approval gate, start another reviewer, or require a report. Continue authorized development without waiting for a response; preserve real scope, verification, and external-authority boundaries.
-
-Reflect the user's changed direction through the existing contract-update path when needed. If the user defers advice or chooses differently, remember that choice and do not repeat the same recommendation without new evidence or changed impact. Keep only resume-critical intent, deferred advice, and next action in existing notes, not additional progress/review/summary documents.
-
-When a reusable implementation decision, observed lesson, or unresolved follow-up is established, record it in the existing run using `p2a runs record --artifacts <dir> --run-id <id> --note 'decision: <choice and recorded reason>'`, `lesson: <observation and its limits>`, or `remaining: <unresolved follow-up>`. These optional labelled notes are owner reports, not approval or executed proof; ordinary unlabelled notes keep their existing meaning. Record diagnosis, correction, and recurrence checks through the existing structured failure-detail options when applicable. Completion capture extracts these records with source pointers; it does not infer reasons from raw logs.
-
-Describe progress in user-visible capabilities and verified scope, not percentages guessed from file or task counts. Test definitions are not executed evidence. At completion, separate implemented outcomes, actual verification, and unresolved issues; mention knowledge handoff or cleanup only when actually performed.
+Describe progress as user-visible capabilities and verified scope, not percentages guessed from file or task counts; test definitions are not executed evidence. At completion, separate implemented outcomes, actual verification, and unresolved issues.
 
 ## Start or resume the run
 
 Start through the execution lifecycle so run creation and task ownership change atomically:
 
 ```bash
-p2a execute start --artifacts <dir> --task <id> --agent-tool codex
+p2a execute start --artifacts <dir> --task <id> --agent-tool <implementer>
 ```
 
-Preserve one run id across start retries. With `task-sequence`, omit `--run-id` only on the first start; if isolation setup fails, use the printed retry command with the same explicit id. Do not consume a new implicit attempt id.
+Set `<implementer>` to the tool actually doing the work: `claude`, `codex`, or `manual`. The CLI defaults to `codex`, so pass it explicitly; Gemini may only review.
+
+Preserve one run id across start retries. On the first start omit `--run-id` so the CLI allocates it; if start or isolation setup fails, use the retry command the CLI prints, which keeps the same explicit id, rather than starting a new attempt.
 
 Read `devExecution.reviewPasses.monitor` before start. Pass `--require-monitor` only when policy or the approved contract requires it. Let `runTracking.defaultIsolation` select the default. For a justified worktree use:
 
 ```bash
-p2a execute start --artifacts <dir> --task <id> --agent-tool codex \
+p2a execute start --artifacts <dir> --task <id> --agent-tool <implementer> \
   --isolation worktree --worktree <fresh-worktree-path> --create-isolation
 ```
 
@@ -92,7 +83,7 @@ Use `p2a execute resume` for an existing open run. Resume, verify, checkpoint, a
 
 ## Implement
 
-Use CLI-provided evidence paths first. Additional run reports belong in `<artifact-root>/evidence/<iteration-id>/<run-id>/report.md`, with optional `logs/` and `attachments/`; maintenance uses `maintenance`. Do not add topic/date folders at the artifact root. Keep one run across ordinary corrections and use unused attempt filenames such as `logs/test-02.log` to preserve earlier evidence.
+Use CLI-provided evidence paths. An additional run report goes in `<artifact-root>/evidence/<iteration-id>/<run-id>/report.md` (maintenance uses `maintenance` as its iteration id), with optional `logs/` and `attachments/`; never add topic/date folders at the artifact root. Keep one run across ordinary corrections and give each new attempt an unused filename such as `logs/test-02.log` so earlier evidence survives.
 
 Create temporary installs, source copies and package archives with unique task-owned directories under `.plan2agent/tmp/` inside the permitted workspace, or reuse an existing tool's OS-temp lifecycle. When copying sources, exclude the destination and `.plan2agent` to avoid recursive copies, and omit unneeded `.git`, `node_modules`, and build output. Temporary paths must not be the sole source of completion evidence.
 

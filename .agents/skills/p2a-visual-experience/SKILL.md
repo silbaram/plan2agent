@@ -30,17 +30,8 @@ The canonical conditions live in `.agents/context-routes.json`.
 
 ## Core contract
 
-Screen composition is canonical structured JSON. Passive offline HTML/CSS candidates are the primary approval surface and are hash-bound to their manifests. Static images may supplement HTML but cannot replace reachable states.
+Screen composition and approval state are canonical structured JSON. Passive offline HTML/CSS candidates under `gate-b-spec/visual-design/` are the primary approval surface and are hash-bound to their manifests; static images may supplement HTML but cannot replace reachable states. Candidates use no external network, remote font/script, credentials, private data, or production API, and this track creates planning and prototype artifacts only, never application UI.
 
-For full current work, cover normal, empty/loading/error/success, responsive, accessibility, and realistic content-stress states. Present material visual trade-offs and require explicit candidate selection; silence is not approval.
-
-## Boundaries
-
-- Create planning and prototype artifacts only; do not implement application UI.
-- Keep prototype code under `gate-b-spec/visual-design/`.
-- Use no external network, remote font/script, credentials, private data, or production API.
-- JSON remains canonical for contract and approval state.
-- Treat implementation mismatch as drift and a changed approved direction as a contract change requiring Gate B reapproval.
-- A later iteration may promote deferred full design to current work.
+The user must explicitly select a candidate; silence is not approval. After approval, implementation mismatch is drift, while a changed approved direction is a contract change requiring Gate B reapproval. A later iteration may promote deferred full design to current work.
 
 Return the selected design path, persisted artifacts and hashes when applicable, explicit approval status, and any task/final-review impact.

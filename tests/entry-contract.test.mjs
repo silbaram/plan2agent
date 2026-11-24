@@ -166,9 +166,17 @@ test('Gate B authoring instructions never interpret opaque legacy interview data
     assert.doesNotMatch(content, /current interview|interview-aware|legacy interview item/i, instructionPath);
   }
 
+  // The legacy guidance lives once in the authoring contract and in each spawned author,
+  // not in the always-loaded skill body.
   const specSkill = readFileSync(instructionPaths[0], 'utf8');
-  assert.match(specSkill, /Treat a legacy `interview` object as opaque compatibility data/);
-  assert.match(specSkill, /Never inspect a legacy `interview` object to derive routing/);
+  assert.doesNotMatch(specSkill, /interview/);
+  const specContract = readFileSync(
+    path.join(ROOT, '.agents', 'skills', 'p2a-spec', 'references', 'spec-contract.md'),
+    'utf8',
+  );
+  assert.match(specContract, /Ignore any `interview` object in intake; it is opaque legacy data, not a routing or blocking input/);
+  assert.match(readFileSync(instructionPaths[1], 'utf8'), /Ignore any `intake_json\.interview` object; it is opaque legacy data/);
+  assert.match(readFileSync(instructionPaths[2], 'utf8'), /Ignore any `interview` object in intake/);
 });
 
 test('a thin user-authored entry document validates and enters scope confirmation without Radar', () => {

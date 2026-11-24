@@ -10,7 +10,7 @@ Present problem/users, in-scope outcome, exclusions, assumptions, unresolved dec
 p2a decide --quote "<exact user utterance>" --entry <entry-path> --artifacts <artifact-root>
 ```
 
-This revalidates the original entry, requires a matching snapshot when its sibling reference bundle exists, appends `gate.what.approved`, and updates intake to `ready_for_spec` with an audit copy. Baseline-backed iteration intake and legacy approval-copy rebinding retain their entry-less compatibility path. Without explicit confirmation, keep it blocked and stop.
+The CLI revalidates the entry and its snapshot, records the approval, and moves intake to `ready_for_spec`; if it refuses, follow its error. Without explicit confirmation, keep it blocked and stop.
 
 ## Conditional Gate ② project constitution
 
@@ -25,7 +25,7 @@ Present a compact, reviewable proposal:
 
 When a constitution is material, use `advisory` by default, `review` for judgment, and `validator` only with concrete spec/task-graph targets and forbidden terms. Validate the draft, then after explicit approval record the exact quote through `p2a shape approve`. Validate any present constitution and decision ledger before Gate B; absence alone is not a blocker.
 
-Legacy style-only projects remain compatible. `p2a shape migrate-style` creates an unapproved draft and never implies approval. Constitution amendments use a focused diff, remove the old audit from the draft, and require a new quoted approval.
+Constitution amendments use a focused diff, remove the old audit from the draft, and require a new quoted approval. A draft created from an old style file (`p2a shape migrate-style`) is likewise unapproved until quoted approval.
 
 ## Technology boundary
 

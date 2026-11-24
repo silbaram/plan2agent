@@ -17,12 +17,4 @@ When `validation.visual_review_required` is true, every task declares `workKind:
 
 ## Final review
 
-Ordinary implementation owners repeatedly inspect and correct drift, but those task runs do not create visual-review evidence. After all visual implementation is integrated, run one canonical:
-
-```bash
-p2a execute review --artifacts <artifact-root>
-```
-
-The final run derives the complete screen/state/viewport/accessibility contract from Gate B, captures the application once, and seals the confirming sidecar in `visualReviewEvidenceSha256`. `devExecution.reviewPasses.visual` controls whether an independent reviewer is separated; it cannot disable the approved visual contract or owner evidence.
-
-Close-ready validation and portable handoff reject missing, stale, or changed final-review evidence.
+Task runs correct drift but do not create visual-review evidence. After all visual implementation is integrated, one canonical `p2a execute review` run captures the application against the complete Gate B contract; follow the dev-execution `visual-evidence.md` reference for that run. Close-ready validation and portable handoff reject missing, stale, or changed final-review evidence.
