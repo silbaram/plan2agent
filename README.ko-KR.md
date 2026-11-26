@@ -228,9 +228,10 @@ p2a buildlore handoff verify --id <handoff-id> --json
 완료된 유지보수는 `--iteration` 대신 `--task <maintenance-task-id>`를 지정합니다.
 capture의 로컬 재시도 파일은 정제 전 자료이므로 commit하거나 공유하지 않습니다. BuildLore가
 보존 전에 정제하며 자격 증명 의심 값은 저장을 거부합니다. `--commit`을 명시하면 보존 객체만
-로컬 commit하고, 생략하면 파일만 저장합니다. push·위키 승인·다음 개발 기준 변경은 하지 않습니다.
-보존 객체 자체의 독립 조회는 가능하지만 자동 capture·보존 source 기반 위키 갱신·기준 복구·문서
-정리는 아직 연결되지 않았으므로 원본 개발 자료는 유지합니다(`cleanupEligible: false`).
+로컬 commit하고, 생략하면 파일만 저장합니다. 보존은 명시적인 단방향 스냅샷이며, push·위키
+승인·다음 개발 기준 교체·로컬 작업 문서 삭제를 수행하지 않습니다(`cleanupEligible`은 항상
+`false`). 다음 반복의 정본 기준은 계속 로컬 `.plan2agent/` 아티팩트가 소유하며, 실행 로그
+정리는 `active_only` 보관 정책과 `p2a runs gc`가 담당합니다.
 제약은 [CLI 참고서](docs/cli-reference.md#완료-자료-고정--p2a-knowledge-capture)에 설명합니다.
 
 ### 6. 프로젝트 단위 외부 Agent Skills 관리

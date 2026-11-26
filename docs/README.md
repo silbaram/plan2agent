@@ -65,7 +65,10 @@ Plan2Agent 문서는 사용자 흐름, CLI 사용법, 산출물 계약, 구현 �
    사용자가 기획을 승인하고 하네스가 검증한 뒤, AI가 규칙 안에서 구현·검증을 자율 완수하도록 전환하는 제안이다.
 
 14. [개발비서와 지식 인계 중심의 작업 수명 설계안](development-assistant-and-knowledge-lifecycle-proposal.md)<br>
-   개발 중 진행 설명·방향 의견과 완료 후 지식 인계·작업 문서 정리의 설계안이다. 1단계 코드 반영과 후속 미구현 범위를 구분한다.
+   개발 중 진행 설명·방향 의견과 BuildLore 읽기 조회·명시적 단방향 완료 지식 보존의 확정 경계를 정리한다(로컬 정본 자동 삭제·분산 원장 복구는 비목표).
+
+15. [하네스 경량화 및 1.0 전이 개발 계획](harness-slimming-transition-plan.md)<br>
+   핵심 안전 경계는 유지하면서 과도한 아티팩트 단계, 컨텍스트 패킷, 레거시 호환, 주변부 하위 시스템을 우선순위(P0~P3)대로 감량하는 전이 계획이다.
 
 ## 목적별 바로가기
 
@@ -85,6 +88,7 @@ Plan2Agent 문서는 사용자 흐름, CLI 사용법, 산출물 계약, 구현 �
 | 실제 프로젝트에서 절차 비용과 실행 자율성 측정하기 | [실사용 검증 체크리스트](dogfooding-checklist.md) |
 | 기획 승인과 AI 자율 개발의 권한 경계 검토하기 | [승인된 계약 기반 자율 개발 개선안](gate-driven-adaptive-execution-proposal.md) |
 | 개발 중 조언과 완료 후 지식 인계·문서 정리 설계 검토하기 | [개발비서와 지식 인계 설계안](development-assistant-and-knowledge-lifecycle-proposal.md) |
+| 과한 컨트롤 플레인·레거시 감량 및 1.0 전이 순서 확인하기 | [하네스 경량화 및 1.0 전이 개발 계획](harness-slimming-transition-plan.md) |
 
 ## 문서별 역할
 
@@ -104,7 +108,8 @@ Plan2Agent 문서는 사용자 흐름, CLI 사용법, 산출물 계약, 구현 �
 | `external-skills.md` | 외부 Agent Skills 사용자 가이드 | upstream adapter, team lock, ownership, dry-run/apply, update/remove/sync, 신뢰 경계 |
 | `dogfooding-checklist.md` | 실사용 검증 체크리스트 | adaptive 모드 선택, 절차 비용, 사용자 개입, 게이트·검증 evidence의 실효성 측정 |
 | `gate-driven-adaptive-execution-proposal.md` | 설계 제안 | 사용자 승인·하네스 검증·AI 자율 개발의 권한 경계, 선택형 task, UI 검증과 단계적 migration |
-| `development-assistant-and-knowledge-lifecycle-proposal.md` | 단계별 설계안 | 비차단 개발 의견·진행 설명, BuildLore 지식 인계, 완료 기준 재사용과 작업 문서 정리 |
+| `development-assistant-and-knowledge-lifecycle-proposal.md` | 경계 확정 설계안 | 비차단 개발 의견·진행 설명, BuildLore 읽기 조회 및 명시적 단방향 완료 지식 보존(자동 문서 삭제·분산 원장 복구 제외) |
+| `harness-slimming-transition-plan.md` | 경량화 전이 계획 | P0~P3 우선순위별 수명주기 경계 고정, 레거시 제거, 아티팩트·패킷·제안 파이프라인 감량 및 모듈 분할 |
 
 ## 유지보수 원칙
 

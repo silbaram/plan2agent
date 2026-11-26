@@ -139,7 +139,7 @@ labelled note는 실행 담당자의 기록으로 표시한다. 같은 작업·�
 
 요약은 기존 목표·의도 또는 명시한 `--summary`를 사용한다. 결정·교훈·남은 일은 선택한 작업의 기록에서 근거와 함께 추출하며, 추출할 근거가 없는 배열은 비워 둔다. 선택 작업만 담은 graph/index/결정 출처 snapshot은 별도 형식을 표시한다. 이 경우 `sourceDigest`는 포함된 snapshot 본문의 해시이며 원본 파일 전체의 해시라고 해석하지 않는다. 과거 승인 기록을 새로운 작업의 승인으로 재생하지 않는다.
 
-고정본은 artifact root의 `handoffs/pending/<sha256>.json`에 저장한다. 같은 내용의 재실행은 같은 고정본을 재사용하며, 이미 만든 고정본을 나중의 공용 문서 내용으로 덮어쓰지 않는다. 이 파일은 **정제 전 로컬 자료**이므로 commit·공유하지 않는다. 자동 완료 hook은 아직 없으므로 기본 `active_only` 보관 정책에서는 다음 iteration을 열거나 다음 maintenance task를 시작해 이전 run이 정리되기 **전에** 명시적으로 capture해야 한다. 이후 전송 재시도는 고정된 파일을 사용한다.
+고정본은 artifact root의 `handoffs/pending/<sha256>.json`에 저장한다. 같은 내용의 재실행은 같은 고정본을 재사용하며, 이미 만든 고정본을 나중의 공용 문서 내용으로 덮어쓰지 않는다. 이 파일은 **정제 전 로컬 자료**이므로 commit·공유하지 않는다. capture는 의도적으로 명시적 단방향 명령으로만 제공하므로, 기본 `active_only` 보관 정책에서는 다음 iteration을 열거나 다음 maintenance task를 시작해 이전 run이 정리되기 **전에** 직접 실행한다. 이후 전송 재시도는 고정된 파일을 사용한다.
 
 ### 완료 지식 보존 — `p2a buildlore handoff`
 
@@ -159,7 +159,7 @@ p2a buildlore handoff verify --id sha256:<64-hex> --json
 
 `read`는 원본이 아닌 보존된 본문·구조화 기준을 읽고, `verify`는 내용 digest와 현재 지식저장소 HEAD의 보존 여부를 확인한다. `list`는 같은 프로젝트의 후보만 반환하고 `--work-id`로 제한할 수 있다(`--limit` 1~100, 기본 20). 목록 정렬은 기준의 선후관계나 적용 권한이 아니다. `repository.id`는 입력의 출처 메타데이터이며 검증된 원격 저장소 식별자가 아니다. 검증 대상 revision·내용 digest가 없으면 `null`로 남기며 관찰한 HEAD를 검증 증거로 대체하지 않는다.
 
-adapter의 읽기는 기본 15초 제한이다. `handoff read`만 최대 2 MiB, `list`·`verify`는 최대 256 KiB이며 `--timeout-ms`를 지원한다. 읽기가 실패해도 개발은 현재 코드와 사용자 요청으로 계속한다. 자동 capture·보존 source를 이용한 위키 재컴파일·다음 개발 기준 복구·참조 전환·원본 정리는 후속 범위다. **독립 조회 성공만으로 실제 개발 문서를 삭제하면 안 된다.**
+adapter의 읽기는 기본 15초 제한이다. `handoff read`만 최대 2 MiB, `list`·`verify`는 최대 256 KiB이며 `--timeout-ms`를 지원한다. 읽기가 실패해도 개발은 현재 코드와 사용자 요청으로 계속한다. BuildLore 인계는 완료 지식의 단방향 보존과 독립 조회까지만 담당하며, 로컬 Gate/iteration 정본 문서의 자동 삭제·외부 저장소 기반 기준 복구·원장 재초기화는 지원하지 않는다(`cleanupEligible`은 항상 `false`). 다음 반복의 기준은 계속 로컬 `.plan2agent/` 아티팩트가 소유하며, 실행 로그 정리는 `active_only` 보관 정책과 `p2a runs gc`를 사용한다.
 
 ### 결정 원장 — `p2a decide`, `p2a decisions`
 

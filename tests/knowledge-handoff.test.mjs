@@ -299,6 +299,15 @@ test('capture requires newest final run contract binding and sealed monitor evid
   assert.equal(captureKnowledge(f.options).storage, 'pending');
 });
 
+test('CLI capture human output confirms one-way snapshot and local canonical state', (t) => {
+  const f = fixture(t);
+  const result = spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'p2a_knowledge_handoff.mjs'),
+    'capture', '--artifacts', f.artifactRoot, '--iteration', 'v1-mvp'], { cwd: f.projectRoot, encoding: 'utf8' });
+  ok(result);
+  assert.match(result.stdout, /Captured pending knowledge bundle:/);
+  assert.match(result.stdout, /Local artifacts remain the canonical state\./);
+});
+
 test('CLI capture diagnostics never echo malformed JSON body or leak it in receipts', (t) => {
   const f = fixture(t, { closed: false });
   const pointerPath = path.join(f.artifactRoot, 'current-spec.json');

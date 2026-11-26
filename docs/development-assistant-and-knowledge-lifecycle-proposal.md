@@ -1,8 +1,13 @@
 # 개발비서와 지식 인계 중심의 작업 수명 설계안
 
 작성일: 2026-09-25<br>
-상태: 1단계와 2단계 보존 핵심 코드 반영 · 자동 인계·보존 source 갱신·기준 복구·문서 정리는 미구현 제안<br>
-검토 기준: Plan2Agent `600417e` / BuildLore `23db411`
+갱신일: 2026-11-26 (Phase 0 경계 확정)<br>
+상태: **경계 확정** · 1단계(개발비서·읽기 조회) 및 2단계(명시적 단방향 캡처·보존·직접 조회) 완료 · 자동 문서 삭제·참조 전환·지연 기준 병합·분산 원장 복구(§5.4~§7)는 공식 비목표로 제외<br>
+검토 기준: Plan2Agent `600417e` → `v0.9.0` 경량화 검토 / BuildLore `23db411`
+
+> [!NOTE]
+> **2026-11-26 경계 확정 ([하네스 경량화 전이 계획](harness-slimming-transition-plan.md) Phase 0):**
+> BuildLore 연동은 현재 구현된 **(1) 개발 중 읽기 전용 조회(`memory`/`lookup`)** 와 **(2) 완료 시점 명시적 단방향 캡처·보존(`p2a knowledge capture` → `p2a buildlore handoff import/list/read/verify`)** 에서 범위를 확정한다. 아래 문서의 §5.4~§7(원본 정본 문서 삭제, 두 Git 저장소 간 참조 전환, 지연 인계 선후관계 병합, `baseline.restored` 새 원장 초기화)은 로컬 하네스 대비 분산 상태 복잡도가 과도하므로 구현하지 않고 공식 비목표로 둔다. 로컬 개발 기준의 정본은 항상 `.plan2agent/artifacts/<project_id>/`가 유지하며, 대용량 실행 기록 정리는 기존 `active_only` 보관 정책과 `p2a runs gc`가 담당한다.
 
 ## 1. 목표와 범위
 
@@ -13,7 +18,7 @@ P2A는 개발을 진행하면서 사용자가 현재 상황을 이해하도록 �
 1. **개발 중:** 무엇이 되었고, 무엇을 하고 있으며, 현재 방향에 어떤 의견이 있는지 짧게 알린다. 의견만으로 개발을 중단하거나 새로운 승인을 요구하지 않는다.
 2. **개발 후:** 현재 제품 지식, 결정 이유, 실패에서 얻은 교훈, 검증 범위와 남은 일을 지식저장소에 남긴다. 종료된 반복 개발과 유지보수의 작업 문서는 다음 작업의 필수 입력에서 제외한다.
 
-1단계의 개발비서 행동과 제한된 BuildLore 읽기 연결은 실행 지침·adapter에 반영했다. `next`에는 현재 revision에 연결된 진행 브리핑을, 완료 capture에는 출처가 붙은 결정 이유·교훈·남은 일 추출을 추가했다. 2단계 중 명시적 `p2a knowledge capture`와 BuildLore `handoff import/list/read/verify` 보존 경로를 추가했다. 사용법과 제약은 [CLI 참고서](cli-reference.md#완료-자료-고정--p2a-knowledge-capture)에 통합했다. 아래의 전체 수명 설계 중 자동 완료 인계, 보존 source 기반 위키 갱신, 기준 복구, 참조 전환과 정리는 여전히 제안이다. 승인 상태와 보관 정책은 바꾸지 않았고 실제 작업 문서 삭제도 수행하지 않는다. 후속 구현까지 정식 문서로 통합한 뒤에는 이 제안서를 별도 장기 문서로 계속 관리할 필요가 없다.
+1단계의 개발비서 행동과 제한된 BuildLore 읽기 연결은 실행 지침·adapter에 반영했다. `next`에는 현재 revision에 연결된 진행 브리핑을, 완료 capture에는 출처가 붙은 결정 이유·교훈·남은 일 추출을 추가했다. 2단계의 명시적 `p2a knowledge capture`와 BuildLore `handoff import/list/read/verify` 단방향 보존 경로를 추가했고, 사용법과 제약은 [CLI 참고서](cli-reference.md#완료-자료-고정--p2a-knowledge-capture)에 통합했다. **이 지점에서 본 설계안의 구현 범위를 확정한다.** 원래 후속 제안이었던 자동 완료 인계, 보존 source 참조 전환, 삭제 후 외부 기준 복구(`baseline.restored`), 로컬 Gate/iteration 문서 자동 삭제는 구현하지 않기로 결정했으며(§5.4~§7은 당시 검토 기록으로만 보존), 다음 반복의 기준은 계속 로컬 `.plan2agent/` 아티팩트가 소유한다.
 
 ## 2. 초기 검토에서 확인한 재사용 지점과 공백
 
@@ -239,16 +244,14 @@ maintenance 진입점은 프로젝트 식별과 해당 작업 상태를 읽도�
 
 ## 8. 구현 단위와 변경 위치
 
-| 순서 | 결과 | 주요 변경 위치 | 완료 조건 |
+| 순서 | 결과 | 주요 변경 위치 | 상태 및 완료 조건 |
 | --- | --- | --- | --- |
-| 1 | 진행 브리핑·방향 의견, 관련 기억 조회 | P2A 실행 skill/reference, 사람용 표현 가이드, `p2a_buildlore.mjs`, context routing, provider mirror 생성 | 의견으로 상태가 차단되지 않고, 실제 연결 조회와 fallback을 확인 |
-| 2 | 위키 채택과 분리된 지식 인계·보존 source | BuildLore source manifest/management, 직접 조회, planned source resolver, activation, reconcile; P2A 인계 adapter | 위키 대기 상태도 원본 없이 근거·기준 조회. 별도 호환성 fixture에서 다음 위키 갱신·활성화 성공. 실제 원본은 아직 유지 |
-| 3 | 코드에 맞는 완료 기준에서 새 개발·유지보수 시작 | `p2a_iteration_state.mjs`, `p2a_iteration.mjs`, `p2a_next_service.mjs`, tasks/execute/runs의 source 해석, 완료·인계·복구 schema와 validator | 직전 폴더 없이 next/open/abandon/maintenance·이력 조회·새 원장 초기화 가능. 지연 인계가 최신 기준을 되돌리지 않음 |
-| 4 | 인계 후 문서 정리와 기존 프로젝트 전환 | 기존 run retention, artifact ownership/참조 해석, 정리 계획·복구, 패키지 문서 | 새 작업의 인계→정리→다음 개발을 실제 설치 형태에서 검증 |
+| 1 | 진행 브리핑·방향 의견, 관련 기억 조회 | P2A 실행 skill/reference, 사람용 표현 가이드, `p2a_buildlore.mjs`, context routing, provider mirror 생성 | **완료** — 의견으로 상태가 차단되지 않고, 실제 연결 조회와 fallback 확인 |
+| 2 | 위키 채택과 분리된 명시적 단방향 지식 캡처·보존 | `p2a_knowledge_handoff.mjs`, `p2a_completion_knowledge.mjs`, `p2a_buildlore.mjs`, BuildLore `handoff import/list/read/verify` | **완료 (최종 경계)** — 명시적 로컬 고정본, sanitizer 정제 불변 객체, 선택적 로컬 commit, 독립 조회 지원 |
+| 3 | 삭제된 폴더 대신 외부 보존 기준으로 새 개발·원장 초기화(`baseline.restored`) | `p2a_iteration_state.mjs`, `p2a_decision_ledger.mjs`, `p2a_next_service.mjs` | **제외 (공식 비목표)** — 로컬 아티팩트를 정본으로 유지하고 분산 기준 병합·원장 재초기화를 도입하지 않음 |
+| 4 | 참조 전환 후 로컬 정본 작업 문서 자동 삭제 | run retention, artifact ownership/참조 전환, 삭제·복구기 | **제외 (공식 비목표)** — 실행 로그 정리는 `active_only` + `p2a runs gc`로 한정하고 Gate 정본 자동 삭제를 구현하지 않음 |
 
-첫 적용은 신규 완료 작업부터 한다. 과거 BuildLore 자료의 대량 이동·삭제는 이 기능의 자동 부작용으로 넣지 않는다. 기존 작업은 인계 및 참조 확인이 끝난 묶음부터 선택적으로 전환한다.
-
-현재 2단계 구현은 명시적인 로컬 고정본, sanitizer를 통과한 불변 객체, 선택적 객체 단독 로컬 commit, 원본에 의존하지 않는 직접 조회까지다. 자동 완료 hook이나 기존 GC 연결은 아직 없으며 capture는 원본 정리 전에 실행해야 한다. 객체는 위키 대기 상태로만 저장하고 현재 개발 기준을 변경하지 않으므로 지연 인계도 기존 기준을 덮어쓰지 않는다. 원본 없는 위키 갱신·다음 작업 재개는 아직 검증 가능한 구현이 아니며 모든 보존 결과의 `cleanupEligible`은 `false`다.
+확정된 최종 경계는 1·2단계까지다. capture는 명시적 단방향 명령으로 유지하고 `cleanupEligible`은 항상 `false`로 고정한다. 자동 완료 hook이나 로컬 Gate 정본 삭제는 추가하지 않으며, BuildLore가 없거나 연결이 실패해도 로컬 `.plan2agent/` 아티팩트만으로 모든 반복 개발과 유지보수가 완결된다.
 
 지침 변경은 배포되는 `.agents` reference에 반영하고 `scripts/sync_cli_assets.mjs`로 mirror를 생성한다. `docs/`만 수정해서 설치된 agent 행동이 바뀌었다고 간주하지 않는다.
 
@@ -293,5 +296,4 @@ maintenance 진입점은 프로젝트 식별과 해당 작업 상태를 읽도�
 - 개발 완료, 근거 보존, 위키 반영, 작업 문서 정리는 각각 결과를 표시한다. 보존·참조 전환 실패는 정리만 늦추며, 위키 승인 대기는 정리를 막지 않는다.
 - 지식저장소에는 현재 유효한 내용과 필요한 근거를 남기고, P2A에는 현재 작업과 최소 실행 상태를 둔다.
 - 다음 기준은 현재 코드에 맞춰 선택하고 작업 중에는 고정한다. 늦은 인계는 과거 이력으로 보존하며 최신 기준을 되돌리지 않는다. 새 환경은 검증된 기준에 연결된 새 원장으로 시작한다.
-- 첫 배포의 자동 정리 기본값은 꺼짐으로 제안한다. 프로젝트에서 지식 인계·정리 정책을 선택하면 검증된 신규 완료 작업부터 자동 처리하고, 같은 범위의 작업마다 확인받지 않는다. 별도 격리 기간을 필수로 두지 않으며 보존 근거와 현재 기준은 지식저장소에서 복구한다. 폐기한 모든 중간 문서의 원상 복원을 보장하는 기능은 아니다.
-- 첫 구현은 1번의 비서 행동·읽기 연결부터 시작한다. 삭제 기능은 2·3번의 독립 조회·갱신·다음 작업 검증이 통과한 후 연결한다.
+- **확정된 최종 경계 (2026-11-26):** 개발 중 의견·브리핑, BuildLore 읽기 전용 조회, 완료 시 명시적 단방향 캡처·보존까지만 구현 범위로 확정한다. 로컬 정본 문서 자동 삭제, 두 저장소 간 참조 전환, 지연 인계 기준 병합, `baseline.restored` 분산 원장 복구는 공식 비목표로 제외하며, 로컬 정본은 `.plan2agent/`에 유지하고 실행 로그 정리는 `active_only` + `p2a runs gc`가 담당한다.

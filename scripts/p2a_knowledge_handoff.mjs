@@ -428,6 +428,7 @@ function captureLocked(options, projectRoot, artifactRoot) {
     schemaVersion: 'p2a.knowledge-capture-receipt.v1', projectId, workId: bundle.workId,
     workKind: bundle.workKind, inputDigest, bundlePath: relative(projectRoot, file),
     storage: 'pending', sanitized: false, durable: false, wikiApproved: false,
+    // Permanently false: knowledge handoff is one-way and never authorizes deleting local artifacts.
     cleanupEligible: false, reused: existed,
   };
 }
@@ -467,7 +468,7 @@ export function main(argv = process.argv.slice(2)) {
       options[flag.slice(2)] = value;
     }
     const receipt = captureKnowledge(options);
-    console.log(options.json ? JSON.stringify(receipt) : `Captured pending knowledge bundle: ${receipt.bundlePath}\nLocal, unsanitized snapshot only. Originals retained; cleanup is not enabled.`);
+    console.log(options.json ? JSON.stringify(receipt) : `Captured pending knowledge bundle: ${receipt.bundlePath}\nLocal, unsanitized one-way snapshot only. Local artifacts remain the canonical state.`);
     return 0;
   } catch (error) {
     console.error(`p2a knowledge: ${error instanceof SyntaxError || /invalid JSON|JSON.*position|Unexpected token/.test(error.message)

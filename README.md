@@ -258,10 +258,11 @@ p2a buildlore handoff verify --id <handoff-id> --json
 Use `--task <maintenance-task-id>` instead of `--iteration` for completed maintenance.
 Capture creates an unsanitized local retry bundle; do not commit or share it. BuildLore sanitizes
 before preservation and rejects suspected credentials. `--commit` explicitly commits only the
-preserved object locally; omitting it stores the object without creating a commit. Neither mode
-pushes, approves a Wiki, or changes the next development baseline. Reads work from the preserved
-object, but automatic capture, archived-source compilation, baseline restoration, and document
-cleanup are not yet connected: keep the original development artifacts (`cleanupEligible: false`).
+preserved object locally; omitting it stores the object without creating a commit. Preservation is
+an explicit one-way snapshot: it never pushes, approves a Wiki, replaces the local development
+baseline, or deletes local P2A artifacts (`cleanupEligible` is always `false`). Local `.plan2agent/`
+artifacts remain the canonical state for subsequent iterations, and run log cleanup is handled
+separately by `active_only` retention and `p2a runs gc`.
 See the [CLI reference](docs/cli-reference.md#완료-자료-고정--p2a-knowledge-capture) for limits.
 
 ### 6. Manage project-scoped external Agent Skills
