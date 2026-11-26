@@ -2821,7 +2821,7 @@ export const NEXT_DECISION_RULES = [
   {
     state: 'gate_b_approved_needs_tasks',
     kind: 'skill',
-    skill: (context) => context.detail.activeIteration ? 'p2a-task-author' : 'p2a-task-breakdown',
+    skill: () => 'p2a-task-author',
     args: (context) => ['--artifacts', context.artifactArg],
     when: (context) => (
       context.gateBValid
@@ -2832,7 +2832,7 @@ export const NEXT_DECISION_RULES = [
     ),
     reason: () => 'The approved Gate B specification has no Gate C task graph yet.',
     command: (context) => (
-      `/${context.detail.activeIteration ? 'p2a-task-author' : 'p2a-task-breakdown'} --artifacts ${JSON.stringify(context.artifactArg)}`
+      `/p2a-task-author --artifacts ${JSON.stringify(context.artifactArg)}`
     ),
   },
   {

@@ -93,7 +93,6 @@ test('doctor context mode is harness-independent and supports JSON, human, and s
 
 const SHARED_REFERENCES = [
   { skill: 'p2a-next', stage: 'closeout', owner: 'p2a-dev-execution', file: 'closeout-choices.md' },
-  { skill: 'p2a-task-breakdown', stage: 'gate-c', owner: 'p2a-task-author', file: 'draft-contract.md' },
 ];
 
 for (const { skill, stage, owner, file } of SHARED_REFERENCES) {

@@ -1,6 +1,6 @@
 # webhook-api-service e2e status
 
-Progress: [A complete] -> [B complete] -> [C complete] -> [D complete]
+Progress: [A complete] -> [B complete] -> [C complete]
 
 ## 1. Progress
 
@@ -33,13 +33,6 @@ This e2e golden fixture represents a complete Plan2Agent artifact root for a web
 - Canonical file: `gate-c-task-graph/task-graph.json`
 - Status: valid DAG
 - Task count: 4
-
-### Gate D - Review blockers
-
-- Canonical file: `gate-d-review/review.json`
-- Human-readable report: `gate-d-review/review-report.md`
-- Status: passed
-- `blocking_issues`: []
 
 ## 3. Open decisions / questions
 

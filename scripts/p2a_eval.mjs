@@ -16,7 +16,6 @@ import {
   validateSkillProposal,
   validateTaskGraph,
   validateAcceptanceReview,
-  validateMilestoneReview,
   validateVisualReview,
 } from './validate_artifacts.mjs';
 import {
@@ -698,11 +697,6 @@ function readReviewEvidence(scanRoots, runs, options = {}) {
               && run.acceptanceReviewEvidenceSha256 === sha256
               && payload.verdict === 'confirm_behavior'),
           });
-        } else if (schemaVersion === 'p2a.milestone_review.v1') {
-          if (!['midpoint.json', 'pre_close.json'].includes(path.basename(resolved))) continue;
-          if (iterationIds.size && !iterationIds.has(payload.iteration_id)) continue;
-          validateMilestoneReview(resolved);
-          milestone.push({ filePath: resolved, payload, sha256: sha256Contents(raw) });
         } else if (schemaVersion === 'p2a.visual_review.v1' || schemaVersion === 'p2a.visual_review.v2') {
           if (!runById.has(payload.run_id)) continue;
           const run = runById.get(payload.run_id);

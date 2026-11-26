@@ -8,7 +8,7 @@ For an active iteration, run:
 p2a iteration context --artifacts <root>
 ```
 
-Use the `p2a.task_context.v2` fields: `project_id`, `effective_spec`, `existing_tasks`, `spec_field_changes`, `idea`, `active_iteration`, and `code_signals`. Real code signals prevent duplicate or already-completed work. The legacy flat `p2a-task-breakdown` entry supplies an approved spec instead; its owner handles flat paths and persistence without inventing iteration context.
+Use the `p2a.task_context.v2` fields: `project_id`, `effective_spec`, `existing_tasks`, `spec_field_changes`, `idea`, `active_iteration`, and `code_signals`. Real code signals prevent duplicate or already-completed work. For a flat artifact root without an active iteration, read the approved `gate-b-spec/spec.json` directly and persist the validated draft under `gate-c-task-graph/`.
 
 The author returns complete JSON without writing. For an active iteration, the owner may persist only:
 

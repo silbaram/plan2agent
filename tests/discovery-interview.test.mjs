@@ -179,6 +179,7 @@ test('artifact-root validation ignores a stale legacy Gate D file', (t) => {
   const artifacts = path.join(root, 'artifacts');
   t.after(() => rmSync(root, { recursive: true, force: true }));
   cpSync(path.join(E2E_FIXTURE_ROOT, 'webhook-api-service'), artifacts, { recursive: true });
+  mkdirSync(path.join(artifacts, 'gate-d-review'), { recursive: true });
   writeFileSync(
     path.join(artifacts, 'gate-d-review', 'review.json'),
     '{ this is intentionally invalid legacy JSON\n',

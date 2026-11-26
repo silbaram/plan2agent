@@ -142,8 +142,6 @@ for (const caseData of manifest.cases ?? []) {
       const expectedToolFiles = [
         path.join('.agents', 'skills', 'p2a-harness', 'SKILL.md'),
         path.join('.agents', 'skills', 'p2a-next', 'SKILL.md'),
-        path.join('.codex', 'agents', 'p2a-task-graph.toml'),
-        path.join('.gemini', 'agents', 'p2a-task-graph.md'),
         path.join('.gemini', 'commands', 'p2a', 'harness.toml'),
         path.join('.gemini', 'commands', 'p2a', 'next.toml'),
         ...expectedNewAgentFiles,
@@ -165,44 +163,6 @@ for (const caseData of manifest.cases ?? []) {
         'utf8',
       );
       assert.match(installedSkill, /node \.plan2agent\/scripts\/p2a\.mjs tasks ready/);
-
-      const teamSourceRoot = path.join(tempRoot, 'team-bigfive-source');
-      mkdirSync(path.join(teamSourceRoot, '_workspace'), { recursive: true });
-      writeFileSync(path.join(teamSourceRoot, 'package.json'), JSON.stringify({ name: 'team-bigfive', version: '1.2.3' }, null, 2));
-      writeFileSync(path.join(teamSourceRoot, 'README.md'), '# Team Big Five fixture\n');
-      writeFileSync(path.join(teamSourceRoot, '.env'), 'SHOULD_NOT_COPY=1\n');
-      writeFileSync(path.join(teamSourceRoot, '_workspace', 'run.log'), 'SHOULD_NOT_COPY\n');
-
-      const teamTargetRoot = path.join(tempRoot, 'target-project-team-bigfive');
-      result = runHandoff(['--project-id', caseData.project_id, '--artifacts', caseData.artifact_root, '--target', teamTargetRoot, '--include-team-bigfive', '--team-bigfive-source', teamSourceRoot, '--team-bigfive-targets', 'all']);
-      assertOk(result, `greenfield handoff Team Big Five fixture check failed: ${caseData.id}`);
-      const expectedTeamFiles = [
-        path.join('.plan2agent', 'team-harnesses', 'team-bigfive', 'source-manifest.json'),
-        path.join('.plan2agent', 'team-harnesses', 'team-bigfive', 'adaptation-notes.md'),
-        path.join('.agents', 'skills', 'team-bigfive-kickoff', 'SKILL.md'),
-        path.join('.codex', 'agents', 'team-bigfive-coordinator.toml'),
-        path.join('.claude', 'skills', 'team-bigfive-kickoff', 'SKILL.md'),
-        path.join('.claude', 'agents', 'team-bigfive-coordinator.md'),
-        path.join('.claude-plugin', 'team-bigfive', 'source', 'README.md'),
-        path.join('.gemini', 'agents', 'team-bigfive-coordinator.md'),
-        path.join('.gemini', 'commands', 'p2a', 'team-bigfive.toml'),
-      ];
-      const missingTeamFiles = expectedTeamFiles.filter((filePath) => !existsSync(path.join(teamTargetRoot, filePath)));
-      const teamManifest = JSON.parse(readFileSync(path.join(teamTargetRoot, '.plan2agent', 'manifest.json'), 'utf8'));
-      const teamProjectConfig = JSON.parse(readFileSync(path.join(teamTargetRoot, '.plan2agent', 'project.config.json'), 'utf8'));
-      const teamSourceManifest = JSON.parse(readFileSync(path.join(teamTargetRoot, '.plan2agent', 'team-harnesses', 'team-bigfive', 'source-manifest.json'), 'utf8'));
-      assert.deepEqual(missingTeamFiles, []);
-      assert.equal(existsSync(path.join(teamTargetRoot, '.claude-plugin', 'team-bigfive', 'source', '.env')), false);
-      assert.equal(existsSync(path.join(teamTargetRoot, '.claude-plugin', 'team-bigfive', 'source', '_workspace', 'run.log')), false);
-      assert.ok(teamManifest.includedTools.includes('team_bigfive_adapter'));
-      assert.equal(teamManifest.externalHarnesses.length, 1);
-      assert.equal(teamManifest.externalHarnesses[0].name, 'team-bigfive');
-      assert.equal(teamManifest.externalHarnesses[0].targets.join(','), 'codex,claude,gemini');
-      assert.equal(teamManifest.externalHarnesses[0].sourceVersion, '1.2.3');
-      assert.equal(teamProjectConfig.providerNativeCapabilities?.claude?.agentTeams, 'manual_check');
-      assert.equal(teamProjectConfig.providerNativeCapabilities?.codex?.customAgents, 'manual_check');
-      assert.equal(teamSourceManifest.source.fileCount, 2);
-      assert.equal(teamSourceManifest.source.files.some((file) => file.path === '.env' || file.path.startsWith('_workspace/')), false);
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }

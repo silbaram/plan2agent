@@ -11,15 +11,14 @@ import { auditContext } from './p2a_context_audit.mjs';
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), '..');
 const CONTEXT_ROUTES_PATH = path.join(ROOT, '.agents', 'context-routes.json');
-const SKILLS = ['p2a-harness', 'p2a-next', 'p2a-spec', 'p2a-task-author', 'p2a-dev-execution', 'p2a-task-breakdown', 'p2a-visual-experience'];
-const AGENTS = ['p2a-spec-author', 'p2a-implementation-planner', 'p2a-task-graph', 'p2a-task-author', 'p2a-skill-curator', 'p2a-performance-monitor', 'p2a-implementer'];
+const SKILLS = ['p2a-harness', 'p2a-next', 'p2a-spec', 'p2a-task-author', 'p2a-dev-execution', 'p2a-visual-experience'];
+const AGENTS = ['p2a-spec-author', 'p2a-implementation-planner', 'p2a-task-author', 'p2a-skill-curator', 'p2a-performance-monitor', 'p2a-implementer'];
 const GEMINI_COMMANDS = {
   harness: 'p2a-harness',
   next: 'p2a-next',
   spec: 'p2a-spec',
   'task-author': 'p2a-task-author',
   'dev-execution': 'p2a-dev-execution',
-  'task-breakdown': 'p2a-task-breakdown',
   'visual-experience': 'p2a-visual-experience',
 };
 

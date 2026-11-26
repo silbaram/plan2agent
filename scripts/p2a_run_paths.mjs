@@ -287,8 +287,6 @@ export function workspaceRevisionSha256(workspacePath, excludedPaths = []) {
     'gate-a-intake',
     'gate-b-spec',
     'gate-c-task-graph',
-    'gate-d-review',
-    'milestone-reviews',
     'preflight-research',
     'proposals',
   ]);

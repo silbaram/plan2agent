@@ -373,7 +373,6 @@ function validateScaffoldFixtureCase() {
       path.join('.agents', 'skills', 'p2a-harness', 'SKILL.md'),
       path.join('.claude', 'skills', 'p2a-harness', 'SKILL.md'),
       path.join('.claude', 'hooks', 'p2a-confine-workspace.mjs'),
-      path.join('.codex', 'agents', 'p2a-task-graph.toml'),
       path.join('.gemini', 'commands', 'p2a', 'harness.toml'),
       ...expectedNewAgentFiles,
     ];
@@ -7923,57 +7922,6 @@ function validateIterationCurrentFixtureCases() {
       }, null, 2)}\n`;
       writeFileSync(milestoneRunIndexPath, milestoneRunIndexText, 'utf8');
 
-      const sourceMilestoneReviewDir = path.join(milestoneHandoffArtifactRoot, 'iterations', 'iter-002', 'milestone-reviews');
-      const sourcePreCloseReviewPath = path.join(sourceMilestoneReviewDir, 'pre_close.json');
-      const sourceMidpointDraftPath = path.join(sourceMilestoneReviewDir, 'midpoint.fixture.draft.json');
-      mkdirSync(sourceMilestoneReviewDir, { recursive: true });
-      const legacyMilestoneReview = {
-        schema_version: 'p2a.milestone_review.v1',
-        project_id: caseData.project_id,
-        iteration_id: 'iter-002',
-        checkpoint: 'pre_close',
-        generated_at: milestoneGeneratedAt,
-        source: {
-          task_graph_ref: milestoneTaskGraphRef,
-          task_graph_sha256: hashText(milestoneTaskGraphText),
-          task_graph_snapshot: milestoneTaskGraph,
-          task_graph_snapshot_sha256: hashText(JSON.stringify(milestoneTaskGraph)),
-          spec_ref: milestoneSpecRef,
-          style_ref: null,
-          task_counts: {
-            total: milestoneTaskGraph.tasks.length,
-            done: milestoneTaskGraph.tasks.length,
-            todo: 0,
-            in_progress: 0,
-            blocked: 0,
-          },
-          task_snapshot: milestoneTaskGraph.tasks.map((task) => ({
-            task_id: task.id,
-            task_title: task.title,
-            status: task.status,
-          })),
-          completed_task_evidence: milestoneCompletedTaskEvidence,
-          remaining_task_ids: [],
-        },
-        confirmed_findings: [],
-        planned_todo_not_findings: [],
-        note: 'Legacy handoff persistence fixture.',
-      };
-      writeFileSync(sourcePreCloseReviewPath, `${JSON.stringify(legacyMilestoneReview, null, 2)}\n`, 'utf8');
-      writeFileSync(sourceMidpointDraftPath, `${JSON.stringify({
-        schema_version: 'p2a.milestone_review.v1',
-        checkpoint: 'midpoint',
-        note: 'Draft milestone reviews must not be handed off.',
-      }, null, 2)}\n`, 'utf8');
-
-      result = runValidator(['--milestone-review', sourcePreCloseReviewPath]);
-      checks += 1;
-      if (result.status !== 0) {
-        console.error(`source milestone handoff bundle validation failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-
       const startedVisualRun = {
         ...historicalRun,
         runId: startedVisualRunId,
@@ -8059,11 +8007,9 @@ function validateIterationCurrentFixtureCases() {
         || !result.stdout.includes('runTransfer: completed')
         || !result.stdout.includes('copy+rewrite:')
         || !result.stdout.includes(`gate-b-spec/spec.json -> .plan2agent/artifacts/${caseData.project_id}/gate-b-spec/spec.json`)
-        || !result.stdout.includes(`.plan2agent/artifacts/${caseData.project_id}/iterations/iter-002/milestone-reviews/pre_close.json`)
         || !result.stdout.includes(`.plan2agent/artifacts/${caseData.project_id}/runs/run-index.json`)
         || result.stdout.includes(unfinishedGraphRunId)
         || result.stdout.includes(legacyV1UnfinishedRunId)
-        || result.stdout.includes('midpoint.fixture.draft.json')
       ) {
         console.error(`iteration handoff --iteration-id active dry-run fixture check failed: ${caseData.id}`);
         writeResultOutput(result);
@@ -8095,9 +8041,6 @@ function validateIterationCurrentFixtureCases() {
       const targetSpecPath = path.join(iterationTargetArtifactRoot, 'gate-b-spec', 'spec.json');
       const targetIntakePath = path.join(iterationTargetArtifactRoot, 'gate-a-intake', 'intake.json');
       const targetPreflightPath = path.join(iterationTargetArtifactRoot, 'preflight-research', 'next-iteration-recommendations.md');
-      const targetPreCloseReviewRelative = `.plan2agent/artifacts/${caseData.project_id}/iterations/iter-002/milestone-reviews/pre_close.json`;
-      const targetPreCloseReviewPath = path.join(iterationTargetRoot, targetPreCloseReviewRelative);
-      const targetMidpointDraftPath = path.join(iterationTargetArtifactRoot, 'iterations', 'iter-002', 'milestone-reviews', 'midpoint.fixture.draft.json');
       const expectedComposedVisualFiles = composedVisualArtifactRefs.map(
         (filePath) => `.plan2agent/artifacts/${caseData.project_id}/${filePath}`,
       );
@@ -8159,8 +8102,6 @@ function validateIterationCurrentFixtureCases() {
         || !existsSync(targetSpecPath)
         || !existsSync(targetIntakePath)
         || !existsSync(targetPreflightPath)
-        || !existsSync(targetPreCloseReviewPath)
-        || existsSync(targetMidpointDraftPath)
         || !existsSync(targetMaintenanceGraphPath)
         || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'scripts', 'p2a_iteration_state.mjs'))
         || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'scripts', 'p2a_radar_preflight.mjs'))
@@ -8199,7 +8140,6 @@ function validateIterationCurrentFixtureCases() {
       const targetMilestoneTaskGraph = JSON.parse(
         readFileSync(path.join(iterationTargetArtifactRoot, milestoneTaskGraphRef), 'utf8'),
       );
-      const targetMilestoneReview = JSON.parse(readFileSync(targetPreCloseReviewPath, 'utf8'));
       const targetSpec = JSON.parse(readFileSync(targetSpecPath, 'utf8'));
       const targetRunIndex = JSON.parse(
         readFileSync(path.join(iterationTargetArtifactRoot, 'runs', 'run-index.json'), 'utf8'),
@@ -8338,9 +8278,7 @@ function validateIterationCurrentFixtureCases() {
         || !targetManifest.schemaFiles.includes('.plan2agent/schemas/eval-maintenance-draft.schema.json')
         || !targetManifest.schemaFiles.includes('.plan2agent/schemas/eval-maintenance-apply-report.schema.json')
         || !targetManifest.preflightResearchFiles?.includes(`.plan2agent/artifacts/${caseData.project_id}/preflight-research/next-iteration-recommendations.md`)
-	        || JSON.stringify(targetManifest.milestoneReviewFiles) !== JSON.stringify([targetPreCloseReviewRelative])
 	        || expectedMilestoneEvidenceFiles.some((filePath) => !targetManifest.milestoneEvidenceFiles?.includes(filePath))
-	        || !targetManifest.artifactFiles.includes(targetPreCloseReviewRelative)
 	        || expectedMilestoneEvidenceFiles.some((filePath) => !targetManifest.artifactFiles.includes(filePath))
 	        || expectedComposedVisualFiles.some((filePath) => !targetManifest.artifactFiles.includes(filePath))
 	        || expectedComposedVisualFiles.some((filePath) => !existsSync(path.join(iterationTargetRoot, filePath)))
@@ -8358,11 +8296,6 @@ function validateIterationCurrentFixtureCases() {
         || sourceCurrentSpecAfterHandoff.last_handoff?.target_project !== iterationTargetRoot
         || targetTaskGraph.sourceSpec !== expectedTargetSpecRef
         || targetMilestoneTaskGraph.sourceSpec !== expectedPortableMilestoneSourceSpecRef
-        || targetMilestoneReview.source.task_graph_snapshot.sourceSpec !== expectedPortableMilestoneSourceSpecRef
-        || targetMilestoneReview.source.completed_task_evidence.some((evidence) => (
-          evidence.run_snapshot.taskGraphRef !== milestoneTaskGraphRef
-          || evidence.run_snapshot.sourceSpecRef !== expectedPortableMilestoneSourceSpecRef
-        ))
         || targetSpec.source_intake !== expectedTargetIntakeRef
         || targetLegacyGraphRun.taskGraphRef !== milestoneTaskGraphRef
         || targetLegacyGraphRun.sourceSpecRef !== expectedPortableMilestoneSourceSpecRef
@@ -8440,14 +8373,6 @@ function validateIterationCurrentFixtureCases() {
       checks += 1;
       if (result.status !== 0) {
         console.error(`iteration handoff composed visual source bundle validation failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-
-      result = runTargetP2a(iterationTargetRoot, ['validate', '--milestone-review', targetPreCloseReviewPath]);
-      checks += 1;
-      if (result.status !== 0) {
-        console.error(`iteration handoff target milestone evidence bundle validation failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
       }
@@ -8555,47 +8480,6 @@ function validateIterationCurrentFixtureCases() {
       checks += 1;
       if (result.status !== 0) {
         console.error(`iteration handoff finished graph runs did not validate after resume: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-
-      const compactMilestoneReview = structuredClone(legacyMilestoneReview);
-      compactMilestoneReview.source.completed_task_evidence = milestoneCompletedTaskEvidence.map((evidence) => ({
-        run_ref: evidence.run_ref,
-        run_sha256: evidence.run_sha256,
-        run_snapshot: evidence.run_snapshot,
-        run_snapshot_sha256: evidence.run_snapshot_sha256,
-      }));
-      compactMilestoneReview.note = 'Compact handoff persistence fixture.';
-      writeFileSync(sourcePreCloseReviewPath, `${JSON.stringify(compactMilestoneReview, null, 2)}\n`, 'utf8');
-
-      result = runValidator(['--milestone-review', sourcePreCloseReviewPath]);
-      checks += 1;
-      if (result.status !== 0) {
-        console.error(`compact source milestone handoff bundle validation failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-
-      const compactIterationDryRunTargetRoot = path.join(tempRoot, 'target-compact-iteration-dry-run');
-      result = runHandoff([
-        '--project-id',
-        caseData.project_id,
-        '--artifacts',
-        milestoneHandoffArtifactRoot,
-        '--target',
-        compactIterationDryRunTargetRoot,
-        '--iteration-id',
-        'active',
-        '--dry-run',
-      ]);
-      checks += 1;
-      if (
-        result.status !== 0
-        || !result.stdout.includes(`.plan2agent/artifacts/${caseData.project_id}/iterations/iter-002/milestone-reviews/pre_close.json`)
-        || !result.stdout.includes(`.plan2agent/artifacts/${caseData.project_id}/runs/run-index.json`)
-      ) {
-        console.error(`compact iteration handoff dry-run fixture check failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
       }
@@ -9221,16 +9105,11 @@ export function main() {
   writeResultOutput(verificationRunnerUtilsResult);
   if (verificationRunnerUtilsResult.status !== 0) return failureStatus(verificationRunnerUtilsResult);
 
-  const milestoneReviewResult = runNodeTestFile('tests/milestone-review.test.mjs');
-  writeResultOutput(milestoneReviewResult);
-  if (milestoneReviewResult.status !== 0) return failureStatus(milestoneReviewResult);
-
   const segments = [`${countNodeTestCases(schemaResult.stdout)} Plan2Agent fixture set test(s)`];
   if (scaffoldResult.checks) segments.push(`${scaffoldResult.checks} scaffold fixture check(s)`);
   if (evalResult.checks) segments.push(`${evalResult.checks} eval fixture check(s)`);
   segments.push(`${countNodeTestCases(e2eResult.stdout)} e2e fixture test(s)`);
   segments.push(`${countNodeTestCases(verificationRunnerUtilsResult.stdout)} verification runner utility test(s)`);
-  segments.push(`${countNodeTestCases(milestoneReviewResult.stdout)} milestone review test(s)`);
   if (iterationResult.checks) segments.push(`${iterationResult.checks} iteration fixture check(s)`);
   segments.push(`${countNodeTestCases(negativeResult.stdout)} negative fixture test(s)`);
   segments.push(`${countNodeTestCases(projectConfigDetectionResult.stdout)} project config detection test(s)`);

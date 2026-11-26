@@ -67,8 +67,8 @@ Plan2Agent 문서는 사용자 흐름, CLI 사용법, 산출물 계약, 구현 �
 14. [개발비서와 지식 인계 중심의 작업 수명 설계안](development-assistant-and-knowledge-lifecycle-proposal.md)<br>
    개발 중 진행 설명·방향 의견과 BuildLore 읽기 조회·명시적 단방향 완료 지식 보존의 확정 경계를 정리한다(로컬 정본 자동 삭제·분산 원장 복구는 비목표).
 
-15. [하네스 경량화 및 1.0 전이 개발 계획](harness-slimming-transition-plan.md)<br>
-   핵심 안전 경계는 유지하면서 과도한 아티팩트 단계, 컨텍스트 패킷, 레거시 호환, 주변부 하위 시스템을 우선순위(P0~P3)대로 감량하는 전이 계획이다.
+15. [v1.0 최소 하네스 재설계 및 전이 개발 계획](harness-slimming-transition-plan.md)<br>
+   단일 `work.json`·자동 생성 MD 0개·1회 통합 확인·세션 재개 중심의 초경량 v1.0 하네스 재설계 및 전환 계획이다.
 
 ## 목적별 바로가기
 
@@ -109,7 +109,7 @@ Plan2Agent 문서는 사용자 흐름, CLI 사용법, 산출물 계약, 구현 �
 | `dogfooding-checklist.md` | 실사용 검증 체크리스트 | adaptive 모드 선택, 절차 비용, 사용자 개입, 게이트·검증 evidence의 실효성 측정 |
 | `gate-driven-adaptive-execution-proposal.md` | 설계 제안 | 사용자 승인·하네스 검증·AI 자율 개발의 권한 경계, 선택형 task, UI 검증과 단계적 migration |
 | `development-assistant-and-knowledge-lifecycle-proposal.md` | 경계 확정 설계안 | 비차단 개발 의견·진행 설명, BuildLore 읽기 조회 및 명시적 단방향 완료 지식 보존(자동 문서 삭제·분산 원장 복구 제외) |
-| `harness-slimming-transition-plan.md` | 경량화 전이 계획 | P0~P3 우선순위별 수명주기 경계 고정, 레거시 제거, 아티팩트·패킷·제안 파이프라인 감량 및 모듈 분할 |
+| `harness-slimming-transition-plan.md` | v1.0 최소 하네스 전이 계획 | 단일 `work.json` + `config.json`, 1회 통합 확인, 세션 재개, 자동 MD 0개, 최소 코어 + 선택적 BuildLore 재편 |
 
 ## 유지보수 원칙
 

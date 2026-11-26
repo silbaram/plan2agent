@@ -24,15 +24,12 @@ import { Readable } from 'node:stream';
 import {
   gateArtifactApprovalState,
   loadJson,
-  milestoneRunSnapshotSha256,
-  milestoneSnapshotSha256,
   validateArtifactRoot,
   validateApprovalAuditData,
   validateConstitution,
   validateDecisionLedger,
   validateHandoffReadyArtifactRoot,
   validateIntake,
-  validateMilestoneReview,
   validateRunsDir,
   validateSpec,
   validateTaskGraph,
@@ -65,7 +62,6 @@ import {
   closeReadyAcceptanceReviewRunIds,
   completedImplementationRunIds,
   closeReadyVisualReviewRunIds,
-  completedEvidenceRunIds,
   portableProvenanceMigrationHint,
   selectHandoffRunEntries,
   validatePortableHandoffTarget,
@@ -113,11 +109,7 @@ const VALID_CODEX_AGENT_PROFILES = new Set(CODEX_AGENT_PROFILE_ORDER);
 const DEFAULT_CODEX_AGENT_PROFILE = 'quality';
 const ENHANCEMENT_ORDER = ['dev-skills', 'buildlore', 'orchestration', 'proposals'];
 const VALID_ENHANCEMENTS = new Set(ENHANCEMENT_ORDER);
-const MILESTONE_REVIEW_CHECKPOINTS = ['midpoint', 'pre_close'];
 const ARTIFACT_TARGET_BASE = P2A_ARTIFACTS_DIR;
-const TEAM_BIGFIVE_HARNESS_DIR = path.join('.plan2agent', 'team-harnesses', 'team-bigfive');
-const TEAM_BIGFIVE_SOURCE_MANIFEST = path.join(TEAM_BIGFIVE_HARNESS_DIR, 'source-manifest.json');
-const TEAM_BIGFIVE_ADAPTATION_NOTES = path.join(TEAM_BIGFIVE_HARNESS_DIR, 'adaptation-notes.md');
 const DEFAULT_ITERATION_ID = 'active';
 const MANAGED_FILE_HASH_PATTERN = /^[a-f0-9]{64}$/;
 const INITIALIZE_COMMANDS = new Set(['init', 'scaffold']);
@@ -178,15 +170,9 @@ function usage() {
     'Handoff options:',
     '  --mode copy|move     Copy artifacts by default; move removes source files after successful write.',
     '  --iteration-id <id>  Use iterative artifacts. The id must match current-spec.json active_iteration; default: active.',
-    '  --run-transfer <m>   completed byte-copies current-graph latest finished v2 evidence plus legacy milestone-bound evidence (default); resumable also ports active non-visual runs.',
+    '  --run-transfer <m>   completed byte-copies current-graph latest finished v2 evidence (default); resumable also ports active non-visual runs.',
     '  --include-intake     Generate an explicit gate-a-intake/intake.md export from canonical intake.json.',
     '  --tools <list>       Copy portable P2A AI tool assets for codex,claude,gemini. Use comma list or all.',
-    '  --include-team-bigfive',
-    '                       Install Team Big Five adapter files for selected CLI targets.',
-    '  --team-bigfive-source <path-or-git-url>',
-    '                       Record the Team Big Five source. Local directories are fingerprinted.',
-    '  --team-bigfive-targets <list>',
-    '                       Adapter targets for codex,claude,gemini. Defaults to --tools or all.',
     '  --overwrite          Allow replacing existing target files.',
     '  --dry-run            Validate and print the plan without writing project files or reports.',
     '  --apply              Apply safe update/upgrade changes after reviewing the preview.',
@@ -217,21 +203,11 @@ function parseToolTargets(value) {
   return TOOL_TARGET_ORDER.filter((target) => unique.has(target));
 }
 
-function parseRequiredToolTargets(value, optionName) {
-  const targets = parseToolTargets(value);
-  if (!targets.length) throw new Error(`${optionName} requires at least one of codex, claude, gemini, or all`);
-  return targets;
-}
-
 function parseCodexAgentProfile(value) {
   if (typeof value !== 'string' || !VALID_CODEX_AGENT_PROFILES.has(value.trim().toLowerCase())) {
     throw new Error(`--codex-profile requires one of: ${CODEX_AGENT_PROFILE_ORDER.join(', ')}`);
   }
   return value.trim().toLowerCase();
-}
-
-function isGitUrl(value) {
-  return /^(https?|ssh|git):\/\//i.test(value) || /^git@[^:]+:.+/.test(value);
 }
 
 function parseArgs(argv) {
@@ -248,9 +224,6 @@ function parseArgs(argv) {
     includeIntake: false,
     runTransfer: 'completed',
     tools: isInitializeCommand(command) || command === 'enhance' ? [...TOOL_TARGET_ORDER] : command === 'update' || command === 'upgrade' ? null : [],
-    includeTeamBigFive: false,
-    teamBigFiveSource: null,
-    teamBigFiveTargets: null,
     overwrite: false,
     dryRun: false,
     apply: false,
@@ -264,7 +237,7 @@ function parseArgs(argv) {
     const arg = argv[index];
     if (arg === '--help' || arg === '-h') {
       args.help = true;
-    } else if ((isInitializeCommand(command) || command === 'update' || command === 'upgrade' || command === 'enhance') && (arg === '--project-id' || arg === '--artifacts' || arg === '--mode' || arg === '--iteration-id' || arg === '--run-transfer' || arg === '--include-intake' || arg === '--include-team-bigfive' || arg === '--team-bigfive-source' || arg === '--team-bigfive-targets')) {
+    } else if ((isInitializeCommand(command) || command === 'update' || command === 'upgrade' || command === 'enhance') && (arg === '--project-id' || arg === '--artifacts' || arg === '--mode' || arg === '--iteration-id' || arg === '--run-transfer' || arg === '--include-intake')) {
       throw new Error(`${arg} is not valid for ${command}`);
     } else if (arg === '--project-id') {
       args.projectId = argv[++index];
@@ -296,15 +269,6 @@ function parseArgs(argv) {
     } else if (arg === '--codex-profile') {
       args.codexProfile = parseCodexAgentProfile(argv[++index]);
       args.codexProfileProvided = true;
-    } else if (arg === '--include-team-bigfive') {
-      args.includeTeamBigFive = true;
-    } else if (arg === '--team-bigfive-source') {
-      args.teamBigFiveSource = argv[++index];
-      if (!args.teamBigFiveSource) throw new Error('--team-bigfive-source requires a path or Git URL');
-    } else if (arg === '--team-bigfive-targets') {
-      const value = argv[++index];
-      if (!value) throw new Error('--team-bigfive-targets requires codex, claude, gemini, or all');
-      args.teamBigFiveTargets = parseRequiredToolTargets(value, '--team-bigfive-targets');
     } else if (arg === '--overwrite') {
       args.overwrite = true;
     } else if (arg === '--dry-run') {
@@ -336,15 +300,6 @@ function parseArgs(argv) {
   }
   if (args.apply) throw new Error('--apply is only supported by update and upgrade');
   if (args.prune) throw new Error('--prune is only supported by update and upgrade');
-  if (!args.includeTeamBigFive && (args.teamBigFiveSource || args.teamBigFiveTargets)) {
-    throw new Error('--team-bigfive-source and --team-bigfive-targets require --include-team-bigfive');
-  }
-  if (args.includeTeamBigFive) {
-    if (!args.teamBigFiveSource) throw new Error('--include-team-bigfive requires --team-bigfive-source');
-    if (!args.teamBigFiveTargets) {
-      args.teamBigFiveTargets = args.tools.length ? [...args.tools] : [...TOOL_TARGET_ORDER];
-    }
-  }
   return args;
 }
 
@@ -1774,7 +1729,7 @@ function currentSpecWithPortableClosedArtifactHashes(currentSpec, plan, projectI
   return next;
 }
 
-function pushMilestoneReviewBundleIfExists(
+function pushIterationEvidenceBundleIfExists(
   plan,
   artifactsRoot,
   targetRoot,
@@ -1782,40 +1737,17 @@ function pushMilestoneReviewBundleIfExists(
   iterationId,
   runTransfer = 'completed',
 ) {
-  if (!iterationId) return { reviewFiles: [], evidenceFiles: [] };
-  const reviewFiles = [];
+  if (!iterationId) return { evidenceFiles: [] };
   const evidenceFiles = [];
-  const availableReviews = MILESTONE_REVIEW_CHECKPOINTS.flatMap((checkpoint) => {
-    const sourcePath = path.join(
-      artifactsRoot,
-      'iterations',
-      iterationId,
-      'milestone-reviews',
-      `${checkpoint}.json`,
-    );
-    if (!existsSync(sourcePath)) return [];
-    assertFile(sourcePath, path.join('iterations', iterationId, 'milestone-reviews', `${checkpoint}.json`));
-    return [{ checkpoint, sourcePath, milestoneReview: validateMilestoneReview(sourcePath) }];
-  });
-  const requiredCompletedRunIds = completedEvidenceRunIds(
-    availableReviews.map(({ milestoneReview }) => milestoneReview),
-  );
   const runIndexCandidate = path.join(artifactsRoot, 'runs', 'run-index.json');
-  if (!availableReviews.length && !existsSync(runIndexCandidate)) {
-    return { reviewFiles: [], evidenceFiles: [] };
+  if (!existsSync(runIndexCandidate)) {
+    return { evidenceFiles: [] };
   }
-  const bundleContexts = availableReviews.length
-    ? availableReviews
-    : [{
-        checkpoint: 'current',
-        sourcePath: null,
-        milestoneReview: {
-          source: {
-            task_graph_ref: `iterations/${iterationId}/gate-c-task-graph/task-graph.json`,
-            spec_ref: `iterations/${iterationId}/gate-b-spec/spec.json`,
-          },
-        },
-      }];
+  const bundleContexts = [{
+    checkpoint: 'current',
+    taskGraphRef: `iterations/${iterationId}/gate-c-task-graph/task-graph.json`,
+    specRef: `iterations/${iterationId}/gate-b-spec/spec.json`,
+  }];
   const copiedTargets = new Set(plan.map((item) => normalizePath(item.targetRelative)));
   function pushBundleFile(sourcePath, artifactRelativePath, destinationList, options = {}) {
     const targetRelative = normalizePath(path.join(targetArtifactDir(projectId), artifactRelativePath));
@@ -2037,21 +1969,15 @@ function pushMilestoneReviewBundleIfExists(
     return `${JSON.stringify(portableRunIndex, null, 2)}\n`;
   }
 
-  for (const { checkpoint, sourcePath, milestoneReview } of bundleContexts) {
-    let reviewRelativePath = null;
-    if (sourcePath) {
-      reviewRelativePath = normalizePath(path.relative(artifactsRoot, sourcePath));
-      pushBundleFile(sourcePath, reviewRelativePath, reviewFiles);
-    }
-
+  for (const { checkpoint, taskGraphRef, specRef } of bundleContexts) {
     const taskGraph = resolveMilestoneBundleReference(
       artifactsRoot,
-      milestoneReview.source.task_graph_ref,
+      taskGraphRef,
       `${checkpoint}.source.task_graph_ref`,
     );
     const spec = resolveMilestoneBundleReference(
       artifactsRoot,
-      milestoneReview.source.spec_ref,
+      specRef,
       `${checkpoint}.source.spec_ref`,
     );
     pushBundleFile(taskGraph.sourcePath, taskGraph.relativePath, evidenceFiles);
@@ -2085,19 +2011,19 @@ function pushMilestoneReviewBundleIfExists(
     });
     const closeReadyRunIds = closeReadyVisualReviewRunIds(indexedRunRecords, {
       iterationId,
-      taskGraphRef: milestoneReview.source.task_graph_ref,
+      taskGraphRef,
     });
     for (const runId of closeReadyAcceptanceReviewRunIds(indexedRunRecords, {
       iterationId,
-      taskGraphRef: milestoneReview.source.task_graph_ref,
+      taskGraphRef,
     })) closeReadyRunIds.add(runId);
     for (const runId of completedImplementationRunIds(indexedRunRecords, {
       iterationId,
-      taskGraphRef: milestoneReview.source.task_graph_ref,
+      taskGraphRef,
     })) closeReadyRunIds.add(runId);
     const transferRunEntries = selectHandoffRunEntries(
       runIndexData,
-      requiredCompletedRunIds,
+      new Set(),
       runTransfer,
       { additionalRunIds: closeReadyRunIds },
     );
@@ -2265,84 +2191,8 @@ function pushMilestoneReviewBundleIfExists(
         pushBundleFile(sidecar.sourcePath, sidecar.relativePath, evidenceFiles);
       }
     }
-    if (!sourcePath) continue;
-    const portableRunBundlesById = new Map(
-      portableRunBundles.map((bundle) => [bundle.indexedRun.runId, bundle]),
-    );
-    const milestoneTaskGraphSourceSpecRef = portableTaskGraphSourceSpecRefs.get(
-      realpathSync(taskGraph.sourcePath),
-    );
-    const rewritesCompletedEvidence = milestoneReview.source.completed_task_evidence.some(
-      (evidence) => {
-        const runBundle = portableRunBundlesById.get(evidence.run_snapshot.runId);
-        return Boolean(
-          runBundle
-          && (
-            portableTaskGraphRefs.has(runBundle.indexedRun.runId)
-            || portableTaskGraphSourceSpecRefs.has(
-              realpathSync(runBundle.sourceBundle.runTaskGraph.sourcePath),
-            )
-          )
-        );
-      },
-    );
-    if (milestoneTaskGraphSourceSpecRef || rewritesCompletedEvidence) {
-      pushBundleFile(
-        sourcePath,
-        reviewRelativePath,
-        reviewFiles,
-        {
-          type: 'rewrite-json',
-          transform: (source) => {
-            const portableReview = loadJson(source);
-            if (milestoneTaskGraphSourceSpecRef) {
-              portableReview.source.task_graph_snapshot.sourceSpec = milestoneTaskGraphSourceSpecRef;
-              portableReview.source.task_graph_snapshot_sha256 = milestoneSnapshotSha256(
-                portableReview.source.task_graph_snapshot,
-              );
-              portableReview.source.task_graph_sha256 = sha256Value(portableTaskGraphText(
-                taskGraph.sourcePath,
-                milestoneTaskGraphSourceSpecRef,
-              ));
-            }
-            for (const evidence of portableReview.source.completed_task_evidence) {
-              const runBundle = portableRunBundlesById.get(evidence.run_snapshot.runId);
-              if (!runBundle) continue;
-              const portableTaskGraphRef = portableTaskGraphRefs.get(runBundle.indexedRun.runId);
-              const portableSourceSpecRef = portableTaskGraphSourceSpecRefs.get(
-                realpathSync(runBundle.sourceBundle.runTaskGraph.sourcePath),
-              ) ?? runBundle.sourceBundle.portableSourceSpecRef;
-              if (!portableTaskGraphRef && !portableSourceSpecRef) continue;
-              const portableRunSnapshot = structuredClone(evidence.run_snapshot);
-              if (portableTaskGraphRef) portableRunSnapshot.taskGraphRef = portableTaskGraphRef;
-              if (portableSourceSpecRef) portableRunSnapshot.sourceSpecRef = portableSourceSpecRef;
-              evidence.run_snapshot = portableRunSnapshot;
-              evidence.run_snapshot_sha256 = milestoneRunSnapshotSha256(portableRunSnapshot);
-              evidence.run_sha256 = sha256Value(portableRunText(
-                runBundle,
-                portableTaskGraphRef,
-                portableSourceSpecRef,
-              ));
-            }
-            return `${JSON.stringify(portableReview, null, 2)}\n`;
-          },
-        },
-      );
-    }
-    for (const evidence of milestoneReview.source.completed_task_evidence) {
-      const runId = evidence.run_snapshot.runId;
-      const taskId = evidence.run_snapshot.taskId;
-      const indexedRun = runIndexData.runs.find((run) => run.runId === runId);
-      const expectedRunRef = indexedRun ? artifactRunRef(indexedRun.runRef) : null;
-      const legacyEvidenceRef = normalizePath(path.join('runs', legacyRunRef(runId)));
-      if (!indexedRun || ![expectedRunRef, legacyEvidenceRef].includes(normalizePath(evidence.run_ref))) {
-        throw new ValidationError(
-          `${checkpoint} ${taskId}.run_ref must be ${JSON.stringify(expectedRunRef)} for a portable handoff bundle`,
-        );
-      }
-    }
   }
-  return { reviewFiles, evidenceFiles };
+  return { evidenceFiles };
 }
 
 function appendHandoffRecord(currentSpec, record) {
@@ -2673,35 +2523,6 @@ function pushVerifiedFileRemoval(plan, targetRoot, targetRelative, content) {
   });
 }
 
-function isUnsafeTeamBigFiveSourcePath(relativePath) {
-  const normalized = normalizePath(relativePath);
-  const segments = normalized.split('/').filter(Boolean);
-  if (segments.some((segment) => ['.git', 'node_modules', '_workspace'].includes(segment))) return true;
-  const basename = segments[segments.length - 1] ?? '';
-  if (basename === '.env' || basename.startsWith('.env.')) return true;
-  return /(^|[-_.])(secret|credential|credentials)([-_.]|$)/i.test(basename);
-}
-
-function teamBigFiveSourceFiles(sourceRoot) {
-  const files = [];
-  function visit(directory) {
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      const absolute = path.join(directory, entry.name);
-      const relative = normalizePath(path.relative(sourceRoot, absolute));
-      if (isUnsafeTeamBigFiveSourcePath(relative)) continue;
-      if (entry.isDirectory()) {
-        visit(absolute);
-      } else if (entry.isFile()) {
-        const bytes = lstatSync(absolute).size;
-        const sha256 = createHash('sha256').update(readFileSync(absolute)).digest('hex');
-        files.push({ path: relative, bytes, sha256 });
-      }
-    }
-  }
-  visit(sourceRoot);
-  return files.sort((a, b) => a.path.localeCompare(b.path));
-}
-
 function tryReadJson(filePath) {
   try {
     if (!existsSync(filePath) || !lstatSync(filePath).isFile()) return null;
@@ -2710,306 +2531,6 @@ function tryReadJson(filePath) {
     return null;
   }
 }
-
-function detectTeamBigFiveSourceMetadata(sourceRoot) {
-  for (const relativePath of ['package.json', 'plugin.json', '.claude-plugin/plugin.json', 'manifest.json']) {
-    const data = tryReadJson(path.join(sourceRoot, relativePath));
-    if (!data) continue;
-    if (typeof data.name === 'string' || typeof data.version === 'string') {
-      return {
-        manifestFile: normalizePath(relativePath),
-        name: typeof data.name === 'string' ? data.name : null,
-        version: typeof data.version === 'string' ? data.version : null,
-      };
-    }
-  }
-  return { manifestFile: null, name: null, version: null };
-}
-
-function resolveTeamBigFiveSource(sourceValue) {
-  if (isGitUrl(sourceValue)) {
-    return {
-      type: 'git-url',
-      input: sourceValue,
-      url: sourceValue,
-      fetched: false,
-      metadata: { manifestFile: null, name: null, version: null },
-      files: [],
-    };
-  }
-  const sourceRoot = path.resolve(sourceValue);
-  if (!existsSync(sourceRoot) || !lstatSync(sourceRoot).isDirectory()) {
-    throw new Error(`--team-bigfive-source must be a local directory or Git URL: ${sourceValue}`);
-  }
-  const files = teamBigFiveSourceFiles(sourceRoot);
-  return {
-    type: 'local',
-    input: sourceValue,
-    path: sourceRoot,
-    metadata: detectTeamBigFiveSourceMetadata(sourceRoot),
-    files,
-  };
-}
-
-function teamBigFiveSourceManifest(sourceInfo, targets) {
-  return {
-    schema_version: 'p2a.team_bigfive_source.v1',
-    harness: 'team-bigfive',
-    source: {
-      type: sourceInfo.type,
-      input: sourceInfo.input,
-      path: sourceInfo.type === 'local' ? sourceInfo.path : null,
-      url: sourceInfo.type === 'git-url' ? sourceInfo.url : null,
-      fetched: sourceInfo.type === 'git-url' ? false : null,
-      metadata: sourceInfo.metadata,
-      fileCount: sourceInfo.files.length,
-      files: sourceInfo.files,
-    },
-    adapterTargets: targets,
-    excludedPathRules: [
-      '.git/',
-      'node_modules/',
-      '_workspace/',
-      '.env and .env.*',
-      '*secret* and *credential* files',
-    ],
-  };
-}
-
-function teamBigFiveSkillMarkdown() {
-  return `---
-name: team-bigfive-kickoff
-description: Kick off a Team Big Five style execution session for an approved Plan2Agent task.
----
-
-# Team Big Five Kickoff
-
-Use this skill only after Plan2Agent legacy handoff has installed approved flat artifacts under \`.plan2agent/artifacts/<projectId>/\`.
-
-## Inputs
-
-- A Plan2Agent task id from the handoff task graph recorded in \`.plan2agent/project.config.json.taskGraph\`.
-- The task prompt from \`p2a execute start --graph <task-graph> --task <task-id>\` or \`p2a tasks prompt --graph <task-graph> <task-id>\`.
-- Optional verification commands from \`.plan2agent/project.config.json\`.
-
-## Workflow
-
-1. Read the task prompt, acceptance criteria, source spec refs, and project config.
-2. Split the work into five lanes: coordination, implementation plan, code changes, review, and verification.
-3. Keep all work tied to the task id and source spec refs.
-4. Do not edit approved Plan2Agent artifacts except through the task/status CLIs.
-5. Track execution with \`p2a execute start/finish/status\` or the lower-level \`p2a runs start/verify/finish\` so runId, changed files, verification, agent tool, and workspace reference are preserved.
-6. Before marking the task done, run or request the configured test, lint, and typecheck commands when available.
-
-## Output
-
-Return a concise kickoff plan, the lane assignments or prompts, expected changed areas, and verification checklist. If you make code changes in the target project, summarize the Plan2Agent run id, changed files, and verification results.
-`;
-}
-
-function teamBigFiveCoordinatorInstructions(target) {
-  return `You are the Team Big Five coordinator for Plan2Agent handoff projects.
-
-Operate inside a legacy handoff target project after approved Plan2Agent artifacts have been installed. Use the task graph and spec recorded in .plan2agent/project.config.json and .plan2agent/artifacts/<projectId>/ as the source of truth.
-
-Coordinate complex tasks through five lanes:
-- coordination: keep task id, scope, dependencies, and acceptance criteria visible.
-- implementation planning: identify files, interfaces, data flows, and risk.
-- code changes: make or delegate focused implementation edits only when explicitly asked to execute.
-- review: inspect behavioral regressions, missing tests, and scope drift.
-- verification: run or request test/lint/typecheck commands from project.config.json.
-
-Do not modify .plan2agent/artifacts/* directly. Use p2a execute for supervised task lifecycle records, or p2a tasks and p2a runs for lower-level task state and run records. Do not run package install, destructive git commands, or external network operations unless the user explicitly approves them. When finished, report the run id, changed files, verification commands, results, and any remaining blockers. Target adapter: ${target}.`;
-}
-
-function tomlString(value) {
-  return JSON.stringify(value);
-}
-
-function renderCodexTeamBigFiveAgent() {
-  return (
-    'name = "team-bigfive-coordinator"\n' +
-    'description = "Coordinates a Team Big Five style execution session for approved Plan2Agent tasks."\n' +
-    'model_reasoning_effort = "high"\n' +
-    `developer_instructions = ${tomlString(teamBigFiveCoordinatorInstructions('codex'))}\n`
-  );
-}
-
-function renderClaudeTeamBigFiveAgent() {
-  return `---
-name: team-bigfive-coordinator
-description: Coordinates a Team Big Five style execution session for approved Plan2Agent tasks.
-tools:
-  - Read
-  - Grep
-  - Glob
-  - Bash
-  - Edit
-  - MultiEdit
-  - Write
----
-
-${teamBigFiveCoordinatorInstructions('claude')}
-`;
-}
-
-function renderGeminiTeamBigFiveAgent() {
-  return `---
-name: team-bigfive-coordinator
-description: Coordinates a Team Big Five style execution session for approved Plan2Agent tasks.
-kind: local
-tools:
-  - read_file
-  - grep_search
-temperature: 0.2
-max_turns: 20
----
-
-${teamBigFiveCoordinatorInstructions('gemini')}
-`;
-}
-
-function renderGeminiTeamBigFiveCommand() {
-  const prompt = `Use the Plan2Agent Team Big Five adapter for the following task or task id:
-
-{{args}}
-
-Read .plan2agent/project.config.json, then use its taskGraph and the matching spec under .plan2agent/artifacts/<projectId>/. Create a five-lane kickoff plan, then execute only if the user explicitly asks you to make code changes.`;
-  return `description = "Kick off a Team Big Five execution session for a Plan2Agent task."\nprompt = ${tomlString(prompt)}\n`;
-}
-
-function teamBigFiveAdaptationNotes(sourceInfo, targets) {
-  const sourceLine = sourceInfo.type === 'local'
-    ? `Local source: ${sourceInfo.path}`
-    : `Git source: ${sourceInfo.url} (not fetched by handoff)`;
-  return `# Team Big Five Adapter Notes
-
-${sourceLine}
-
-Installed targets: ${targets.join(', ')}
-
-Plan2Agent handoff installs adapter files only. It does not run agents, install packages, clone repositories, create branches, or execute tests.
-
-Use approved legacy handoff artifacts as the source of truth:
-
-- .plan2agent/project.config.json
-- .plan2agent/artifacts/<projectId>/gate-b-spec/spec.json
-- the task graph path recorded in .plan2agent/project.config.json.taskGraph
-
-Target entry points:
-
-- Codex: .agents/skills/team-bigfive-kickoff/SKILL.md and .codex/agents/team-bigfive-coordinator.toml
-- Claude: .claude/skills/team-bigfive-kickoff/SKILL.md and .claude/agents/team-bigfive-coordinator.md
-- Gemini: .agents/skills/team-bigfive-kickoff/SKILL.md, .gemini/agents/team-bigfive-coordinator.md, and .gemini/commands/p2a/team-bigfive.toml
-
-Local source files are fingerprinted in source-manifest.json. For Claude targets, safe local source files are also copied to .claude-plugin/team-bigfive/source/. Files under .git, node_modules, _workspace, .env*, and secret/credential-like names are excluded.
-`;
-}
-
-function pushTeamBigFiveAdapter(plan, targetRoot, args, { legacyRuntime = false } = {}) {
-  if (!args.includeTeamBigFive) {
-    return {
-      enabled: false,
-      targets: [],
-      files: [],
-      groups: [],
-      externalHarness: null,
-      projectConfig: { enabled: false },
-    };
-  }
-
-  const targets = args.teamBigFiveTargets;
-  const sourceInfo = resolveTeamBigFiveSource(args.teamBigFiveSource);
-  const files = [];
-  const groups = [];
-  const runtimeContent = legacyRuntime
-    ? legacyRuntimeCommandContent
-    : (content) => content;
-
-  const sourceManifest = teamBigFiveSourceManifest(sourceInfo, targets);
-  pushGeneratedJson(plan, targetRoot, TEAM_BIGFIVE_SOURCE_MANIFEST, sourceManifest);
-  files.push(normalizePath(TEAM_BIGFIVE_SOURCE_MANIFEST));
-  pushGeneratedText(plan, targetRoot, TEAM_BIGFIVE_ADAPTATION_NOTES, teamBigFiveAdaptationNotes(sourceInfo, targets));
-  files.push(normalizePath(TEAM_BIGFIVE_ADAPTATION_NOTES));
-  groups.push({ key: 'team-bigfive-metadata', files: [normalizePath(TEAM_BIGFIVE_SOURCE_MANIFEST), normalizePath(TEAM_BIGFIVE_ADAPTATION_NOTES)] });
-
-  const needsCommonSkill = targets.includes('codex') || targets.includes('gemini');
-  if (needsCommonSkill) {
-    const skillPath = path.join('.agents', 'skills', 'team-bigfive-kickoff', 'SKILL.md');
-    pushGeneratedText(plan, targetRoot, skillPath, runtimeContent(teamBigFiveSkillMarkdown()));
-    files.push(normalizePath(skillPath));
-    groups.push({ key: 'team-bigfive-common-skill', files: [normalizePath(skillPath)] });
-  }
-
-  if (targets.includes('codex')) {
-    const adapterFiles = [path.join('.codex', 'agents', 'team-bigfive-coordinator.toml')];
-    pushGeneratedText(plan, targetRoot, adapterFiles[0], runtimeContent(renderCodexTeamBigFiveAgent()));
-    files.push(...adapterFiles.map(normalizePath));
-    groups.push({ key: 'team-bigfive-codex', files: adapterFiles.map(normalizePath) });
-  }
-
-  if (targets.includes('claude')) {
-    const adapterFiles = [
-      path.join('.claude', 'skills', 'team-bigfive-kickoff', 'SKILL.md'),
-      path.join('.claude', 'agents', 'team-bigfive-coordinator.md'),
-    ];
-    pushGeneratedText(plan, targetRoot, adapterFiles[0], runtimeContent(teamBigFiveSkillMarkdown()));
-    pushGeneratedText(plan, targetRoot, adapterFiles[1], runtimeContent(renderClaudeTeamBigFiveAgent()));
-    files.push(...adapterFiles.map(normalizePath));
-
-    const sourceCopyFiles = [];
-    if (sourceInfo.type === 'local') {
-      for (const file of sourceInfo.files) {
-        const targetRelative = path.join('.claude-plugin', 'team-bigfive', 'source', file.path);
-        pushArtifact(plan, path.join(sourceInfo.path, file.path), targetRoot, targetRelative);
-        sourceCopyFiles.push(normalizePath(targetRelative));
-      }
-      files.push(...sourceCopyFiles);
-    }
-    groups.push({ key: 'team-bigfive-claude', files: [...adapterFiles.map(normalizePath), ...sourceCopyFiles] });
-  }
-
-  if (targets.includes('gemini')) {
-    const adapterFiles = [
-      path.join('.gemini', 'agents', 'team-bigfive-coordinator.md'),
-      path.join('.gemini', 'commands', 'p2a', 'team-bigfive.toml'),
-    ];
-    pushGeneratedText(plan, targetRoot, adapterFiles[0], runtimeContent(renderGeminiTeamBigFiveAgent()));
-    pushGeneratedText(plan, targetRoot, adapterFiles[1], renderGeminiTeamBigFiveCommand());
-    files.push(...adapterFiles.map(normalizePath));
-    groups.push({ key: 'team-bigfive-gemini', files: adapterFiles.map(normalizePath) });
-  }
-
-  const externalHarness = {
-    name: 'team-bigfive',
-    sourceType: sourceInfo.type,
-    source: sourceInfo.type === 'local' ? sourceInfo.path : sourceInfo.url,
-    sourceInput: sourceInfo.input,
-    sourceVersion: sourceInfo.metadata.version,
-    targets,
-    sourceManifest: normalizePath(TEAM_BIGFIVE_SOURCE_MANIFEST),
-    adaptationNotes: normalizePath(TEAM_BIGFIVE_ADAPTATION_NOTES),
-    adapterFiles: files,
-    fetched: sourceInfo.type === 'git-url' ? false : null,
-  };
-
-  return {
-    enabled: true,
-    targets,
-    files,
-    groups,
-    externalHarness,
-    projectConfig: {
-      enabled: true,
-      targets,
-      sourceType: sourceInfo.type,
-      source: sourceInfo.type === 'local' ? sourceInfo.path : sourceInfo.url,
-      sourceManifest: normalizePath(TEAM_BIGFIVE_SOURCE_MANIFEST),
-      adaptationNotes: normalizePath(TEAM_BIGFIVE_ADAPTATION_NOTES),
-    },
-  };
-}
-
 
 function targetArtifactDir(projectId) {
   return path.join(ARTIFACT_TARGET_BASE, projectId);
@@ -3312,7 +2833,7 @@ function buildScaffoldPlan(
     pushGeneratedJson(plan, targetRoot, path.join('.claude', 'settings.local.json'), buildClaudeLocalSettings());
   }
   pushGeneratedJson(plan, targetRoot, path.join('.plan2agent', 'manifest.json'), manifest);
-  pushGeneratedJson(plan, targetRoot, path.join('.plan2agent', 'project.config.json'), buildProjectConfig(targetRoot, { enabled: false }, { projectId }));
+  pushGeneratedJson(plan, targetRoot, path.join('.plan2agent', 'project.config.json'), buildProjectConfig(targetRoot, { projectId }));
   pushGeneratedText(plan, targetRoot, '.gitignore', scaffoldGitignoreContent(targetRoot), { allowExisting: true });
   if (args.command !== 'scaffold' || !existsSync(path.join(targetRoot, 'PLAN2AGENT.md'))) {
     pushGeneratedText(plan, targetRoot, 'PLAN2AGENT.md', renderPlan2AgentGuide(legacyRuntime));
@@ -4543,8 +4064,8 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
     maintenanceFiles.push(normalizePath(targetRelative));
   }
   const preflightResearchFiles = pushFeatureRadarPreflightIfExists(plan, artifactsRoot, targetRoot, args.projectId);
-  const milestoneBundle = sourceInfo.kind === 'iteration'
-    ? pushMilestoneReviewBundleIfExists(
+  const evidenceBundle = sourceInfo.kind === 'iteration'
+    ? pushIterationEvidenceBundleIfExists(
         plan,
         artifactsRoot,
         targetRoot,
@@ -4552,9 +4073,8 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
         sourceInfo.iterationId,
         args.runTransfer,
       )
-    : { reviewFiles: [], evidenceFiles: [] };
-  const milestoneReviewFiles = milestoneBundle.reviewFiles;
-  const milestoneEvidenceFiles = milestoneBundle.evidenceFiles;
+    : { evidenceFiles: [] };
+  const milestoneEvidenceFiles = evidenceBundle.evidenceFiles;
   pushIntakeBaselineContextBundleIfPresent(
     plan,
     paths.intakeJson,
@@ -4611,7 +4131,6 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
     codexProfile,
     legacyRuntime,
   });
-  const teamBigFivePlan = pushTeamBigFiveAdapter(plan, targetRoot, args, { legacyRuntime });
   const scriptFiles = legacyRuntime
     ? SCAFFOLD_SCRIPT_FILES.map((file) => normalizePath(targetScriptPath(file)))
     : [];
@@ -4626,7 +4145,6 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
   const toolFiles = [
     ...scriptFiles,
     ...toolAssetPlan.files,
-    ...teamBigFivePlan.files,
   ];
   const managedFiles = plannedManagedFileRecords(plan, {
     scriptFiles,
@@ -4637,7 +4155,6 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
     ? SCAFFOLD_SCRIPT_FILES.map((file) => file.replace(/\.mjs$/, ''))
     : [];
   for (const target of args.tools) includedTools.push(`p2a_${target}_assets`);
-  if (teamBigFivePlan.enabled) includedTools.push('team_bigfive_adapter');
 
   const manifest = {
     schema_version: 'p2a.handoff.v1',
@@ -4658,10 +4175,8 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
     includedTools,
     aiToolTargets: args.tools,
     codexAgentProfile: codexAgentProfileRecord(codexProfile, args.tools.includes('codex')),
-    externalHarnesses: teamBigFivePlan.externalHarness ? [teamBigFivePlan.externalHarness] : [],
     artifactFiles,
     preflightResearchFiles,
-    milestoneReviewFiles,
     milestoneEvidenceFiles,
     currentSpecFile: sourceInfo.currentSpecPath ? '.plan2agent/current-spec.json' : null,
     constitutionFile: sourceConstitutionPath ? '.plan2agent/constitution.json' : null,
@@ -4671,8 +4186,6 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
     aiToolFiles: toolAssetPlan.files,
     aiToolGroups: toolAssetPlan.groups,
     managedFiles,
-    externalHarnessFiles: teamBigFivePlan.files,
-    externalHarnessGroups: teamBigFivePlan.groups,
     schemaFiles,
     notes: [
       `task-graph.sourceSpec rebased to ${targetSpecRef}`,
@@ -4681,15 +4194,13 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
       `run transfer mode: ${args.runTransfer}`,
       sourceConstitutionPath ? 'approved Gate ② constitution copied' : 'legacy handoff without a constitution',
       preflightResearchFiles.length ? `Feature Radar preflight research copied: ${preflightResearchFiles.length} file(s)` : 'Feature Radar preflight research not present',
-      milestoneReviewFiles.length ? `Milestone reviews copied: ${milestoneReviewFiles.length} file(s)` : 'Milestone reviews not present',
       milestoneEvidenceFiles.length ? `Run/review evidence bundle copied: ${milestoneEvidenceFiles.length} file(s)` : 'Run/review evidence bundle not present',
       args.tools.length ? `AI tool assets copied for: ${args.tools.join(', ')}` : 'AI tool assets not requested',
       args.tools.includes('codex') ? `Codex agent profile: ${codexProfile}` : 'Codex agent profile not applicable',
-      teamBigFivePlan.enabled ? `Team Big Five adapter installed for: ${teamBigFivePlan.targets.join(', ')}` : 'Team Big Five adapter not requested',
     ],
   };
 
-  const projectConfig = buildProjectConfig(targetRoot, teamBigFivePlan.projectConfig, {
+  const projectConfig = buildProjectConfig(targetRoot, {
     projectId: args.projectId,
     taskGraph: targetTaskGraphRef,
   });
@@ -4805,7 +4316,6 @@ function printPlan(plan, args, artifactsRoot, targetRoot, sourceInfo) {
   console.log(`runTransfer: ${args.runTransfer}`);
   console.log(`aiTools: ${args.tools.length ? args.tools.join(',') : 'none'}`);
   if (args.tools.includes('codex')) console.log(`codexProfile: ${resolveCodexAgentProfile(args.codexProfile)}`);
-  console.log(`teamBigFive: ${args.includeTeamBigFive ? args.teamBigFiveTargets.join(',') : 'none'}`);
   console.log(`sourceLayout: ${sourceInfo.kind}`);
   if (sourceInfo.iterationId) console.log(`sourceIterationId: ${sourceInfo.iterationId}`);
   console.log(`sourceArtifacts: ${artifactsRoot}`);
@@ -5264,22 +4774,6 @@ async function askToolTargets(rl) {
   }
 }
 
-async function askTeamBigFiveTargets(rl, defaultTargets) {
-  const defaultValue = defaultTargets.length ? defaultTargets.join(',') : 'all';
-  console.log('team-bigfive-targets - Team Big Five adapter 설치 대상');
-  console.log('입력 예: codex, claude, gemini, codex,claude,gemini, all');
-  while (true) {
-    const input = await rl.question(`team-bigfive-targets [${defaultValue}] (q=취소): `);
-    const trimmed = input.trim();
-    if (trimmed.toLowerCase() === 'q') return null;
-    try {
-      return parseRequiredToolTargets(trimmed === '' ? defaultValue : trimmed, '--team-bigfive-targets');
-    } catch (error) {
-      console.log(error.message);
-    }
-  }
-}
-
 function defaultArtifactsBase() {
   const artifactsBase = path.resolve(process.cwd(), 'artifacts');
   try {
@@ -5322,25 +4816,12 @@ async function buildInteractiveArgv(rl) {
   if (includeIntake === null) return null;
   const tools = await askToolTargets(rl);
   if (tools === null) return null;
-  const includeTeamBigFive = await askYesNo(rl, 'include-team-bigfive?', 'Team Big Five adapter 설치', false);
-  if (includeTeamBigFive === null) return null;
-  let teamBigFiveSource = null;
-  let teamBigFiveTargets = [];
-  if (includeTeamBigFive) {
-    teamBigFiveSource = await askRequired(rl, 'team-bigfive-source', 'team-bigfive 원본 디렉터리 또는 Git URL');
-    if (!teamBigFiveSource) return null;
-    teamBigFiveTargets = await askTeamBigFiveTargets(rl, tools.length ? tools : TOOL_TARGET_ORDER);
-    if (teamBigFiveTargets === null) return null;
-  }
   const overwrite = await askYesNo(rl, 'overwrite?', '기존 대상 파일 덮어쓰기 허용', false);
   if (overwrite === null) return null;
 
   const argv = ['--project-id', projectId, '--artifacts', artifacts, '--target', target, '--mode', mode];
   if (includeIntake) argv.push('--include-intake');
   if (tools.length) argv.push('--tools', tools.join(','));
-  if (includeTeamBigFive) {
-    argv.push('--include-team-bigfive', '--team-bigfive-source', teamBigFiveSource, '--team-bigfive-targets', teamBigFiveTargets.join(','));
-  }
   if (overwrite) argv.push('--overwrite');
   return argv;
 }

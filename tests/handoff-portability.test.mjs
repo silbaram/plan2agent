@@ -18,7 +18,6 @@ import {
   closeReadyAcceptanceReviewRunIds,
   completedImplementationRunIds,
   closeReadyVisualReviewRunIds,
-  completedEvidenceRunIds,
   selectHandoffRunEntries,
   validatePortableHandoffTarget,
 } from '../scripts/p2a_handoff_portability.mjs';
@@ -55,15 +54,8 @@ function missingRunIndex(projectId) {
   };
 }
 
-test('completed handoff preserves explicitly required legacy milestone evidence', () => {
-  const required = completedEvidenceRunIds([{
-    source: {
-      completed_task_evidence: [
-        { run_snapshot: { runId: 'run-finished-a' } },
-        { run_snapshot: { runId: 'run-finished-b' } },
-      ],
-    },
-  }]);
+test('completed handoff preserves explicitly required finished run evidence', () => {
+  const required = new Set(['run-finished-a', 'run-finished-b']);
   const selected = selectHandoffRunEntries({
     runs: [
       entry('run-historical-failed', 'failed'),
@@ -197,7 +189,6 @@ test('portable target validation checks the emitted gate bundle and run store', 
     assert.deepEqual(validatePortableHandoffTarget(targetRoot, projectId), {
       artifactRoot,
       runCount: 0,
-      milestoneReviewCount: 0,
     });
 
     const runsDir = path.join(artifactRoot, 'runs');

@@ -222,22 +222,6 @@ function writeGateC(artifactRoot, tasks, iterationId = null) {
   }
 }
 
-function writeGateD(artifactRoot, blockingIssues = [], iterationId = null) {
-  const review = JSON.parse(readFileSync(
-    join(FIXTURE_ROOT, 'cache-library', 'review.json'),
-    'utf8',
-  ));
-  review.sourceSpec = '../gate-b-spec/spec.json';
-  review.sourceTaskGraph = '../gate-c-task-graph/task-graph.json';
-  review.projectId = currentProjectId(artifactRoot) ?? review.projectId;
-  review.blocking_issues = blockingIssues.map((issue) => (
-    typeof issue === 'string' ? issue : issue.id ?? JSON.stringify(issue)
-  ));
-  writeJson(
-    join(gateRoot(artifactRoot, iterationId), 'gate-d-review', 'review.json'),
-    review,
-  );
-}
 
 function writeIteration(artifactRoot, projectId = 'sample', options = {}) {
   const iterationId = options.iterationId ?? 'v1';
@@ -319,7 +303,6 @@ function writeClosedIterationWithCompositionGap(artifactRoot, projectId = 'sampl
     writeGateA(artifactRoot, 'ready_for_spec', iterationId);
     writeGateB(artifactRoot, 'approved', iterationId);
     writeGateC(artifactRoot, [task('task-001', 'done')], iterationId);
-    writeGateD(artifactRoot, [], iterationId);
   }
   writeJson(join(artifactRoot, 'iterations', sourceIteration, 'iteration.json'), {
     schema_version: 'p2a.iteration.v1',
@@ -372,7 +355,6 @@ function writeBuildLoreShapedClosedHistory(artifactRoot, projectId = 'sample') {
     writeGateA(artifactRoot, 'ready_for_spec', iterationId);
     writeGateB(artifactRoot, 'approved', iterationId);
     writeGateC(artifactRoot, [task('task-001', 'done')], iterationId);
-    writeGateD(artifactRoot, [], iterationId);
     writeJson(join(artifactRoot, 'iterations', iterationId, 'iteration.json'), {
       schema_version: 'p2a.iteration.v1',
       project_id: projectId,
@@ -896,14 +878,12 @@ function installFixtureArtifact(root, fixtureRoot, projectId, layout) {
       ['intake.answered.json', 'gate-a-intake/intake.json'],
       ['spec.approved.json', 'gate-b-spec/spec.json'],
       ['task-graph.json', 'gate-c-task-graph/task-graph.json'],
-      ['review.json', 'gate-d-review/review.json'],
     ]
     : [
       ['status.md', 'status.md'],
       ['gate-a-intake/intake.json', 'gate-a-intake/intake.json'],
       ['gate-b-spec/spec.json', 'gate-b-spec/spec.json'],
       ['gate-c-task-graph/task-graph.json', 'gate-c-task-graph/task-graph.json'],
-      ['gate-d-review/review.json', 'gate-d-review/review.json'],
     ];
   for (const [source, destination] of files) {
     copyFixtureFile(join(fixtureRoot, source), join(artifactRoot, destination));
@@ -917,12 +897,6 @@ function installFixtureArtifact(root, fixtureRoot, projectId, layout) {
   const taskGraph = JSON.parse(readFileSync(taskGraphPath, 'utf8'));
   taskGraph.sourceSpec = '../gate-b-spec/spec.json';
   writeJson(taskGraphPath, taskGraph);
-
-  const reviewPath = join(artifactRoot, 'gate-d-review', 'review.json');
-  const review = JSON.parse(readFileSync(reviewPath, 'utf8'));
-  review.sourceSpec = '../gate-b-spec/spec.json';
-  review.sourceTaskGraph = '../gate-c-task-graph/task-graph.json';
-  writeJson(reviewPath, review);
   return artifactRoot;
 }
 
@@ -1029,7 +1003,6 @@ test('next chooses one read-only action for every primary state', () => {
         writeGateA(rootArtifact, 'ready_for_spec', iterationId);
         writeGateB(rootArtifact, 'approved', iterationId);
         writeGateC(rootArtifact, [task('task-001', 'todo')], iterationId);
-        writeGateD(rootArtifact, [], iterationId);
         writeRuns(rootArtifact, [{ runId: 'run-001', iterationId, status: 'started' }]);
         return root;
       },
@@ -1044,7 +1017,6 @@ test('next chooses one read-only action for every primary state', () => {
         writeGateA(rootArtifact, 'ready_for_spec', iterationId);
         writeGateB(rootArtifact, 'approved', iterationId);
         writeGateC(rootArtifact, [task('task-001', 'todo')], iterationId);
-        writeGateD(rootArtifact, [], iterationId);
         return root;
       },
       expected: (root) => ['ready_task_available', 'cli', ['execute', 'start', '--artifacts', artifactPath(root), '--task', 'task-001']],
@@ -1058,7 +1030,6 @@ test('next chooses one read-only action for every primary state', () => {
         writeGateA(rootArtifact, 'ready_for_spec', iterationId);
         writeGateB(rootArtifact, 'approved', iterationId);
         writeGateC(rootArtifact, [task('task-001', 'blocked'), task('task-002', 'todo', ['task-001'])], iterationId);
-        writeGateD(rootArtifact, [], iterationId);
         return root;
       },
       expected: (root) => ['tasks_blocked', 'cli', ['tasks', 'show', '--artifacts', artifactPath(root), 'task-001'], false],
@@ -1072,7 +1043,6 @@ test('next chooses one read-only action for every primary state', () => {
         writeGateA(rootArtifact, 'ready_for_spec', iterationId);
         writeGateB(rootArtifact, 'approved', iterationId);
         writeGateC(rootArtifact, [task('task-001', 'done')], iterationId);
-        writeGateD(rootArtifact, [], iterationId);
         return root;
       },
       expected: (root) => ['final_verification_required', 'cli', [
@@ -1091,7 +1061,6 @@ test('next chooses one read-only action for every primary state', () => {
         writeGateA(rootArtifact, 'ready_for_spec', iterationId);
         writeGateB(rootArtifact, 'approved', iterationId);
         writeGateC(rootArtifact, [task('task-001', 'done')], iterationId);
-        writeGateD(rootArtifact, [], iterationId);
         return root;
       },
       expected: (root) => ['final_acceptance_review_required', 'cli', ['execute', 'accept', '--artifacts', artifactPath(root)]],
@@ -1105,7 +1074,6 @@ test('next chooses one read-only action for every primary state', () => {
         writeGateA(rootArtifact, 'ready_for_spec', iterationId);
         writeGateB(rootArtifact, 'approved', iterationId);
         writeGateC(rootArtifact, [task('task-001', 'done')], iterationId);
-        writeGateD(rootArtifact, [], iterationId);
         writeRuns(rootArtifact, [{ runId: 'run-001', iterationId, status: 'failed' }]);
         return root;
       },
@@ -1123,7 +1091,6 @@ test('next chooses one read-only action for every primary state', () => {
         writeGateA(rootArtifact, 'ready_for_spec', iterationId);
         writeGateB(rootArtifact, 'approved', iterationId);
         writeGateC(rootArtifact, [task('task-001', 'blocked')], iterationId);
-        writeGateD(rootArtifact, [], iterationId);
         writeRuns(rootArtifact, [{ runId: 'run-001', iterationId, status: 'failed' }]);
         return root;
       },
@@ -1153,7 +1120,6 @@ test('next chooses one read-only action for every primary state', () => {
         writeGateA(rootArtifact, 'ready_for_spec', iterationId);
         writeGateB(rootArtifact, 'approved', iterationId);
         writeGateC(rootArtifact, [task('task-001', 'done')], iterationId);
-        writeGateD(rootArtifact, [], iterationId);
         return root;
       },
       expected: (root) => ['iteration_complete', 'cli', ['iteration', 'open', '--artifacts', artifactPath(root), '--idea', '<change idea>']],
@@ -1182,7 +1148,6 @@ test('a closed iteration binds an explicit idea or entry to the next open action
     writeGateA(rootArtifact, 'ready_for_spec', iterationId);
     writeGateB(rootArtifact, 'approved', iterationId);
     writeGateC(rootArtifact, [task('task-001', 'done')], iterationId);
-    writeGateD(rootArtifact, [], iterationId);
 
     const idea = 'Add a replay dashboard for failed deliveries.';
     assertAction(next(root, ['--idea', idea]), 'iteration_complete', 'cli', [
@@ -1247,7 +1212,6 @@ test('an explicit new entry pauses instead of auto-starting current approved wor
     writeGateA(rootArtifact, 'ready_for_spec', iterationId);
     writeGateB(rootArtifact, 'approved', iterationId);
     writeGateC(rootArtifact, [task('task-001', 'todo')], iterationId);
-    writeGateD(rootArtifact, [], iterationId);
     const entryPath = join(root, 'competing-change.md');
     writeFileSync(entryPath, 'Add a separate dashboard after the current work.\n', 'utf8');
 
@@ -1271,7 +1235,6 @@ test('an explicit new request is deferred for orphan in-progress and completed-o
       writeGateA(rootArtifact, 'ready_for_spec', iterationId);
       writeGateB(rootArtifact, 'approved', iterationId);
       writeGateC(rootArtifact, [task('task-001', status)], iterationId);
-      writeGateD(rootArtifact, [], iterationId);
 
       const idea = `Add the next dashboard after ${status} work closes.`;
       const payload = next(root, ['--idea', idea]);
@@ -1292,7 +1255,6 @@ test('a single unconsumed provisional request survives until a closed iteration 
     writeGateA(rootArtifact, 'ready_for_spec', iterationId);
     writeGateB(rootArtifact, 'approved', iterationId);
     writeGateC(rootArtifact, [task('task-001', 'done')], iterationId);
-    writeGateD(rootArtifact, [], iterationId);
 
     const idea = 'Add a saved replay dashboard after the closed iteration.';
     assertAction(next(root, ['--idea', idea]), 'iteration_complete', 'cli', [
@@ -1336,7 +1298,6 @@ test('repeating a consumed idea explicitly makes the stable provisional entry pe
     writeGateA(rootArtifact, 'ready_for_spec', iterationId);
     writeGateB(rootArtifact, 'approved', iterationId);
     writeGateC(rootArtifact, [task('task-001', 'done')], iterationId);
-    writeGateD(rootArtifact, [], iterationId);
     const intakePath = join(
       rootArtifact,
       'iterations',
@@ -1408,7 +1369,6 @@ test('a blocked run records the bounded user decision and returns the task to re
     writeGateA(rootArtifact, 'ready_for_spec', iterationId);
     writeGateB(rootArtifact, 'approved', iterationId);
     writeGateC(rootArtifact, [task('task-001', 'blocked')], iterationId);
-    writeGateD(rootArtifact, [], iterationId);
     writeRuns(rootArtifact, [{
       runId: 'run-scope-decision',
       iterationId,
@@ -1555,7 +1515,6 @@ test('blocked routing never resurfaces an older decision after a newer terminal 
     writeGateA(rootArtifact, 'ready_for_spec', iterationId);
     writeGateB(rootArtifact, 'approved', iterationId);
     writeGateC(rootArtifact, [task('task-001', 'blocked')], iterationId);
-    writeGateD(rootArtifact, [], iterationId);
     writeRuns(rootArtifact, [
       {
         runId: 'run-old-scope-decision',
@@ -1600,7 +1559,6 @@ test('a manually reblocked task does not revive a user decision from before its 
     writeGateA(rootArtifact, 'ready_for_spec', iterationId);
     writeGateB(rootArtifact, 'approved', iterationId);
     writeGateC(rootArtifact, [task('task-001', 'blocked')], iterationId);
-    writeGateD(rootArtifact, [], iterationId);
     writeRuns(rootArtifact, [
       {
         runId: 'run-old-scope-decision',
@@ -1650,7 +1608,6 @@ test('blocked scope replacement reaches a full-spec executable graph and compose
     writeGateA(rootArtifact, 'ready_for_spec', baselineIteration);
     writeGateB(rootArtifact, 'approved', baselineIteration);
     writeGateC(rootArtifact, [task('task-001', 'done')], baselineIteration);
-    writeGateD(rootArtifact, [], baselineIteration);
     addArchivedArtifactAudits(rootArtifact);
 
     let result = runP2a([
@@ -2121,7 +2078,6 @@ test('a retryable blocked run routes through idempotent finish recovery', () => 
     writeGateA(rootArtifact, 'ready_for_spec', iterationId);
     writeGateB(rootArtifact, 'approved', iterationId);
     writeGateC(rootArtifact, [task('task-001', 'blocked')], iterationId);
-    writeGateD(rootArtifact, [], iterationId);
     writeRuns(rootArtifact, [{
       runId: 'run-retryable-block',
       iterationId,
@@ -2174,7 +2130,6 @@ test('replace-scope rejects ready and started work without changing project stat
       writeGateA(rootArtifact, 'ready_for_spec', iterationId);
       writeGateB(rootArtifact, 'approved', iterationId);
       writeGateC(rootArtifact, [task('task-001', caseData.taskStatus)], iterationId);
-      writeGateD(rootArtifact, [], iterationId);
       if (caseData.runs.length) {
         writeRuns(rootArtifact, caseData.runs.map((run) => ({
           ...run,
@@ -2209,7 +2164,6 @@ test('next defers a replacement request while an orphan in-progress task still n
       task('task-001', 'blocked'),
       task('task-002', 'in_progress'),
     ], iterationId);
-    writeGateD(rootArtifact, [], iterationId);
     writeRuns(rootArtifact, [{
       runId: 'run-blocked-scope',
       taskId: 'task-001',
@@ -2241,7 +2195,6 @@ test('completed iterations expose product review, P2A retrospective, and close w
     writeGateA(rootArtifact, 'ready_for_spec', iterationId);
     writeGateB(rootArtifact, 'approved', iterationId);
     writeGateC(rootArtifact, [task('task-001', 'done')], iterationId);
-    writeGateD(rootArtifact, [], iterationId);
     writeFinalVerification(root, rootArtifact, iterationId);
     const before = snapshotHarness(root);
     assertCompletionDecision(next(root), artifactPath(root));
@@ -2263,7 +2216,6 @@ test('completed iterations reuse current configured full implementation evidence
     writeGateA(rootArtifact, 'ready_for_spec', iterationId);
     writeGateB(rootArtifact, 'approved', iterationId);
     writeGateC(rootArtifact, [task('task-001', 'done')], iterationId);
-    writeGateD(rootArtifact, [], iterationId);
     writeReusableImplementationVerification(root, rootArtifact, iterationId);
 
     assertCompletionDecision(next(root), artifactPath(root));
@@ -2280,7 +2232,6 @@ test('a generated retrospective report does not stale final verification but oth
     writeGateA(rootArtifact, 'ready_for_spec', iterationId);
     writeGateB(rootArtifact, 'approved', iterationId);
     writeGateC(rootArtifact, [task('task-001', 'done')], iterationId);
-    writeGateD(rootArtifact, [], iterationId);
     writeFinalVerification(root, rootArtifact, iterationId);
 
     const reportPath = join(root, 'docs', 'retrospective', `sample-${iterationId}.md`);
@@ -2323,7 +2274,6 @@ test('completed iteration exposes bounded retrospective candidates without block
     writeGateA(rootArtifact, 'ready_for_spec', iterationId);
     writeGateB(rootArtifact, 'approved', iterationId);
     writeGateC(rootArtifact, [task('task-001', 'done')], iterationId);
-    writeGateD(rootArtifact, [], iterationId);
     writeFinalVerification(root, rootArtifact, iterationId);
     const finalRun = JSON.parse(readFileSync(
       join(rootArtifact, 'runs', 'run-final-verification.json'),
@@ -2414,7 +2364,6 @@ test('human next output defaults to actionable v2 options while unqualified JSON
     writeGateA(rootArtifact, 'ready_for_spec', iterationId);
     writeGateB(rootArtifact, 'approved', iterationId);
     writeGateC(rootArtifact, [task('task-001', 'done')], iterationId);
-    writeGateD(rootArtifact, [], iterationId);
     writeFinalVerification(root, rootArtifact, iterationId);
 
     const human = runP2a(['next', '--target', root]);
@@ -2459,7 +2408,6 @@ test('the explicit close option archives a completed iteration without an option
     writeGateA(rootArtifact, 'ready_for_spec', iterationId);
     writeGateB(rootArtifact, 'approved', iterationId);
     writeGateC(rootArtifact, [task('task-001', 'done')], iterationId);
-    writeGateD(rootArtifact, [], iterationId);
     writeFinalVerification(root, rootArtifact, iterationId);
 
     const { close } = assertCompletionDecision(next(root), artifactPath(root));
@@ -2483,7 +2431,6 @@ test('closed current development routes without archive audit or run hydration',
     writeGateA(rootArtifact, 'ready_for_spec', iterationId);
     writeGateB(rootArtifact, 'approved', iterationId);
     writeGateC(rootArtifact, [task('task-001', 'done')], iterationId);
-    writeGateD(rootArtifact, [], iterationId);
     writeRuns(rootArtifact, Array.from({ length: 42 }, (_, index) => ({
       runId: `run-history-${String(index + 1).padStart(3, '0')}`,
       iterationId,
@@ -3031,7 +2978,6 @@ test('next ignores reopened archived metadata while mutation commands still reje
     writeGateA(rootArtifact, 'ready_for_spec', iterationId);
     writeGateB(rootArtifact, 'approved', iterationId);
     writeGateC(rootArtifact, [task('task-001', 'done')], iterationId);
-    writeGateD(rootArtifact, [], iterationId);
 
     const metadataPath = join(rootArtifact, 'iterations', iterationId, 'iteration.json');
     const metadata = JSON.parse(readFileSync(metadataPath, 'utf8'));
@@ -3080,7 +3026,6 @@ test('next ignores archived planning metadata while mutation commands still reje
     writeGateA(rootArtifact, 'ready_for_spec', iterationId);
     writeGateB(rootArtifact, 'approved', iterationId);
     writeGateC(rootArtifact, [task('task-001', 'done')], iterationId);
-    writeGateD(rootArtifact, [], iterationId);
 
     const currentSpecPath = join(rootArtifact, 'current-spec.json');
     const currentSpec = JSON.parse(readFileSync(currentSpecPath, 'utf8'));
@@ -3486,7 +3431,6 @@ test('next blocks downstream work when Gate A is missing, unreadable, or invalid
       }
       writeGateB(rootArtifact);
       writeGateC(rootArtifact, [task('task-001', 'todo')]);
-      writeGateD(rootArtifact);
 
       assertAction(
         next(root),
@@ -3663,7 +3607,6 @@ test('next ignores historical composition fields but fail-closes current identit
       writeGateA(rootArtifact, 'ready_for_spec', iterationId);
       writeGateB(rootArtifact, 'approved', iterationId);
       writeGateC(rootArtifact, [task('task-001', 'todo')], iterationId);
-      writeGateD(rootArtifact, [], iterationId);
 
       const currentSpecPath = join(rootArtifact, 'current-spec.json');
       const currentSpec = JSON.parse(readFileSync(currentSpecPath, 'utf8'));
@@ -3795,7 +3738,6 @@ test('next ignores open runs outside the active iteration task-graph context', (
     writeGateA(rootArtifact, 'ready_for_spec', iterationId);
     writeGateB(rootArtifact, 'approved', iterationId);
     writeGateC(rootArtifact, [task('task-001', 'todo')], iterationId);
-    writeGateD(rootArtifact, [], iterationId);
     writeRuns(rootArtifact, [
       { runId: 'run-v1', iterationId: 'v1', status: 'started' },
       {
@@ -3838,7 +3780,6 @@ test('next points Gate B approval at the active iteration and ignores legacy Gat
 
     writeGateB(rootArtifact, 'approved', iterationId);
     writeGateC(rootArtifact, [task('task-001', 'todo')], iterationId);
-    writeGateD(rootArtifact, [{ id: 'BLOCK-1' }], iterationId);
 
     payload = next(root);
     assertAction(payload, 'ready_task_available', 'cli');
@@ -3855,7 +3796,6 @@ test('next opens a closed iteration without requiring proposal mining', () => {
     writeGateA(rootArtifact, 'ready_for_spec', iterationId);
     writeGateB(rootArtifact, 'approved', iterationId);
     writeGateC(rootArtifact, [task('task-001', 'done')], iterationId);
-    writeGateD(rootArtifact, [], iterationId);
     writeRuns(rootArtifact, [{ runId: 'run-001', iterationId, status: 'failed' }]);
 
     assertAction(next(root), 'iteration_complete', 'cli', [
@@ -3873,7 +3813,6 @@ test('next reports flat handoff complete without requiring proposal mining', () 
     writeGateA(rootArtifact, 'ready_for_spec');
     writeGateB(rootArtifact, 'approved');
     writeGateC(rootArtifact, [task('task-001', 'done')]);
-    writeGateD(rootArtifact);
     writeRuns(rootArtifact, [{ runId: 'run-001', status: 'failed' }]);
 
     assertAction(next(root), 'flat_execution_complete', 'approval');
@@ -3889,7 +3828,6 @@ test('next reports flat execution complete when proposal mining is disabled', ()
     writeGateA(rootArtifact, 'ready_for_spec');
     writeGateB(rootArtifact, 'approved');
     writeGateC(rootArtifact, [task('task-001', 'done')]);
-    writeGateD(rootArtifact);
     writeRuns(rootArtifact, [{ runId: 'run-001', status: 'failed' }]);
 
     const payload = next(root);
@@ -3914,7 +3852,6 @@ test('next routes missing run evidence to an executable validation command', () 
     writeGateA(rootArtifact, 'ready_for_spec');
     writeGateB(rootArtifact, 'approved');
     writeGateC(rootArtifact, [task('task-001', 'done')]);
-    writeGateD(rootArtifact);
     writeRuns(rootArtifact, [{ runId: 'run-001', status: 'failed' }]);
     rmSync(join(rootArtifact, 'runs', 'run-001.json'));
 
@@ -4118,7 +4055,7 @@ test('orchestrated task routing reaches persisted validated graphs in iterative 
       const before = snapshotHarness(root);
       const routed = next(root);
       assertAction(routed, 'gate_b_approved_needs_tasks', 'skill');
-      assert.equal(routed.command.skill, iterative ? 'p2a-task-author' : 'p2a-task-breakdown');
+      assert.equal(routed.command.skill, 'p2a-task-author');
       assert.deepEqual(routed.command.args, ['--artifacts', rootArtifact]);
       assert.deepEqual(snapshotHarness(root), before);
 

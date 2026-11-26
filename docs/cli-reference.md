@@ -490,9 +490,6 @@ Git workspace에서 시작한 run은 시작 시점의 `headSha`/`branch`/`dirty`
 `open`과 `replace-scope`에서 `--iteration-id`를 생략하면 기존 디렉터리 이름과 current/closed 기록의 최대 `iter-숫자` 다음 번호를 `iter-0001` 형식으로 할당한다. 기존 `v25-...-next` 이름은 개명하지 않는다. 첫 `init` 기본값 `v1-mvp`와 명시적 ID는 유지한다. 보조 보고서와 임시 환경의 위치는 [산출물 이름과 디렉터리 규칙](artifact-naming-and-layout.md)을 따른다.
 
 | `--tools codex,claude,gemini|all` | 대상 프로젝트에 P2A AI 개발용 skill/agent/command shim을 복사한다. 생략하면 복사하지 않는다. |
-| `--include-team-bigfive` | 대상 프로젝트에 Team Big Five adapter를 설치한다. |
-| `--team-bigfive-source <path-or-git-url>` | Team Big Five 원본 출처. local directory는 파일 목록과 SHA-256을 기록하고, Git URL은 fetch 없이 URL만 기록한다. |
-| `--team-bigfive-targets codex,claude,gemini|all` | adapter 설치 대상. 생략하면 `--tools` 값, `--tools`도 없으면 `all`을 사용한다. |
 | `--overwrite` | 대상 파일이 이미 있을 때 덮어쓰기를 허용한다. |
 | `--dry-run` | 파일을 쓰지 않고 gate 검증과 인계 계획 출력만 수행한다. |
 
@@ -521,11 +518,9 @@ Closeout 회고 신호는 `.plan2agent/project.config.json`의 `runTracking.retr
 
 `--tools`를 지정하면 공통 P2A 원본인 `.agents/skills`, `.agents/agents`와 선택한 CLI별 mirror를 함께 복사한다. `codex`는 `.codex/agents`, `claude`는 `.claude/skills`와 `.claude/agents`, `gemini`는 `.gemini/agents`와 `.gemini/commands/p2a`를 추가한다. 복사된 파일과 선택한 CLI 범위는 `.plan2agent/manifest.json`의 `aiToolTargets`, `aiToolFiles`, `toolFiles`에 기록된다.
 
-`--include-team-bigfive`를 지정하면 `.plan2agent/team-harnesses/team-bigfive/source-manifest.json`과 `adaptation-notes.md`를 생성하고, 선택한 CLI별 adapter entrypoint를 설치한다. Codex는 `.agents/skills/team-bigfive-kickoff/`와 `.codex/agents/team-bigfive-coordinator.toml`, Claude는 `.claude/skills/team-bigfive-kickoff/`와 `.claude/agents/team-bigfive-coordinator.md`, Gemini는 `.agents/skills/team-bigfive-kickoff/`, `.gemini/agents/team-bigfive-coordinator.md`, `.gemini/commands/p2a/team-bigfive.toml`을 사용한다. local source이고 Claude target이 포함되면 안전 필터를 통과한 원본 파일도 `.claude-plugin/team-bigfive/source/`에 복사한다. 설치 내역은 `manifest.json.externalHarnesses`, `externalHarnessFiles`, `project.config.json.teamBigFive`에 기록된다.
-
 반복 구조 root를 인계할 때 maintenance task graph가 있으면 `.plan2agent/maintenance/task-graph.json`으로 별도 복사한다. active feature graph와 병합하지 않으며, `manifest.json.maintenanceFiles`와 `current-spec.json.handoff_records`에 handoff 기준점이 남는다. `preflight-research/`가 있으면 알려진 Feature Radar 파일도 대상 `.plan2agent/artifacts/<project_id>/preflight-research/`로 복사하고 `manifest.json.preflightResearchFiles`에 기록한다.
 
-Run 이관은 목적을 분리한다. 기본 `--run-transfer completed`는 현재 iteration/task graph에서 task별 최신 `finished` implementation `p2a.run.v2` evidence를 포함하고, historical milestone review가 직접 참조한 finished evidence도 호환 보존한다. 같은 iteration/task graph의 최신 finished `final_visual_review` 또는 `final_acceptance_review` evidence와 sidecar도 portable bundle에 포함한다. 따라서 새 실행이 더 이상 milestone sidecar를 만들지 않아도 Direct/Planned/Orchestrated mode와 run evidence가 누락되지 않는다. Run 파일 위치는 `p2a runs migrate-layout`, finished v1 schema는 `p2a runs migrate-schema`로 handoff 전에 각각 정규화한다. Absolute/non-canonical provenance reference는 명시적 import/migration workflow로 정리해야 하며 portable handoff 본체는 이를 rewrite하지 않는다. 다른 환경에서 진행 중 일반 run이나 구형 호환 이력을 실제로 재개할 때만 `--run-transfer resumable`을 사용하며, 진행 중 final review run은 먼저 finish 또는 block해야 한다. 실제 쓰기 뒤에는 대상 Gate A-C bundle과 run store를 다시 검증하고 실패하면 target 변경을 rollback한다.
+Run 이관은 목적을 분리한다. 기본 `--run-transfer completed`는 현재 iteration/task graph에서 task별 최신 `finished` implementation `p2a.run.v2` evidence를 포함한다. 같은 iteration/task graph의 최신 finished `final_visual_review` 또는 `final_acceptance_review` evidence와 sidecar도 portable bundle에 포함한다. Run 파일 위치는 `p2a runs migrate-layout`, finished v1 schema는 `p2a runs migrate-schema`로 handoff 전에 각각 정규화한다. Absolute/non-canonical provenance reference는 명시적 import/migration workflow로 정리해야 하며 portable handoff 본체는 이를 rewrite하지 않는다. 다른 환경에서 진행 중 일반 run이나 구형 호환 이력을 실제로 재개할 때만 `--run-transfer resumable`을 사용하며, 진행 중 final review run은 먼저 finish 또는 block해야 한다. 실제 쓰기 뒤에는 대상 Gate A-C bundle과 run store를 다시 검증하고 실패하면 target 변경을 rollback한다.
 
 `--include-intake`는 source의 기존 `intake.md`를 신뢰하거나 복사하지 않는다. handoff가 rebase한 canonical `intake.json`에서 explicit-export marker가 포함된 최신 Markdown export를 생성하므로, 이전 버전의 자동 생성 view나 stale Markdown이 대상에 전달되지 않는다.
 
@@ -563,18 +558,9 @@ p2a handoff \
   --target ../target-project \
   --iteration-id active \
   --run-transfer resumable
-
-p2a handoff \
-  --project-id <project_id> \
-  --artifacts .plan2agent/artifacts/<project_id> \
-  --target ../target-project \
-  --tools codex,claude,gemini \
-  --include-team-bigfive \
-  --team-bigfive-source ../team-bigfive \
-  --team-bigfive-targets codex,claude,gemini
 ```
 
-터미널에서 인자 없이 실행하거나 `-i`/`--interactive`를 붙이면 project id, artifacts 경로, target 경로, mode, include-intake, tools, Team Big Five, overwrite 여부를 순서대로 묻고 dry-run preview 후 실제 실행 여부를 확인하는 대화형 모드가 열린다.
+터미널에서 인자 없이 실행하거나 `-i`/`--interactive`를 붙이면 project id, artifacts 경로, target 경로, mode, include-intake, tools, overwrite 여부를 순서대로 묻고 dry-run preview 후 실제 실행 여부를 확인하는 대화형 모드가 열린다.
 
 ```bash
 p2a handoff

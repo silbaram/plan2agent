@@ -737,7 +737,6 @@ function changedPlan2AgentControlFiles(run) {
       || normalized.startsWith('gate-a-intake/')
       || normalized.startsWith('gate-b-spec/')
       || normalized.startsWith('gate-c-task-graph/')
-      || normalized.startsWith('gate-d-review/')
       || normalized === 'current-spec.json';
   });
 }

@@ -78,15 +78,6 @@ Gemini is read-only. Return one complete proposed task graph to the foreground s
 
 Gemini is read-only. For write-required work, return the exact ready task or frozen batch context to a confined foreground Codex or approved Claude owner; do not mutate runs, worktrees, evidence, tasks, or branches.`,
   },
-  'task-breakdown': {
-    skill: 'p2a-task-breakdown',
-    description: 'Create a Plan2Agent task graph from an approved implementation spec.',
-    prompt: `Use the Plan2Agent p2a-task-breakdown skill for the following approved implementation spec:
-
-{{args}}
-
-Gemini is read-only. Return the proposed task graph to the foreground owner; do not persist task artifacts or implement work.`,
-  },
 };
 
 function parseFrontmatterScalar(lines, index, rawValue) {

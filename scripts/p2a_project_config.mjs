@@ -646,7 +646,6 @@ function artifactProjectIdFromRoot(artifactRoot, artifactDirName) {
     [path.join(artifactRoot, 'current-spec.json'), 'project_id'],
     [path.join(artifactRoot, 'gate-b-spec', 'spec.json'), 'project_id'],
     [path.join(artifactRoot, 'gate-c-task-graph', 'task-graph.json'), 'projectId'],
-    [path.join(artifactRoot, 'gate-d-review', 'review.json'), 'projectId'],
   ];
   for (const [filePath, key] of candidates) {
     const parsed = readJsonObject(filePath);
@@ -723,7 +722,7 @@ export function detectProjectCommands(targetRoot) {
   };
 }
 
-export function buildProjectConfig(targetRoot, teamBigFiveConfig = { enabled: false }, options = {}) {
+export function buildProjectConfig(targetRoot, options = {}) {
   const taskGraph = options.taskGraph ?? null;
   const projectId = existingProjectIdValue(options.projectId) ?? resolveProjectIdDefault(targetRoot, options.config, options.manifest);
   const detected = options.emptyCommands
@@ -748,7 +747,6 @@ export function buildProjectConfig(targetRoot, teamBigFiveConfig = { enabled: fa
     verificationTimeoutMs: DEFAULT_VERIFICATION_TIMEOUT_MS,
     taskGraph,
     runTracking: defaultRunTracking(),
-    teamBigFive: teamBigFiveConfig,
     providerNativeCapabilities: defaultProviderNativeCapabilities(),
     devExecution: defaultDevExecution(),
     roleProfiles: defaultRoleProfiles(),

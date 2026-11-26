@@ -1,22 +1,15 @@
 /** Policy and validation helpers for portable versus resumable run handoff. */
 
-import { existsSync, lstatSync, readdirSync } from 'node:fs';
+import { existsSync, lstatSync } from 'node:fs';
 import path from 'node:path';
 
 import {
   validateHandoffReadyArtifactRoot,
-  validateMilestoneReview,
   validateRunsDir,
 } from './validate_artifacts.mjs';
 
 export function portableProvenanceMigrationHint() {
   return 'normalize non-canonical references with an explicit import/migration workflow, or use --run-transfer resumable for compatibility transfer';
-}
-
-export function completedEvidenceRunIds(milestoneReviews) {
-  return new Set(milestoneReviews.flatMap((review) => (
-    review?.source?.completed_task_evidence ?? []
-  ).map((evidence) => evidence?.run_snapshot?.runId).filter(Boolean)));
 }
 
 function normalizedArtifactReference(reference) {
@@ -169,30 +162,5 @@ export function validatePortableHandoffTarget(targetRoot, projectId) {
     runCount = runIndex.runs.length;
   }
 
-  let milestoneReviewCount = 0;
-  const iterationsDir = path.join(artifactRoot, 'iterations');
-  if (existsSync(iterationsDir)) {
-    if (!lstatSync(iterationsDir).isDirectory()) {
-      throw new Error(`portable handoff iterations path must be a directory: ${iterationsDir}`);
-    }
-    for (const iteration of readdirSync(iterationsDir, { withFileTypes: true })) {
-      if (!iteration.isDirectory()) continue;
-      const reviewDir = path.join(iterationsDir, iteration.name, 'milestone-reviews');
-      if (!existsSync(reviewDir)) continue;
-      if (!lstatSync(reviewDir).isDirectory()) {
-        throw new Error(`portable handoff milestone reviews path must be a directory: ${reviewDir}`);
-      }
-      for (const checkpoint of ['midpoint', 'pre_close']) {
-        const reviewPath = path.join(reviewDir, `${checkpoint}.json`);
-        if (!existsSync(reviewPath)) continue;
-        validateMilestoneReview(reviewPath, {
-          artifactRoot,
-          expectedProjectId: projectId,
-          expectedIterationId: iteration.name,
-        });
-        milestoneReviewCount += 1;
-      }
-    }
-  }
-  return { artifactRoot, runCount, milestoneReviewCount };
+  return { artifactRoot, runCount };
 }

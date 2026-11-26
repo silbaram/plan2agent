@@ -195,30 +195,6 @@
       ]
     },
     {
-      "id": "p2a-task-breakdown",
-      "modes": [
-        "orchestrated"
-      ],
-      "stages": [
-        "gate-c"
-      ],
-      "gemini_command": "task-breakdown",
-      "references": [
-        {
-          "id": "task-breakdown.draft-contract",
-          "path": "references/draft-contract.md",
-          "source_skill": "p2a-task-author",
-          "phases": [],
-          "load": "on-demand",
-          "required": true,
-          "condition": "This compatibility entry is about to decompose an approved spec into a task graph.",
-          "stages": [
-            "gate-c"
-          ]
-        }
-      ]
-    },
-    {
       "id": "p2a-dev-execution",
       "modes": [
         "direct",
@@ -413,19 +389,6 @@
         "gate-c"
       ],
       "condition": "A validated task context needs a reviewable Gate C draft.",
-      "modes": [
-        "orchestrated"
-      ]
-    },
-    {
-      "id": "p2a-task-graph",
-      "skills": [
-        "p2a-task-breakdown"
-      ],
-      "stages": [
-        "gate-c"
-      ],
-      "condition": "A legacy flat approved spec needs a compatibility task graph author.",
       "modes": [
         "orchestrated"
       ]

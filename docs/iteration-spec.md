@@ -602,8 +602,6 @@ handoff는 active 반복의 `task-graph.sourceSpec`을 `spec.json`으로, `spec.
 
 `--tools codex,claude,gemini|all`은 반복 handoff에도 동일하게 적용된다. 산출물과 `current-spec.json`을 복사한 뒤 대상 프로젝트에 공통 `.agents/skills`, `.agents/agents`와 선택한 CLI별 `.codex`, `.claude`, `.gemini` P2A 자산을 설치하고, 설치 목록을 `.plan2agent/manifest.json`에 기록한다.
 
-`--include-team-bigfive`도 반복 handoff에 동일하게 적용된다. `--team-bigfive-source`가 local directory이면 source manifest에 파일 목록과 SHA-256을 기록하고, Git URL이면 fetch 없이 URL provenance만 기록한다. 선택 target별 adapter entrypoint는 `.agents/.codex/.claude/.gemini` 아래에 생성되며, 외부 하네스 기록은 `.plan2agent/manifest.json.externalHarnesses`와 `.plan2agent/project.config.json.teamBigFive`에 남긴다.
-
 ## 10. Agent 저작 task 게이트
 
 상태: **핵심 게이트 구현**. backbone(`context` / `validate --stage gate-c-draft` / `promote-tasks`), 저작 스킬(`p2a-task-author`), 정식 context 스키마(`p2a.task_context.v2`), provenance sidecar가 구현됐다. maintenance context/실행 UX와 draft 파일을 maintenance graph에 append하는 Phase 1 승격 명령도 연결됐다.
