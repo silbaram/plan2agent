@@ -1,7 +1,7 @@
 # P2A v1.0 최소 하네스 재설계 및 전이 개발 계획
 
 작성일: 2026-11-26<br>
-상태: 확정안 (사용자 요구 확정: **단일 `work.json` · 1회 통합 확인 · 완료 시 비움/교체 · 최소 코어 + 선택적 BuildLore**)<br>
+상태: **구현 완료** (`feat/v1-minimal-harness`, **단일 `work.json` · 1회 통합 확인 · 완료 시 비움/교체 · 최소 코어 + 선택적 BuildLore**)<br>
 기준 시점: Plan2Agent `v0.9.0` (`8d5f9dd`) → `v1.0.0` 재편<br>
 문서 홈: [Plan2Agent Docs](README.md)
 
@@ -143,7 +143,7 @@ Plan2Agent의 본질적 목적을 **"하나의 개발에서 태스크를 관리�
 | `p2a approve --quote "<사용자 발화>"` | `work.json`의 계획을 1회 통합 승인하고 `plan_sha256` 고정 |
 | `p2a task <list\|start\|done\|block\|note> <id> [옵션]` | 태스크 상태 전환, 재개 요약(`--summary`), 메모(`--note`) 기록. `done`은 현재 HEAD 기준 `passed` 검증을 요구 |
 | `p2a verify [--task <id>] [--cmd "<명령>"]` | 설정된 또는 명시된 실제 검증 명령 실행 후 exit code, 출력 tail, git HEAD, 변경 파일을 `work.json`에 기록 |
-| `p2a done [--keep-summary]` | 모든 태스크 `done` + 최신 검증 통과 확인 후 `work.json` 정리(삭제/초기화). BuildLore 설정 시 완료 지식 전달 안내 |
+| `p2a done [--abort]` | 모든 태스크 `done` + 최신 검증 통과 확인 후 `work.json` 정리(삭제/초기화). BuildLore 설정 시 완료 지식 전달 안내 (`--abort`로 미완료 작업 폐기) |
 | `p2a buildlore <status\|memory\|lookup\|handoff>` | *(선택)* BuildLore가 설정된 프로젝트에서만 읽기 전용 조회 및 완료 지식 단방향 전달 수행 |
 | `p2a doctor` | `config.json`, `work.json` 무결성 및 프로바이더 미러 상태 진단 |
 
@@ -214,11 +214,11 @@ flowchart TD
 
 ## 6. 최종 완료 체크리스트
 
-- [ ] `.plan2agent/`에 생기는 프로젝트 상태 파일이 `config.json`과 `work.json` 2개뿐이다.
-- [ ] `status.md`, `PLAN2AGENT.md`, `entries/*.md`, `*-spec.md` 등 자동 생성 Markdown 파일이 0개다.
-- [ ] 개발 시작 전 목표·범위·태스크를 1회 통합 확인하고, 승인 없이 구현을 시작하지 않는다.
-- [ ] 세션이 종료되었다가 다시 켜져도 `p2a next`가 `work.json` 하나로 즉시 중단 지점을 복원한다.
-- [ ] 실제 검증 명령이 exit code 0으로 통과해야 태스크를 `done` 처리할 수 있다.
-- [ ] `p2a done` 후 `work.json`이 깨끗이 정리되어 다음 개발을 바로 시작할 수 있다.
-- [ ] `p2a init --tools all` 시 프로바이더 자산이 ~10개 이하이며 `check_cli_parity.mjs`가 통과한다.
-- [ ] 전체 런타임 코드 5,000줄 이하, 스키마 2개, 외부 npm 의존성 0개를 달성하고 `npm test`가 전부 통과한다.
+- [x] `.plan2agent/`에 생기는 프로젝트 상태 파일이 `config.json`과 `work.json` 2개뿐이다.
+- [x] `status.md`, `PLAN2AGENT.md`, `entries/*.md`, `*-spec.md` 등 자동 생성 Markdown 파일이 0개다.
+- [x] 개발 시작 전 목표·범위·태스크를 1회 통합 확인하고, 승인 없이 구현을 시작하지 않는다.
+- [x] 세션이 종료되었다가 다시 켜져도 `p2a next`가 `work.json` 하나로 즉시 중단 지점을 복원한다.
+- [x] 실제 검증 명령이 exit code 0으로 통과해야 태스크를 `done` 처리할 수 있다.
+- [x] `p2a done` 후 `work.json`이 깨끗이 정리되어 다음 개발을 바로 시작할 수 있다.
+- [x] `p2a init --tools all` 시 프로바이더 자산이 최소 구성(스킬 2 · 에이전트 2 · 미러 · 훅)이며 `check_cli_parity.mjs`가 통과한다.
+- [x] 전체 런타임 코드 5,000줄 이하, 스키마 2개, 외부 npm 의존성 0개를 달성하고 `npm run test:all`이 전부 통과한다.

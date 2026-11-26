@@ -6,6 +6,31 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-11-27
+
+### Added
+
+- Introduce the v1.0 minimal task and session-resume harness built around two JSON files in `.plan2agent/` (`config.json` with `p2a.config.v1` and `work.json` with `p2a.work.v1`) and zero auto-generated Markdown files.
+- Add single-confirmation plan approval (`p2a approve --quote`) bound by canonical `approval.plan_sha256` drift detection across `goal`, `scope`, `non_goals`, `constraints`, and task definitions.
+- Add real command verification (`p2a verify`) that records `exit_code`, `git_head`, `worktree_fingerprint` (excluding `.plan2agent/`, supporting monorepo subdirectories and Unicode filenames), output tail, and changed files, blocking `p2a task done` if code changes after verification or dependencies remain incomplete.
+- Add single-file session resume (`p2a next`) and completion cleanup (`p2a done` / `p2a done --abort`) that deletes `.plan2agent/work.json` once verified work finishes.
+- Add minimal canonical skills (`p2a-next`, `p2a-work`) and subagents (`p2a-implementer`, `p2a-reviewer`) mirrored to `.claude/`, `.codex/`, and `.gemini/`, plus a hardened Claude PreToolUse workspace confinement hook that also blocks dangling symlink escapes.
+
+### Changed
+
+- Replace the multi-gate runtime and 36 legacy schemas with 10 runtime scripts, 2 schemas (`schemas/config.schema.json`, `schemas/work.schema.json`), and zero external npm dependencies (Node.js `>=22.0.0` standard library only).
+- Keep optional BuildLore integration (`p2a buildlore`) as a thin, non-blocking adapter reading project settings from `.plan2agent/config.json`.
+- Simplify CI workflow (`.github/workflows/ci.yml`), package metadata, `README.md`, `README.ko-KR.md`, and `docs/` for v1.0.
+
+### Removed
+
+- Remove legacy multi-gate control plane (`intake`, `spec`, `current-development-contract`, `task-graph`, `decisions.jsonl`, `runs/`, `context-packet`), external skills manager (`p2a skills`, `skills`/`yaml` npm dependencies), visual prototype harness (`p2a-visual-experience`), 5-stage proposals and GitHub issue publishing, eval/trace/AB metrics, handoff/embedded runtime copying, `p2a upgrade`, and all auto-generated Markdown artifacts (`PLAN2AGENT.md`, `status.md`, `entries/*.md`).
+
+### Compatibility and migration
+
+- **Breaking change**: v1.0 replaces the v0.x multi-artifact `.plan2agent/` layout with `.plan2agent/config.json` and `.plan2agent/work.json`. Existing projects should run `p2a init --force` to regenerate `.plan2agent/config.json` and minimal provider assets, and remove obsolete v0.x `.plan2agent/` artifacts once any in-flight work is finished.
+- Minimum Node.js version is `>=22.0.0` with zero runtime dependencies.
+
 ## [0.8.0] - 2026-09-30
 
 ### Added
@@ -446,7 +471,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Add package-runtime project initialization, managed provider assets, artifact validation, handoff, supervised execution, evaluation, and proposal workflows.
 - Ship canonical and generated integrations for Codex, Claude Code, and Gemini CLI.
 
-[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/silbaram/plan2agent/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/silbaram/plan2agent/compare/v0.8.0...v1.0.0
 [0.8.0]: https://github.com/silbaram/plan2agent/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/silbaram/plan2agent/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/silbaram/plan2agent/compare/v0.5.24...v0.6.0

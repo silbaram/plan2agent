@@ -1,417 +1,92 @@
-# Plan2Agent
+# Plan2Agent (`p2a`)
 
-[![npm version](https://img.shields.io/npm/v/plan2agent.svg)](https://www.npmjs.com/package/plan2agent)
-[![npm downloads](https://img.shields.io/npm/dm/plan2agent.svg)](https://www.npmjs.com/package/plan2agent)
-[![CI](https://github.com/silbaram/plan2agent/actions/workflows/ci.yml/badge.svg)](https://github.com/silbaram/plan2agent/actions/workflows/ci.yml)
-[![Node.js 22+](https://img.shields.io/badge/Node.js-22%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+**Minimal task tracking and session-resume harness for AI coding agents.**
 
-[English](README.md) | [한국어](README.ko-KR.md)
+> Korean documentation: [README.ko-KR.md](README.ko-KR.md) · Docs index: [docs/README.md](docs/README.md)
 
-Use Plan2Agent as a development assistant: describe the result you want, confirm the few decisions
-that change that result, and let it guide planning, implementation, recovery, and verification.
+Plan2Agent keeps AI-assisted development predictable without flooding your repository with generated documents:
 
-## Install in 30 seconds
+- **At most 2 files in `.plan2agent/`**: `config.json` (project verification settings) and `work.json` (current development state, removed on `p2a done`). **Zero auto-generated Markdown files.**
+- **One-time unified approval**: agree once on `goal`, `scope`, `non_goals`, `constraints`, and `tasks` (`p2a approve --quote "..."`) before coding begins, protected by `plan_sha256` drift detection.
+- **Real verification before `done`**: `p2a verify` executes the real test/lint/typecheck command and records `exit_code`, `git_head`, `worktree_fingerprint` (excluding `.plan2agent/`), and changed files. Editing product code after verification requires re-verification before `p2a task done`.
+- **Seamless session resume**: close and reopen your terminal or agent session at any point—`p2a next` reads `.plan2agent/work.json` alone and restores the exact active task, last verification failure, notes, and resume summary.
+- **Zero runtime dependencies**: Node.js `>=22.0.0` standard library only. Works across Codex, Claude Code, and Gemini CLI with optional read/handoff integration for BuildLore.
 
-Plan2Agent requires Node.js 22.20.0 or newer.
+---
+
+## Quick Start
 
 ```bash
+# 1. Install
 npm install -g plan2agent
-cd <project-dir>
-p2a init --tools all --codex-profile quality
-p2a next
+
+# 2. Initialize inside your repository (creates .plan2agent/config.json + minimal provider skills)
+p2a init --tools all
+
+# 3. Start a development item
+p2a next --idea "Add rate limiting to the login endpoint"
 ```
 
-`p2a next` reads the local project state and returns one concrete next action. Run it again whenever
-you finish a planning, approval, or development step.
-
-## Your first plan in 5 minutes
-
-After initialization, either pass a one-sentence idea with `p2a next --idea "<what to build>"` or use
-a concise Markdown/text document with `p2a next --entry <path>`. The CLI stores the request locally,
-so chat is never the only copy of the requirement.
-
-| Agent | Example |
-| --- | --- |
-| Codex | `Run p2a next --idea "Add release status", then use $p2a-harness.` |
-| Claude Code | `p2a next --idea "Add release status"`, then `/p2a-harness` |
-| Gemini CLI | `p2a next --entry docs/idea.md`, then `/p2a:harness` |
-
-Plan2Agent first explains what it understood, asks only about choices that would materially change
-the product, and confirms the scope and implementation plan before coding.
+### Standard Workflow
 
 ```text
-Natural-language request
-  -> short understanding summary and only necessary questions
-  -> scope confirmation
-  -> implementation-plan confirmation
-  -> implementation, automatic recovery, and risk-based verification
-  -> recommended close, with optional code review or retrospective
+p2a next --idea "..."        # creates draft .plan2agent/work.json
+  -> inspect code & fill plan/tasks in work.json (or via p2a task add)
+  -> p2a approve --quote "..." # 1-time confirmation of goal, scope, constraints, and tasks
+  -> p2a task start T1
+  -> implement code
+  -> p2a verify --task T1      # runs real verify command & records fingerprint
+  -> p2a task done T1
+     (if session closes at any point, run `p2a next` in a fresh session to resume immediately)
+  -> p2a done                  # checks all tasks done+verified and removes .plan2agent/work.json
 ```
 
-Internally, scope and implementation-plan confirmation remain separate safety boundaries. Their
-compatibility names are Gate A and Gate B. An existing constitution is reused; the optional Gate ②
-appears only for a hard prohibition or consequential, difficult-to-reverse architecture/stack choice.
-Ordinary repository conventions remain advisory. Gate names, state ids, hashes, and artifact paths
-stay out of normal assistant messages and remain available through `p2a next --details` or JSON.
+---
 
-The harness writes canonical files under `.plan2agent/artifacts/<project_id>/`. Complete the
-suggested action and run:
-
-```bash
-p2a next
-```
-
-When Gate A-C readiness passes, `next` guides the transition into supervised execution and
-subsequent iterations.
-
-## Why Plan2Agent
-
-AI coding tools are effective at implementation, but chat history is a fragile place to keep
-requirements, approvals, dependencies, and verification evidence. Plan2Agent adds a durable control
-layer around those tools.
-
-| Need | Plan2Agent approach |
-| --- | --- |
-| Clear decisions before code | Gate A scope and Gate B spec approval preserve product decisions; Gate ② is added only for material project-shape commitments. |
-| Traceable implementation work | Specs map to a Direct run, Planned checkpoints, or dependency-aware Orchestrated tasks. |
-| Reviewable agent execution | Foreground-supervised runs preserve mode, rationale, changed files, and verification evidence. |
-| Portable project state | Local JSON artifacts remain canonical across Codex, Claude Code, and Gemini CLI. |
-| Controlled improvement | Evaluation and proposal flows recommend maintenance without silently applying self-modifying patches. |
-
-Plan2Agent coordinates the workflow; it does not replace your coding agent, source control, or
-project management system.
-
-## What gets written
-
-Planning and execution state stays local to the project:
+## Files Created in Your Project
 
 ```text
 .plan2agent/
-  project.config.json
-  constitution.json                 # conditional project-shape contract
-  artifacts/<project_id>/
-    decisions.jsonl
-    gate-a-intake/
-      intake.json
-    gate-b-spec/
-      spec.json
-      experience-spec.json       # conditional
-      visual-design/              # conditional offline HTML prototypes
-    gate-c-task-graph/
-      task-graph.json
-    current-spec.json
-    iterations/
-    runs/
-    eval/
-    proposals/
+  config.json   # project_id, verify commands (test/lint/typecheck), optional buildlore config
+  work.json     # active development plan, tasks, verification, resume summary (deleted on `p2a done`)
 ```
 
-When external Agent Skills are installed, the team-tracked `p2a-skills.lock.json` stays at the
-project root while validated copies live under `.agents/skills/` and, when selected,
-`.claude/skills/`. The ignored `.plan2agent/` manifest records only the local installation state.
+Provider assets installed by `p2a init --tools <codex,claude,gemini|all|none>`:
 
-`decisions.jsonl` is the source of truth for recorded approvals and revocations; the existing JSON
-approval audits remain compatible copies. All artifacts are validated against schemas shipped with the package.
-Generated Markdown is a human-readable view. Run evidence is temporary execution state by default:
-the current development bundle remains reviewable and portable, while opening the next iteration
-removes archived iteration runs. When a retry replaces a run, `run-index.json` keeps only bounded
-retrospective counters—never commands, output tails, notes, or run IDs—and drops those counters when
-the next iteration opens. Git and optional BuildLore projection are the durable history; archived P2A
-Gate documents are not runtime dependencies for current development.
-Unmined failed or blocked runs remain available to the proposal flow. Use `p2a runs gc --dry-run`
-to review indexed and orphan evidence before cleanup; persistent projects require an explicit
-`--force`. Each Git-backed run also records its current HEAD, branch, and dirty state. Set
-`runTracking.persistence` to `persistent` only when long-lived local run evidence is required.
-Use `runTracking.generatedPaths` to omit untracked generated files from automatic change collection.
-Successful standard checks keep shorter output tails; failures and verification bindings remain intact
-([recording policy](docs/cli-reference.md)).
-Optional `runTracking.retrospectiveSignals` thresholds let `p2a next --json --contract v2`
-surface bounded current-iteration performance and process candidates before close. Safe process
-signals are detected by default; projects can set `enabled: false` to disable them, while performance
-budgets remain opt-in. At closeout, product review, P2A retrospective, and close are separate choices;
-when evidence is current and no signal exists, close is recommended. A clean review asks once to close
-instead of repeating the menu. Proposal
-writes remain separately approved and skipping retrospective never blocks close. Continuing the
-retrospective writes one short `docs/retrospective/<project>-<iteration>.md` report only after
-approval. The final maintenance task prints the same review/retrospective/finish choice without
-adding a persistent maintenance close state.
-That four-section report can be rendered with `p2a proposals issue-preview` and, only after an
-explicit `--yes` confirmation, published to the public P2A GitHub repository with
-`publish-issue`. Previewing never calls GitHub, and publication does not approve implementation.
-New iterations materialize `current-development-contract.json` from the approved current state. It
-contains only the objective, scope, durable project rules, current-iteration architecture/interface/
-dependency constraints, preservation constraints,
-acceptance, verification, authority, and current task bindings required for implementation. `p2a
-next` and the normal run lifecycle validate that contract, the current task graph, any constitution, and
-active run without traversing archived iteration documents. Existing iterative projects can run
-`p2a iteration migrate-current-contract --artifacts <artifact-root>` once.
+- Canonical skills (2): `.agents/skills/p2a-next/SKILL.md`, `.agents/skills/p2a-work/SKILL.md`
+- Canonical subagents (2): `.agents/agents/p2a-implementer.md`, `.agents/agents/p2a-reviewer.md`
+- Provider mirrors: `.claude/` (skills, agents, workspace confinement hook), `.codex/agents/`, `.gemini/` (agents + `next`/`work` commands).
 
-New runs store the current-contract execution envelope once by content hash and reference it from
-each run record, avoiding repeated copies while preserving hash-verified fail-closed validation.
-Existing inline records remain readable and `p2a runs migrate-schema` converts them in place.
+No `PLAN2AGENT.md`, `status.md`, `entries/*.md`, or archive directories are created.
 
-## Core workflow
+---
 
-### 1. Plan with approval gates
-
-The planning harness turns an idea into structured intake, product and implementation specs, and
-validated execution readiness. Gate A presents a compact understanding summary and requires explicit
-confirmation. The same session reuses any constitution and opens Gate ② only for a material durable
-project-shape decision before continuing to Gate B. It records uncertainty rather than inventing it.
-
-### 2. Execute the approved objective
-
-After Gate B approval, use `p2a next` to start the next action authorized by the current development contract. New projects default to `adaptive`, while existing configs without an execution mode continue to resolve as `orchestrated`; explicit `adaptive`, `direct`, `planned`, and `orchestrated` policies remain supported without another mode approval. Planned mode records 2–5 ordered, command-verified resume checkpoints. New runs bind an execution envelope containing objective, current-contract hash, scope, durable project rules, current-iteration architecture/interface/dependency constraints, preservation conditions, non-goals, acceptance, verification, and authority boundaries.
-
-For direct control of a prepared work item:
-
-```bash
-p2a execute start \
-  --artifacts .plan2agent/artifacts/<project_id> \
-  --task <task-id>
-```
-
-During implementation, projects may opt into fast changed-file checks with structured
-`relatedVerification` commands and `p2a runs verify --related`. With no flags, finish selects a related
-check for docs/metadata work and every configured test, lint, and typecheck for code work. Failed attempts stay in the
-run, while a corrected retry of the same check at the current revision controls completion.
-
-After every task is done, one shared risk profile selects close evidence. Documentation and metadata
-need a current related check; configured project commands take precedence, with a packaged file-integrity
-check as the default. A canonical isolated-code implementation can reuse its current
-product-revision full verification. Multi-task/worktree integration, high-risk paths, or product code
-changed after verification require `p2a execute verify-final`. If documentation changes after a valid
-product pass, P2A keeps that pass and runs only `p2a execute verify-final --scope relevant`; a later
-product-file change requires full verification again.
-
-If a material code-review finding appears after a task is done but before the iteration closes, use
-`p2a execute remediate --artifacts <root> --task <task-id> --finding <text>`. P2A keeps the reviewed run
-immutable, starts a linked run in the same iteration, blocks close while remediation is active, and returns
-the task to done only after verification passes. Work discovered after iteration close belongs in maintenance
-or a new iteration.
-
-See the [Execution Reference](docs/supervised-execution.md) for start, remediation, resume, finish, retry, and bounded batch procedures.
-
-### 3. Iterate without losing the baseline
-
-Iterations preserve the approved spec, derive change tasks, track maintenance work, and archive
-closed history. A later Gate A reuses relevant confirmed answers from the baseline and asks again
-only where the new idea changes or conflicts with them. `p2a next` guides close/open transitions;
-`p2a iteration` exposes the lower-level controls.
-
-### 4. Evaluate and improve
-
-The eval flow grades run evidence, compares results, and groups recurring failures. The proposal
-flow can turn supported findings into human-reviewed maintenance tasks. It never applies a patch
-merely because a proposal exists. With the default `active_only` retention, run eval before opening
-the next iteration or starting the next maintenance task; use `persistent` for deliberate long-term
-local comparisons.
-
-### 5. Keep optional long-term knowledge with BuildLore
-
-[BuildLore](https://github.com/silbaram/buildlore) is a local-first, Git-backed knowledge tool.
-The current Plan2Agent contract remains the local execution source of truth. BuildLore owns optional
-long-term knowledge projected from completed development. When configured and relevant, the
-execution owner can consult it from the first attempt, explain progress, and offer evidence-based
-direction advice without adding an approval gate. Missing or unavailable knowledge does not stop development.
-
-After attaching a BuildLore `knowledge/` repository and registering the same project ID, enable the
-adapter and preview projection from `.plan2agent/artifacts/<project-id>/`:
-
-```bash
-p2a enhance buildlore
-p2a buildlore status
-p2a buildlore sync --dry-run
-p2a buildlore sync
-```
-
-BuildLore selects supported approved planning and execution evidence, sanitizes it, and writes
-reviewable knowledge sources. A connected source repository or knowledge workspace can read approved,
-project-scoped memory without synchronizing or generating a Wiki:
-
-```bash
-p2a buildlore search --query "authentication decision" --mode lexical
-p2a buildlore memory --task "Prepare the next implementation plan" --progressive --json
-p2a buildlore lookup --kind evidence --id <canonical-evidence-id> --expect-generation <generation-digest> --json
-```
-
-Use canonical evidence IDs from the memory registry, not its short aliases, and keep lookup bound
-to the returned generation. Reads default to a 15-second timeout and 256 KiB output limit;
-`--timeout-ms` can set a 1–60,000 ms budget. Connected `status` uses the connection API;
-legacy `knowledge status` and projection commands remain available for existing installations.
-
-Synchronization does not commit or push knowledge. BuildLore publication remains a separate,
-reviewable Git workflow.
-
-To preserve a completed iteration independently of Wiki approval, explicitly capture it before
-opening the next iteration, then import the returned local `bundlePath` into BuildLore:
-
-```bash
-p2a knowledge capture --artifacts .plan2agent/artifacts/<project-id> --iteration <iteration-id> --json
-p2a buildlore handoff import --file <capture-file> --commit --json
-p2a buildlore handoff list --work-id <iteration-id> --json
-p2a buildlore handoff read --id <handoff-id> --json
-p2a buildlore handoff verify --id <handoff-id> --json
-```
-
-Use `--task <maintenance-task-id>` instead of `--iteration` for completed maintenance.
-Capture creates an unsanitized local retry bundle; do not commit or share it. BuildLore sanitizes
-before preservation and rejects suspected credentials. `--commit` explicitly commits only the
-preserved object locally; omitting it stores the object without creating a commit. Preservation is
-an explicit one-way snapshot: it never pushes, approves a Wiki, replaces the local development
-baseline, or deletes local P2A artifacts (`cleanupEligible` is always `false`). Local `.plan2agent/`
-artifacts remain the canonical state for subsequent iterations, and run log cleanup is handled
-separately by `active_only` retention and `p2a runs gc`.
-See the [CLI reference](docs/cli-reference.md#완료-자료-고정--p2a-knowledge-capture) for limits.
-
-### 6. Manage project-scoped external Agent Skills
-
-Plan2Agent uses the pinned `skills@1.7.0` package as an isolated source adapter. Preview a Git or
-project-local skill before P2A copies validated regular files into the selected provider paths:
-
-```bash
-p2a skills source vercel-labs/agent-skills --list
-p2a skills add vercel-labs/agent-skills \
-  --skill web-design-guidelines \
-  --tools codex,claude,gemini \
-  --dry-run
-p2a skills add vercel-labs/agent-skills \
-  --skill web-design-guidelines \
-  --tools codex,claude,gemini \
-  --apply --expect-plan <dry-run-plan-sha256>
-p2a skills list
-p2a doctor --dev --strict
-```
-
-The tracked root `p2a-skills.lock.json` pins Git revisions and content/file hashes. The local
-manifest records separate `external-skill:<name>` ownership, so core P2A assets remain owned by
-`init`, `update`, and `upgrade`. Codex and Gemini share one `.agents/skills` copy; Claude receives
-an additional `.claude/skills` copy only when selected. Update and removal stop on local drift, and
-`p2a skills sync` restores missing copies while preserving modified or extra files. Every apply requires the reviewed `--expect-plan` digest. Review external skill instructions before applying
-them because they influence an agent with that agent's permissions. See the
-[External Agent Skills guide](docs/external-skills.md) for update, recovery, and trust boundaries.
-
-## CLI at a glance
-
-Plan2Agent installs one `p2a` entrypoint:
+## Core CLI Commands
 
 | Command | Purpose |
 | --- | --- |
-| `p2a init` | Initialize project state and provider assets. |
-| `p2a next` | Explain the current situation and recommend one next action; use `--details` for the internal command and state. |
-| `p2a decide` | Record Gate ① approvals, revocations, and scope changes in the decision ledger. |
-| `p2a decisions` | List decision history and trace a file to governing decisions with `--why`. |
-| `p2a shape` | Inspect, migrate, approve, and revoke the persistent project constitution. |
-| `p2a info` | Show project, artifact, task, and run status. |
-| `p2a doctor` | Diagnose configuration, assets, and local drift. |
-| `p2a update` | Apply project-managed assets pinned to the manifest package version. |
-| `p2a upgrade` | Preview or apply an npm-global package upgrade, then update the current project. |
-| `p2a enhance` | Enable optional capabilities such as BuildLore and proposals. |
-| `p2a validate` | Validate planning, task, run, eval, and proposal artifacts. |
-| `p2a iteration` | Manage iteration initialization, close/open cycles, diffs, and maintenance. |
-| `p2a tasks` | Inspect and transition task state. |
-| `p2a runs` | Record, verify, finish, and inspect run evidence. |
-| `p2a execute` | Supervise implementation and canonical final verification, visual, and acceptance runs through verified finish. |
-| `p2a eval` | Grade, compare, analyze, generate, and summarize execution evidence. |
-| `p2a proposals` | Mine and review proposals, or preview and explicitly publish a retrospective GitHub issue. |
-| `p2a buildlore` | Project, check, search, and retrieve optional BuildLore knowledge. |
-| `p2a knowledge capture` | Freeze completed work locally for a separate sanitized knowledge import. |
-| `p2a skills` | Preview, install, pin, update, restore, and remove external Agent Skills. |
+| `p2a init [--tools codex,claude,gemini\|all\|none]` | Create `.plan2agent/config.json` (auto-detecting test/lint/typecheck commands) and install minimal provider assets |
+| `p2a next [--idea "<text>" \| --entry <path>] [--json]` | Inspect `work.json` and return the single next state/action (used for starting and resuming sessions) |
+| `p2a approve --quote "<user utterance>"` | Record one-time confirmation of the plan and bind `approval.plan_sha256` |
+| `p2a task <list\|add\|start\|note\|block\|unblock\|done>` | Manage tasks, dependencies, notes, and `resume.summary` |
+| `p2a verify [--task <id>] [--cmd "<command>"]` | Run the real verification command and store exit code, output tail, git HEAD, and worktree fingerprint |
+| `p2a done [--abort]` | Confirm all tasks are done & verified and delete `.plan2agent/work.json` (`--abort` discards incomplete work) |
+| `p2a validate` / `p2a doctor` | Validate `config.json` and `work.json` schemas, DAG integrity, and installed provider assets |
+| `p2a buildlore <status\|memory\|lookup\|search\|sync\|handoff>` | Optional BuildLore adapter (non-blocking; completely unused when disabled) |
 
-Run `p2a --help` for the top-level command surface and use the
-[CLI Reference](docs/cli-reference.md) for detailed options and examples.
+---
 
-## Safety model
+## Development & Verification
 
-Plan2Agent is contract-gated, confined, and local-first. Product meaning requires explicit approval; implementation choices and verification retries inside that approved envelope do not.
-
-It is a good fit when you want:
-
-- explicit product decisions before implementation;
-- reviewable specs and task graphs only when orchestration benefits from them;
-- confined Codex or Claude execution, with Gemini kept read-only;
-- verification evidence and regression history;
-- human-approved maintenance and improvement loops.
-
-It is not designed for:
-
-- unattended background coding;
-- unofficial provider API automation;
-- automatic dependency installation, merging, pushing, or PR creation without approval;
-- treating a remote service as the canonical project state;
-- replacing Git or an issue tracker.
-
-## Provider support
-
-Canonical skills and subagent definitions live under `.agents/`. Plan2Agent generates and validates
-provider-specific surfaces for:
-
-- Codex
-- Claude Code
-- Gemini CLI
-
-Parity checks keep provider mirrors aligned with the canonical definitions. The agent itself stays
-in the foreground tool session; Plan2Agent does not call provider APIs directly.
-
-## Companion projects
-
-The core planning, validation, iteration, execution, eval, and proposal flows work without companion
-services.
-
-| Project | Purpose |
-| --- | --- |
-| [BuildLore](https://github.com/silbaram/buildlore) | Optional local-first, Git-backed projection and retrieval of Plan2Agent knowledge. |
-| [plan2agent-feature-radar](https://github.com/silbaram/plan2agent-feature-radar) | Optional research workflow that exports evidence for planning without selecting requirements automatically. |
+```bash
+npm run test:all
+npm pack --dry-run
+```
 
 ## Documentation
 
-- [Quickstart](docs/quickstart.md) — shortest path from installation to the first Gate artifacts
-- [Adaptive Harness User Flow](docs/adaptive-harness-user-flow.md) — end-to-end Gate approval, adaptive execution, context routing, and closeout
-- [CLI Reference](docs/cli-reference.md) — commands, options, and examples
-- [Harness Guide](docs/harness-guide.md) — Gate A-C, schemas, evidence, and troubleshooting
-- [Iteration Spec](docs/iteration-spec.md) — iteration layout, diffs, close/open, and run tracking
-- [Supervised Execution Reference](docs/supervised-execution.md) — task execution, monitor gates, retries, and reviews
-- [Harness Implementation Spec](docs/harness-spec.md) — skills, subagents, mirrors, and implementation rules
-- [Changelog](CHANGELOG.md) — versioned user-facing changes
-- [Release Procedure](docs/releasing.md) — npm, Git tag, GitHub Release, and verification checklist
-
-## Developing Plan2Agent
-
-Clone the repository and use Node.js 22.20.0 or newer. During development, run the core suite and the
-provider parity check:
-
-```bash
-npm test
-node scripts/check_cli_parity.mjs
-```
-
-Before a PR or release, run `npm run test:all`. It runs the core suite, the long-running fixture gate,
-and the package/upgrade smoke tests once each. `npm run test:full` owns fixture and lifecycle coverage;
-`node scripts/run_fixtures.mjs` is its direct debugging equivalent, so do not run both in the same
-verification pass. Run `node scripts/sync_cli_assets.mjs` only when canonical provider assets changed,
-then confirm them with the parity check.
-
-The runtime is Node.js ESM and uses the Node.js standard library. Repository structure:
-
-```text
-.agents/       canonical skills and CLI-neutral subagents
-.claude/       generated Claude Code mirrors
-.codex/        generated Codex mirrors
-.gemini/       generated Gemini CLI commands and agents
-docs/          user guides and implementation references
-fixtures/      golden and negative fixtures
-schemas/       JSON schemas for Plan2Agent artifacts
-scripts/       toolkit, validation, runtime, eval, proposal, and BuildLore adapter CLIs
-```
-
-## Project status
-
-Plan2Agent is under active development. Version `0.3.0` adds adaptive Direct, Planned, and
-Orchestrated execution, with Gate-derived execution envelopes and compatibility-preserving legacy
-orchestration. Detailed task graphs are now created only for Orchestrated work that benefits from
-dependency or ownership boundaries. The local-first planning, supervised execution, evaluation,
-proposal, and optional BuildLore workflows remain available. Autonomous provider execution and
-unapproved remote side effects remain outside the default safety model.
-
-Plan2Agent is available under the [MIT License](LICENSE).
+- [Docs Index](docs/README.md)
+- [Quickstart](docs/quickstart.md)
+- [CLI Reference](docs/cli-reference.md)
+- [Harness Spec (`config.json` & `work.json`)](docs/harness-spec.md)
+- [Releasing](docs/releasing.md)

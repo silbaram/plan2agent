@@ -1,0 +1,189 @@
+/** Minimal project initializer (p2a init) and diagnostics (p2a doctor) for Plan2Agent v1. */
+
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import {
+  TOOL_TARGETS,
+  configPath,
+  createDefaultConfig,
+  normalizeProjectId,
+  readConfig,
+  workPath,
+  writeConfig,
+} from './p2a_config.mjs';
+import { isPlanDrifted, readWork } from './p2a_work.mjs';
+
+const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+export function parseToolList(raw) {
+  if (!raw || raw === 'all') return [...TOOL_TARGETS];
+  if (raw === 'none') return [];
+  const items = raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+  const invalid = items.filter((item) => !TOOL_TARGETS.includes(item));
+  if (invalid.length) {
+    throw new Error(`unknown --tools value(s): ${invalid.join(', ')}; expected codex, claude, gemini, all, or none`);
+  }
+  return TOOL_TARGETS.filter((t) => items.includes(t));
+}
+
+export function providerAssetList(tools) {
+  const files = [];
+  const needsAgents = tools.includes('codex') || tools.includes('gemini');
+  if (needsAgents) {
+    files.push(
+      '.agents/skills/p2a-next/SKILL.md',
+      '.agents/skills/p2a-work/SKILL.md',
+      '.agents/agents/p2a-implementer.md',
+      '.agents/agents/p2a-reviewer.md',
+    );
+  }
+  if (tools.includes('codex')) {
+    files.push(
+      '.codex/agents/p2a-implementer.toml',
+      '.codex/agents/p2a-reviewer.toml',
+    );
+  }
+  if (tools.includes('claude')) {
+    files.push(
+      '.claude/skills/p2a-next/SKILL.md',
+      '.claude/skills/p2a-work/SKILL.md',
+      '.claude/agents/p2a-implementer.md',
+      '.claude/agents/p2a-reviewer.md',
+      '.claude/hooks/p2a-confine-workspace.mjs',
+    );
+  }
+  if (tools.includes('gemini')) {
+    files.push(
+      '.gemini/agents/p2a-implementer.md',
+      '.gemini/agents/p2a-reviewer.md',
+      '.gemini/commands/p2a/next.toml',
+      '.gemini/commands/p2a/work.toml',
+    );
+  }
+  return [...new Set(files)];
+}
+
+function ensureClaudeHookSettings(targetRoot) {
+  const settingsPath = path.join(targetRoot, '.claude', 'settings.json');
+  const hookCommand = 'node .claude/hooks/p2a-confine-workspace.mjs';
+  let current = {};
+  if (existsSync(settingsPath)) {
+    try {
+      current = JSON.parse(readFileSync(settingsPath, 'utf8'));
+    } catch {
+      current = {};
+    }
+  }
+  const hooks = current.hooks && typeof current.hooks === 'object' ? { ...current.hooks } : {};
+  const preToolUse = Array.isArray(hooks.PreToolUse) ? [...hooks.PreToolUse] : [];
+  const alreadyPresent = preToolUse.some((entry) =>
+    Array.isArray(entry?.hooks) && entry.hooks.some((h) => h?.command === hookCommand),
+  );
+  if (!alreadyPresent) {
+    preToolUse.push({
+      matcher: 'Write|Edit|Bash',
+      hooks: [{ type: 'command', command: hookCommand }],
+    });
+  }
+  hooks.PreToolUse = preToolUse;
+  mkdirSync(path.dirname(settingsPath), { recursive: true });
+  writeFileSync(settingsPath, `${JSON.stringify({ ...current, hooks }, null, 2)}\n`, 'utf8');
+  return '.claude/settings.json';
+}
+
+export function initProject(targetRoot, { tools = null, projectId = null, force = false } = {}) {
+  const root = path.resolve(targetRoot);
+  const existing = existsSync(configPath(root)) ? readConfig(root) : null;
+  const effectiveTools = Array.isArray(tools)
+    ? [...tools]
+    : (existing && !force && Array.isArray(existing.tools) ? [...existing.tools] : [...TOOL_TARGETS]);
+
+  let config;
+  if (existing && !force) {
+    let resolvedProjectId = existing.project_id;
+    if (projectId !== null && projectId !== undefined) {
+      const normalized = normalizeProjectId(projectId);
+      if (!normalized) {
+        throw new Error(`invalid --project-id: ${JSON.stringify(projectId)}`);
+      }
+      resolvedProjectId = normalized;
+    }
+    config = { ...existing, project_id: resolvedProjectId, tools: effectiveTools };
+  } else {
+    config = createDefaultConfig(root, { projectId: projectId ?? existing?.project_id, tools: effectiveTools });
+  }
+  writeConfig(root, config);
+
+  const installed = ['.plan2agent/config.json'];
+  for (const relPath of providerAssetList(effectiveTools)) {
+    const src = path.join(PACKAGE_ROOT, relPath);
+    const dst = path.join(root, relPath);
+    if (!existsSync(src)) {
+      throw new Error(`packaged provider asset is missing: ${relPath}`);
+    }
+    mkdirSync(path.dirname(dst), { recursive: true });
+    copyFileSync(src, dst);
+    installed.push(relPath);
+  }
+  if (effectiveTools.includes('claude')) {
+    installed.push(ensureClaudeHookSettings(root));
+  }
+
+  return {
+    targetRoot: root,
+    config,
+    installedFiles: installed,
+  };
+}
+
+export function diagnoseProject(targetRoot) {
+  const root = path.resolve(targetRoot);
+  const errors = [];
+  const warnings = [];
+  let config = null;
+  let work = null;
+
+  if (!existsSync(configPath(root))) {
+    errors.push('missing .plan2agent/config.json (run `p2a init`)');
+  } else {
+    try {
+      config = readConfig(root);
+    } catch (error) {
+      errors.push(error.message);
+    }
+  }
+
+  if (config) {
+    const hasVerify = Boolean(config.verify?.test || config.verify?.lint || config.verify?.typecheck);
+    if (!hasVerify) {
+      warnings.push('no verify commands configured in .plan2agent/config.json (pass --cmd to `p2a verify` or set verify.test)');
+    }
+    for (const relPath of providerAssetList(config.tools ?? [])) {
+      if (!existsSync(path.join(root, relPath))) {
+        warnings.push(`missing installed provider asset: ${relPath} (run \`p2a init\` to restore)`);
+      }
+    }
+  }
+
+  if (existsSync(workPath(root))) {
+    try {
+      work = readWork(root);
+      if (isPlanDrifted(work)) {
+        warnings.push('approved plan in .plan2agent/work.json drifted after approval; reconfirm with `p2a approve`');
+      }
+    } catch (error) {
+      errors.push(`invalid .plan2agent/work.json: ${error.message}`);
+    }
+  }
+
+  return {
+    ok: errors.length === 0,
+    targetRoot: root,
+    projectId: config?.project_id ?? null,
+    hasWork: Boolean(work),
+    workStatus: work?.status ?? null,
+    errors,
+    warnings,
+  };
+}
