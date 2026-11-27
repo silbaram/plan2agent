@@ -1,8 +1,8 @@
-description = "Show the single Plan2Agent next action for the current project state."
+description = "Check .plan2agent/work.json and show the single next Plan2Agent action."
 prompt = """
-Use the Plan2Agent p2a-next skill for the following context:
+Use the Plan2Agent p2a-next skill for the following input:
 
 {{args}}
 
-Treat p2a next --json --contract v2 as the decision authority. Gemini may report the returned action but must not perform writes or approvals.
+Treat p2a next --json as the decision authority.
 """

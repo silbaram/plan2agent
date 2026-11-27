@@ -1,355 +1,207 @@
 #!/usr/bin/env node
-/** Generate Plan2Agent CLI mirrors from canonical .agents sources. */
+/** Generate Plan2Agent v1 CLI mirrors (.claude, .codex, .gemini) from canonical .agents sources. */
 
-import { existsSync, mkdirSync, readFileSync, realpathSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 
-const __filename = fileURLToPath(import.meta.url);
-const ROOT = path.resolve(path.dirname(__filename), '..');
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SKILL_SOURCE = path.join(ROOT, '.agents', 'skills');
 const AGENT_SOURCE = path.join(ROOT, '.agents', 'agents');
-const CONTEXT_ROUTES_PATH = path.join(ROOT, '.agents', 'context-routes.json');
-const CAPABILITY_VALUES = new Set(['read', 'search', 'web', 'edit', 'shell']);
-const ACCESS_VALUES = new Set(['read-only', 'workspace-write']);
-const TIER_VALUES = new Set(['light', 'standard', 'heavy']);
-const CLAUDE_TOOL_MAP = { read: ['Read'], search: ['Grep', 'Glob'], web: ['WebSearch', 'WebFetch'], edit: ['Edit', 'Write'], shell: ['Bash'] };
-const GEMINI_TOOL_MAP = { read: ['read_file'], search: ['grep_search'], web: ['google_web_search', 'web_fetch'], edit: [], shell: [] };
-const CODEX_TIER_MODEL = { light: 'gpt-5.6-sol', standard: 'gpt-5.6-sol', heavy: 'gpt-5.6-sol' };
+
+const CLAUDE_TOOL_MAP = {
+  read: ['Read'],
+  search: ['Grep', 'Glob'],
+  web: ['WebSearch', 'WebFetch'],
+  edit: ['Edit', 'Write'],
+  shell: ['Bash'],
+};
+const GEMINI_TOOL_MAP = {
+  read: ['read_file'],
+  search: ['grep_search'],
+  web: ['google_web_search', 'web_fetch'],
+  edit: ['write_file', 'replace'],
+  shell: ['run_shell_command'],
+};
 const CODEX_TIER_EFFORT = { light: 'medium', standard: 'high', heavy: 'max' };
 const GEMINI_TIER_CONFIG = {
   light: { temperature: 0.1, max_turns: 6 },
   standard: { temperature: 0.2, max_turns: 10 },
   heavy: { temperature: 0.2, max_turns: 20 },
 };
+
 const GEMINI_COMMANDS = {
-  harness: {
-    skill: 'p2a-harness',
-    description: 'Run the gated Plan2Agent harness from a concise entry document.',
-    prompt: `Use the Plan2Agent p2a-harness skill for the following input:
-
-{{args}}
-
-Gemini is read-only. Return proposed planning content and the next state to the foreground Plan2Agent owner; do not persist Gate artifacts, record approvals, or perform other mutations.`,
-  },
   next: {
     skill: 'p2a-next',
-    description: 'Show the single Plan2Agent next action for the current project state.',
-    prompt: `Use the Plan2Agent p2a-next skill for the following context:
+    description: 'Check .plan2agent/work.json and show the single next Plan2Agent action.',
+    prompt: `Use the Plan2Agent p2a-next skill for the following input:
 
 {{args}}
 
-Treat p2a next --json --contract v2 as the decision authority. Gemini may report the returned action but must not perform writes or approvals.`,
+Treat p2a next --json as the decision authority.`,
   },
-  spec: {
-    skill: 'p2a-spec',
-    description: 'Create a Plan2Agent product and implementation spec from answered intake.',
-    prompt: `Use the Plan2Agent p2a-spec skill for the following context:
+  work: {
+    skill: 'p2a-work',
+    description: 'Draft, approve, implement, verify, and resume tasks through .plan2agent/work.json.',
+    prompt: `Use the Plan2Agent p2a-work skill for the following context:
 
 {{args}}
 
-Gemini is read-only. Return the proposed Gate B content to the foreground harness owner; do not persist canonical artifacts or record approval.`,
-  },
-  'visual-experience': {
-    skill: 'p2a-visual-experience',
-    description: 'Create and approve a structured visual experience with offline HTML prototype candidates.',
-    prompt: `Use the Plan2Agent p2a-visual-experience skill for the following Gate B visual context:
-
-{{args}}
-
-Gemini is read-only. Return proposed visual artifacts and comparison evidence to the foreground harness owner; do not persist candidates or record selection or approval.`,
-  },
-  'task-author': {
-    skill: 'p2a-task-author',
-    description: 'Author a Gate C task graph draft from a Plan2Agent context bundle.',
-    prompt: `Use the Plan2Agent p2a-task-author skill for the following context:
-
-{{args}}
-
-Gemini is read-only. Return one complete proposed task graph to the foreground skill owner; do not write draft or canonical task artifacts.`,
-  },
-  'dev-execution': {
-    skill: 'p2a-dev-execution',
-    description: 'Route Gemini dev-execution requests to a write-capable foreground owner.',
-    prompt: `Use the Plan2Agent p2a-dev-execution skill for the following ready task execution context:
-
-{{args}}
-
-Gemini is read-only. For write-required work, return the exact ready task or frozen batch context to a confined foreground Codex or approved Claude owner; do not mutate runs, worktrees, evidence, tasks, or branches.`,
-  },
-  'task-breakdown': {
-    skill: 'p2a-task-breakdown',
-    description: 'Create a Plan2Agent task graph from an approved implementation spec.',
-    prompt: `Use the Plan2Agent p2a-task-breakdown skill for the following approved implementation spec:
-
-{{args}}
-
-Gemini is read-only. Return the proposed task graph to the foreground owner; do not persist task artifacts or implement work.`,
+Keep all task and resume state in .plan2agent/work.json without creating extra Markdown docs.`,
   },
 };
 
-function parseFrontmatterScalar(lines, index, rawValue) {
-  let value = rawValue.trim();
-  if (value === '|' || value === '>') {
-    const collected = [];
-    index += 1;
-    while (index < lines.length) {
-      const line = lines[index];
-      if (line && !line.startsWith(' ') && !line.startsWith('\t')) break;
-      collected.push(line.startsWith('  ') ? line.slice(2) : line.trimStart());
-      index += 1;
-    }
-    return [(value === '|' ? collected.join('\n') : collected.join(' ')).trim(), index];
-  }
-  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-    value = value.slice(1, -1);
-  }
-  return [value, index + 1];
-}
-
-function parseFrontmatterList(lines, index) {
-  const values = [];
-  index += 1;
-  while (index < lines.length) {
-    const line = lines[index];
-    const stripped = line.trim();
-    if (!stripped) {
-      index += 1;
+export function parseAgentSource(filePath) {
+  const raw = readFileSync(filePath, 'utf8').replace(/\r\n?/g, '\n');
+  const match = raw.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+  if (!match) throw new Error(`missing YAML frontmatter in ${filePath}`);
+  const frontmatter = {};
+  let currentListKey = null;
+  for (const line of match[1].split('\n')) {
+    if (!line.trim()) continue;
+    const listItem = line.match(/^\s*-\s+(.+)$/);
+    if (listItem && currentListKey) {
+      frontmatter[currentListKey].push(listItem[1].trim());
       continue;
     }
-    if (!line.startsWith(' ') && !line.startsWith('\t')) break;
-    if (!stripped.startsWith('-')) throw new Error(`unsupported list item line: ${JSON.stringify(line)}`);
-    let value = stripped.slice(1).trim();
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
-    }
-    values.push(value);
-    index += 1;
-  }
-  return [values, index];
-}
-
-function parseAgentMarkdown(filePath) {
-  const text = readFileSync(filePath, 'utf8');
-  const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
-  if (text.endsWith('\n') || text.endsWith('\r')) lines.pop();
-  if (!lines.length || lines[0].trim() !== '---') throw new Error(`${filePath} must start with YAML frontmatter`);
-  const closingIndex = lines.slice(1).findIndex((line) => line.trim() === '---') + 1;
-  if (closingIndex === 0) throw new Error(`${filePath} must close YAML frontmatter with ---`);
-  const frontmatterLines = lines.slice(1, closingIndex);
-  let body = lines.slice(closingIndex + 1).join('\n').replace(/^\n+/, '');
-  if (text.endsWith('\n') && body) body += '\n';
-
-  const meta = {};
-  let index = 0;
-  while (index < frontmatterLines.length) {
-    const line = frontmatterLines[index];
-    const stripped = line.trim();
-    if (!stripped || stripped.startsWith('#')) {
-      index += 1;
-      continue;
-    }
-    if (line.startsWith(' ') || line.startsWith('\t') || line.startsWith('-')) {
-      throw new Error(`unexpected indented/list line outside a key in ${filePath}: ${JSON.stringify(line)}`);
-    }
-    if (!line.includes(':')) throw new Error(`unsupported frontmatter line in ${filePath}: ${JSON.stringify(line)}`);
-    const colon = line.indexOf(':');
-    const key = line.slice(0, colon).trim();
-    const rawValue = line.slice(colon + 1);
-    let result;
-    if (rawValue.trim() === '') result = parseFrontmatterList(frontmatterLines, index);
-    else result = parseFrontmatterScalar(frontmatterLines, index, rawValue);
-    meta[key] = result[0];
-    index = result[1];
-  }
-  validateNeutralMetadata(filePath, meta);
-  return [meta, body];
-}
-
-function validateNeutralMetadata(filePath, meta) {
-  const required = new Set(['name', 'description', 'capabilities', 'access', 'tier']);
-  const missing = [...required].filter((key) => !Object.hasOwn(meta, key)).sort();
-  if (missing.length) throw new Error(`${filePath} missing neutral frontmatter keys: ${missing.join(', ')}`);
-  const forbidden = ['tools', 'model'].filter((key) => Object.hasOwn(meta, key)).sort();
-  if (forbidden.length) throw new Error(`${filePath} contains target-specific frontmatter keys: ${forbidden.join(', ')}`);
-  if (!Array.isArray(meta.capabilities) || !meta.capabilities.length) throw new Error(`${filePath} capabilities must be a non-empty list`);
-  const unknownCapabilities = [...new Set(meta.capabilities)].filter((capability) => !CAPABILITY_VALUES.has(capability)).sort();
-  if (unknownCapabilities.length) throw new Error(`${filePath} has unknown capabilities: ${unknownCapabilities.join(', ')}`);
-  if (!ACCESS_VALUES.has(meta.access)) throw new Error(`${filePath} access must be one of ${JSON.stringify([...ACCESS_VALUES].sort())}`);
-  if (!TIER_VALUES.has(meta.tier)) throw new Error(`${filePath} tier must be one of ${JSON.stringify([...TIER_VALUES].sort())}`);
-}
-
-function tomlBasicString(value) {
-  return JSON.stringify(value);
-}
-
-function tomlLiteralMultiline(value, label) {
-  if (value.includes("'''")) throw new Error(`${label} cannot contain triple single quotes for TOML literal multiline output`);
-  return "'''\n" + value.trimEnd() + "\n'''";
-}
-
-function expandCapabilities(capabilities, mapping) {
-  const tools = [];
-  for (const capability of capabilities) {
-    for (const tool of mapping[capability]) {
-      if (!tools.includes(tool)) tools.push(tool);
+    const kv = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
+    if (!kv) continue;
+    const [, key, value] = kv;
+    if (!value.trim()) {
+      frontmatter[key] = [];
+      currentListKey = key;
+    } else {
+      frontmatter[key] = value.trim().replace(/^['"]|['"]$/g, '');
+      currentListKey = null;
     }
   }
-  return tools;
+  return {
+    name: frontmatter.name,
+    description: frontmatter.description,
+    capabilities: Array.isArray(frontmatter.capabilities) ? frontmatter.capabilities : [],
+    access: frontmatter.access ?? 'read-only',
+    tier: frontmatter.tier ?? 'standard',
+    body: match[2].trim(),
+  };
 }
 
-function renderMarkdownAgent(meta, body, { target }) {
-  const lines = ['---', `name: ${meta.name}`, `description: ${meta.description}`];
-  if (target === 'claude') {
-    lines.push('tools:');
-    lines.push(...expandCapabilities(meta.capabilities, CLAUDE_TOOL_MAP).map((tool) => `  - ${tool}`));
-  } else if (target === 'gemini') {
-    lines.push('kind: local');
-    lines.push('tools:');
-    lines.push(...expandCapabilities(meta.capabilities, GEMINI_TOOL_MAP).map((tool) => `  - ${tool}`));
-    const tierConfig = GEMINI_TIER_CONFIG[meta.tier];
-    lines.push(`temperature: ${tierConfig.temperature}`);
-    lines.push(`max_turns: ${tierConfig.max_turns}`);
-  } else {
-    throw new Error(`unknown markdown target ${target}`);
+function renderClaudeAgent(agent) {
+  const tools = [...new Set(agent.capabilities.flatMap((cap) => CLAUDE_TOOL_MAP[cap] ?? []))];
+  return [
+    '---',
+    `name: ${agent.name}`,
+    `description: ${JSON.stringify(agent.description)}`,
+    'tools:',
+    ...tools.map((tool) => `  - ${tool}`),
+    '---',
+    '',
+    agent.body,
+    '',
+  ].join('\n');
+}
+
+function renderCodexAgent(agent) {
+  const lines = [
+    `name = ${JSON.stringify(agent.name)}`,
+    `description = ${JSON.stringify(agent.description)}`,
+    `model_reasoning_effort = ${JSON.stringify(CODEX_TIER_EFFORT[agent.tier] ?? 'high')}`,
+  ];
+  if (agent.access === 'read-only') {
+    lines.push('sandbox_mode = "read-only"');
   }
-  lines.push('---');
-  return lines.join('\n') + '\n\n' + body.replace(/^\n+/, '');
+  lines.push(`developer_instructions = ${JSON.stringify(agent.body)}`);
+  return `${lines.join('\n')}\n`;
 }
 
-function renderCodexAgent(meta, body) {
-  const sandbox = meta.access === 'workspace-write' ? 'workspace-write' : 'read-only';
-  const webSearch = meta.capabilities.includes('web') ? 'web_search = "live"\n' : '';
-  return (
-    `name = ${tomlBasicString(meta.name)}\n` +
-    `description = ${tomlBasicString(meta.description)}\n` +
-    `model = ${tomlBasicString(CODEX_TIER_MODEL[meta.tier])}\n` +
-    `model_reasoning_effort = "${CODEX_TIER_EFFORT[meta.tier]}"\n` +
-    webSearch +
-    `sandbox_mode = "${sandbox}"\n` +
-    'developer_instructions = ' + tomlLiteralMultiline(body, String(meta.name)) + '\n'
-  );
+function renderGeminiAgent(agent) {
+  const tools = [...new Set(agent.capabilities.flatMap((cap) => GEMINI_TOOL_MAP[cap] ?? []))];
+  const tierCfg = GEMINI_TIER_CONFIG[agent.tier] ?? GEMINI_TIER_CONFIG.standard;
+  return [
+    '---',
+    `name: ${agent.name}`,
+    `description: ${JSON.stringify(agent.description)}`,
+    'kind: local',
+    'tools:',
+    ...tools.map((tool) => `  - ${tool}`),
+    `temperature: ${tierCfg.temperature}`,
+    `max_turns: ${tierCfg.max_turns}`,
+    '---',
+    '',
+    agent.body,
+    '',
+  ].join('\n');
 }
 
-function readContextRoutes() {
-  const routes = JSON.parse(readFileSync(CONTEXT_ROUTES_PATH, 'utf8'));
-  if (routes?.schema_version !== 'p2a.context_routes.v1' || !Array.isArray(routes.skills)) {
-    throw new Error(`${path.relative(ROOT, CONTEXT_ROUTES_PATH)} must contain p2a.context_routes.v1 skills`);
+function renderGeminiCommand(entry) {
+  return [
+    `description = ${JSON.stringify(entry.description)}`,
+    'prompt = """',
+    entry.prompt,
+    '"""',
+    '',
+  ].join('\n');
+}
+
+export function expectedMirrorFiles() {
+  const outputs = new Map();
+
+  const skillEntries = readdirSync(SKILL_SOURCE, { withFileTypes: true })
+    .sort((a, b) => a.name.localeCompare(b.name));
+  for (const entry of skillEntries) {
+    if (!entry.isDirectory()) continue;
+    const src = path.join(SKILL_SOURCE, entry.name, 'SKILL.md');
+    if (!existsSync(src)) continue;
+    const body = readFileSync(src, 'utf8').replace(/\r\n?/g, '\n');
+    outputs.set(path.join('.claude', 'skills', entry.name, 'SKILL.md'), body);
   }
-  return routes;
-}
 
-function contextRouteForSkill(routes, skillId) {
-  const route = routes.skills.find((item) => item?.id === skillId);
-  if (!route) throw new Error(`context route is missing for ${skillId}`);
-  if (!Array.isArray(route.references)) throw new Error(`context route references must be an array for ${skillId}`);
-  for (const reference of route.references) {
-    if (typeof reference?.required !== 'boolean') {
-      throw new Error(`context route reference required must be boolean for ${skillId}:${reference?.path ?? '<missing>'}`);
-    }
+  const agentEntries = readdirSync(AGENT_SOURCE, { withFileTypes: true })
+    .sort((a, b) => a.name.localeCompare(b.name));
+  for (const entry of agentEntries) {
+    if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+    const agent = parseAgentSource(path.join(AGENT_SOURCE, entry.name));
+    outputs.set(path.join('.claude', 'agents', `${agent.name}.md`), renderClaudeAgent(agent));
+    outputs.set(path.join('.codex', 'agents', `${agent.name}.toml`), renderCodexAgent(agent));
+    outputs.set(path.join('.gemini', 'agents', `${agent.name}.md`), renderGeminiAgent(agent));
   }
-  return route;
-}
 
-function renderGeminiCommand(command) {
-  const escapedPrompt = command.prompt.replaceAll('"""', '\\"\\"\\"');
-  return `description = ${tomlBasicString(command.description)}\nprompt = \"\"\"\n${escapedPrompt}\n\"\"\"\n`;
-}
-
-function relativeFileList(sourceRoot) {
-  const files = [];
-  function visit(directory) {
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      const absolute = path.join(directory, entry.name);
-      const relative = path.relative(sourceRoot, absolute);
-      if (entry.isDirectory()) visit(absolute);
-      else if (entry.isFile()) files.push(relative);
-    }
+  for (const [cmd, spec] of Object.entries(GEMINI_COMMANDS)) {
+    outputs.set(path.join('.gemini', 'commands', 'p2a', `${cmd}.toml`), renderGeminiCommand(spec));
   }
-  visit(sourceRoot);
-  return files.sort((a, b) => a.localeCompare(b));
+
+  return outputs;
 }
 
-function desiredFiles() {
-  const files = [];
-  const contextRoutes = readContextRoutes();
-  for (const dirent of readdirSync(SKILL_SOURCE, { withFileTypes: true }).filter((entry) => entry.isDirectory()).sort((a, b) => a.name.localeCompare(b.name))) {
-    const skillRoot = path.join(SKILL_SOURCE, dirent.name);
-    const skillFile = path.join(skillRoot, 'SKILL.md');
-    if (existsSync(skillFile)) {
-      for (const relativeFile of relativeFileList(skillRoot)) {
-        const source = path.join(skillRoot, relativeFile);
-        files.push({
-          path: path.join(ROOT, '.claude', 'skills', dirent.name, relativeFile),
-          content: readFileSync(source),
-        });
+export function syncCliAssets({ check = false } = {}) {
+  const expected = expectedMirrorFiles();
+  const drifted = [];
+  for (const [relPath, content] of expected.entries()) {
+    const absPath = path.join(ROOT, relPath);
+    const current = existsSync(absPath) ? readFileSync(absPath, 'utf8').replace(/\r\n?/g, '\n') : null;
+    if (current !== content) {
+      if (check) {
+        drifted.push(relPath);
+      } else {
+        mkdirSync(path.dirname(absPath), { recursive: true });
+        writeFileSync(absPath, content, 'utf8');
       }
     }
   }
-  for (const filename of readdirSync(AGENT_SOURCE).filter((name) => name.endsWith('.md')).sort()) {
-    const source = path.join(AGENT_SOURCE, filename);
-    const [meta, body] = parseAgentMarkdown(source);
-    files.push({ path: path.join(ROOT, '.claude', 'agents', filename), content: renderMarkdownAgent(meta, body, { target: 'claude' }) });
-    files.push({ path: path.join(ROOT, '.gemini', 'agents', filename), content: renderMarkdownAgent(meta, body, { target: 'gemini' }) });
-    files.push({ path: path.join(ROOT, '.codex', 'agents', `${meta.name}.toml`), content: renderCodexAgent(meta, body) });
-  }
-  for (const [commandName, command] of Object.entries(GEMINI_COMMANDS).sort(([a], [b]) => a.localeCompare(b))) {
-    if (!existsSync(path.join(SKILL_SOURCE, command.skill, 'SKILL.md'))) continue;
-    const route = contextRouteForSkill(contextRoutes, command.skill);
-    if (route.gemini_command !== commandName) {
-      throw new Error(`context route for ${command.skill} must declare gemini_command=${commandName}`);
-    }
-    files.push({ path: path.join(ROOT, '.gemini', 'commands', 'p2a', `${commandName}.toml`), content: renderGeminiCommand(command) });
-  }
-  return files;
+  return { ok: drifted.length === 0, drifted };
 }
 
-function writeOrCheck(rendered, check) {
-  const expectedBytes = Buffer.isBuffer(rendered.content) ? rendered.content : Buffer.from(String(rendered.content), 'utf8');
-  const currentMatches = existsSync(rendered.path)
-    && readFileSync(rendered.path).equals(expectedBytes);
-  if (check) {
-    if (!existsSync(rendered.path)) return [`missing generated file ${path.relative(ROOT, rendered.path)}`];
-    if (!currentMatches) return [`generated file drift ${path.relative(ROOT, rendered.path)}`];
-    return [];
+if (
+  process.argv[1]
+  && existsSync(process.argv[1])
+  && realpathSync.native(process.argv[1]) === realpathSync.native(fileURLToPath(import.meta.url))
+) {
+  const check = process.argv.includes('--check');
+  const result = syncCliAssets({ check });
+  if (!result.ok) {
+    console.error(`Plan2Agent CLI assets out of sync:\n- ${result.drifted.join('\n- ')}`);
+    process.exitCode = 1;
+  } else {
+    console.log(check ? 'Plan2Agent CLI assets are in sync' : 'Plan2Agent CLI assets synced');
   }
-  if (currentMatches) return [];
-  mkdirSync(path.dirname(rendered.path), { recursive: true });
-  writeFileSync(rendered.path, expectedBytes);
-  return [];
-}
-
-export function main(argv = process.argv.slice(2)) {
-  const check = argv.includes('--check');
-  if (argv.some((arg) => arg !== '--check')) {
-    console.error(`sync failed: unrecognized argument: ${argv.find((arg) => arg !== '--check')}`);
-    return 1;
-  }
-  const errors = [];
-  try {
-    for (const rendered of desiredFiles()) errors.push(...writeOrCheck(rendered, check));
-  } catch (error) {
-    console.error(`sync failed: ${error.message}`);
-    return 1;
-  }
-  if (errors.length) {
-    for (const error of errors) console.error(`sync failed: ${error}`);
-    return 1;
-  }
-  console.log(check ? 'Plan2Agent CLI assets are in sync' : 'Plan2Agent CLI assets synced');
-  return 0;
-}
-
-function isDirectEntry() {
-  if (!process.argv[1]) return false;
-  try {
-    return realpathSync(__filename) === realpathSync(process.argv[1]);
-  } catch {
-    return import.meta.url === pathToFileURL(process.argv[1]).href;
-  }
-}
-
-if (isDirectEntry()) {
-  process.exitCode = main();
 }

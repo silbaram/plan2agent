@@ -1,19 +1,17 @@
 {
   "name": "plan2agent",
-  "version": "0.9.0",
-  "description": "Spec-driven development harness for AI coding agents with human-in-the-loop approval gates.",
+  "version": "1.0.0",
+  "description": "Minimal task and session-resume development harness for AI coding agents.",
   "license": "MIT",
   "keywords": [
-    "spec-driven-development",
     "ai-coding-agent",
+    "development-harness",
+    "task-tracking",
+    "session-resume",
     "human-in-the-loop",
-    "task-graph",
-    "coding-agent",
     "claude-code",
     "codex",
     "gemini-cli",
-    "agentic-sdlc",
-    "developer-tools",
     "cli"
   ],
   "type": "module",
@@ -21,7 +19,7 @@
     "p2a": "scripts/p2a.mjs"
   },
   "engines": {
-    "node": ">=22.20.0"
+    "node": ">=22.0.0"
   },
   "files": [
     "scripts",
@@ -40,14 +38,9 @@
     "url": "https://github.com/silbaram/plan2agent/issues"
   },
   "scripts": {
-    "test": "node --test tests/index.test.mjs",
-    "test:all": "npm test && npm run test:full && npm run test:package",
-    "test:compat": "node --test tests/schema-fixtures.test.mjs tests/e2e-artifact-root.test.mjs tests/npm-package.test.mjs tests/upgrade-command.test.mjs",
-    "test:full": "node scripts/run_fixtures.mjs",
-    "test:package": "node --test tests/npm-package.test.mjs tests/upgrade-command.test.mjs"
-  },
-  "dependencies": {
-    "skills": "1.7.0",
-    "yaml": "2.8.3"
+    "test": "node --test tests/*.test.mjs",
+    "check:parity": "node scripts/check_cli_parity.mjs",
+    "sync:assets": "node scripts/sync_cli_assets.mjs",
+    "test:all": "npm test && npm run check:parity"
   }
 }

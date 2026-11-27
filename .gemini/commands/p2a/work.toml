@@ -1,0 +1,8 @@
+description = "Draft, approve, implement, verify, and resume tasks through .plan2agent/work.json."
+prompt = """
+Use the Plan2Agent p2a-work skill for the following context:
+
+{{args}}
+
+Keep all task and resume state in .plan2agent/work.json without creating extra Markdown docs.
+"""

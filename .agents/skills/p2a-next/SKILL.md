@@ -1,40 +1,26 @@
 ---
 name: p2a-next
-description: Use when a Plan2Agent user asks what to do next, wants to resume a project, or needs one state-based next action in an agent session.
+description: Use when starting or resuming Plan2Agent development in a project to check .plan2agent/work.json and follow the single next action.
 ---
 
 # Plan2Agent Next
 
-Use the CLI result as the only decision authority for project-state transitions, not as permission to replace the user's request. Do not infer or duplicate project-state rules.
+Use `p2a next --json` as the single source of truth for starting or resuming development. Do not create extra Markdown plans, status files, or duplicate tracking docs.
 
 ## Procedure
 
-Explicit review, explanation, status, or Git-operation requests take precedence over this resume procedure. Handle the requested outcome without advancing unrelated development; read-only requests do not authorize code or lifecycle changes. Use `next` only for missing state context in these cases, not as authority to execute its returned action.
-
-For a direct review or request to summarize, write, or register an identified retrospective, follow the closeout reference below with the supplied code, report, or observations. Do not present an unrelated planning or close menu.
-
-1. Run `p2a next --json --contract v2` from the target project. Pass `--project-id <id>` when the user selected a project, and `--idea <request>` or `--entry <path>` for an actual new change request. Reviewing completed work or summarizing/registering an existing retrospective is not a new feature idea.
-2. Read the returned `command`, `continuation`, and reason. Explain the understood outcome, material decision if any, and next action in product language. Keep state ids, run ids, hashes, and artifact paths internal unless requested.
-   When `briefing` is present, use it to distinguish reported changes, outcomes backed by current checkpoint checks, historical/unconfirmed checks, and remaining work. Its facts are advisory; follow `command` for the authorized action. Do not equate a passing check with coverage of all completion criteria.
-3. Execute the authorized action below, then rerun `next` after it completes unless the result is terminal or a closeout choice is still pending. If project selection is required, ask for one of the displayed project ids.
-
-## Authority and dispatch
-
-- For `kind: skill`, continue with the exact returned `skill` and `args` in this session. Preserve supplied context and user authorization; do not re-decide the route.
-- For `kind: cli`, execute the returned `argv`. When `requiresApproval: true`, wait for explicit authorization for that pending action; an already-given approval satisfies the boundary once and does not need repeating. A false flag covers read-only inspection or the already-authorized development loop, not iteration close.
-- For `kind: approval` without options, present `decisionSummary` and obtain explicit approval. Replace only the exact `quotePlaceholder` argument with the verbatim user utterance and execute once. A legacy payload without `argv` returns to the owning `p2a-harness` approval procedure; never parse a command from human display text.
-- For approval `options`, present the choices unless the user already selected one. Follow the closeout reference below only for this closeout interaction or a direct review/retrospective/report/issue request. Review alone is read-only even if an older payload marks remediation automatic; an explicit request to fix authorizes the linked remediation action. Report writing, GitHub publication, and iteration close are distinct outcomes, each satisfied by its corresponding user request.
-
-When the payload includes `agentGuidance`, follow it for this state. It can narrow or end the dispatch above, such as asking first or stopping without a prompt, but never authorizes more than the returned command.
-
-Do not reuse approval for a different action or changed state. Let the CLI validate approval records and transitions.
-
-## Progressive reference routing
-
-- Required, conditional; stages: closeout — `.agents/skills/p2a-dev-execution/references/closeout-choices.md` — A closeout choice or an explicit review/retrospective/report/issue request is being handled.
-
-## Continuation context
-
-For an `immediate` continuation, request its reference packet once with `p2a context show --artifacts <dir> --continuation <id> --provider <provider>`. For `after_command_success`, first execute the returned argv and validate its single `p2a.execution_result.v1` JSON result: exit zero, `outcome: succeeded`, and `runStatus: started`. Then bind its `runId` to the context request. Do not parse human output or individually reopen packet-managed references.
-
-Pass `--prepare-mode` unchanged to the execution skill. Adaptive mode selection and compatibility work-item preparation do not need another product approval.
+1. Run `p2a next --json` in the target project.
+   - For a new development request when no work is active, run `p2a next --idea "<user request>" --json` (or `--entry <path>`).
+   - If the user only asked a read-only question (review, explanation, status, git check), answer it directly without changing `.plan2agent/work.json` or advancing tasks.
+2. Inspect the returned `state`, `action`, and `work` summary:
+   - `uninitialized`: run `p2a init`, then rerun `p2a next --json`.
+   - `invalid_config` or `invalid_work`: run `p2a doctor` / `p2a validate`, explain the exact error, and fix (or `p2a init --force` for broken config) before proceeding.
+   - `no_work`: start a new request with `p2a next --idea "<user request>" --json` (or `--entry <path>`).
+   - `active_work_exists`: show the existing active work summary and ask whether to resume it, finish it (`p2a done`), or discard it (`p2a done --abort`) before starting the new request.
+   - `draft_needs_plan`: continue with `p2a-work` to inspect the codebase and populate `.plan2agent/work.json`.
+   - `draft_needs_approval` or `plan_drifted`: present the compact goal, scope, non-goals, constraints, and task list in plain language and ask for one-time confirmation. Once confirmed, run `p2a approve --quote "<exact user utterance>"` and proceed.
+   - `task_in_progress`: resume the active task immediately using its recorded `acceptance`, `verification`, `notes`, and `resume.summary` via `p2a-work`.
+   - `ready_task`: run `p2a task start <id>` and implement via `p2a-work`.
+   - `tasks_blocked`: explain the blocker and the smallest decision needed from the user.
+   - `ready_to_finish`: summarize completed tasks, changed files, and verification outcomes, then ask to run `p2a done` (which clears `work.json`).
+3. Keep internal JSON paths and hashes out of ordinary replies unless the user asks for details.

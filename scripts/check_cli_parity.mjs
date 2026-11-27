@@ -1,189 +1,91 @@
 #!/usr/bin/env node
-/** Check that Plan2Agent CLI configuration mirrors and command shims stay in sync. */
+/** Verify that Plan2Agent v1 canonical skills/agents and provider mirrors are in sync with no extras. */
 
-import { readFileSync, existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
-import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { auditContext } from './p2a_context_audit.mjs';
+import { expectedMirrorFiles, syncCliAssets } from './sync_cli_assets.mjs';
 
-const __filename = fileURLToPath(import.meta.url);
-const ROOT = path.resolve(path.dirname(__filename), '..');
-const CONTEXT_ROUTES_PATH = path.join(ROOT, '.agents', 'context-routes.json');
-const SKILLS = ['p2a-harness', 'p2a-next', 'p2a-spec', 'p2a-task-author', 'p2a-dev-execution', 'p2a-task-breakdown', 'p2a-visual-experience'];
-const AGENTS = ['p2a-spec-author', 'p2a-implementation-planner', 'p2a-task-graph', 'p2a-task-author', 'p2a-skill-curator', 'p2a-performance-monitor', 'p2a-implementer'];
-const GEMINI_COMMANDS = {
-  harness: 'p2a-harness',
-  next: 'p2a-next',
-  spec: 'p2a-spec',
-  'task-author': 'p2a-task-author',
-  'dev-execution': 'p2a-dev-execution',
-  'task-breakdown': 'p2a-task-breakdown',
-  'visual-experience': 'p2a-visual-experience',
-};
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const EXPECTED_SKILLS = ['p2a-next', 'p2a-work'];
+const EXPECTED_AGENTS = ['p2a-implementer', 'p2a-reviewer'];
 
-function readContextRoutes() {
-  const routes = JSON.parse(readFileSync(CONTEXT_ROUTES_PATH, 'utf8'));
-  if (routes?.schema_version !== 'p2a.context_routes.v1' || !Array.isArray(routes.skills)) {
-    throw new Error(`${path.relative(ROOT, CONTEXT_ROUTES_PATH)} must contain p2a.context_routes.v1 skills`);
+function listRelativeFiles(dir) {
+  const abs = path.join(ROOT, dir);
+  if (!existsSync(abs)) return [];
+  const results = [];
+  function walk(current) {
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.isFile()) results.push(path.relative(ROOT, full).split(path.sep).join('/'));
+    }
   }
-  return routes;
+  walk(abs);
+  return results.sort();
 }
 
-function fail(message) {
-  console.error(`parity failed: ${message}`);
-  return 1;
-}
+function main() {
+  const failures = [];
 
-function parseSimpleToml(text) {
-  const data = {};
-  const lines = text.split(/\r?\n/);
-  for (let index = 0; index < lines.length; index += 1) {
-    const rawLine = lines[index];
-    const line = rawLine.trim();
-    if (!line || line.startsWith('#')) continue;
-    const equals = line.indexOf('=');
-    if (equals === -1) throw new Error(`Expected '=' in ${rawLine}`);
-    const key = line.slice(0, equals).trim();
-    let value = line.slice(equals + 1).trim();
-    if (value === '"""' || value === "'''") {
-      const delimiter = value;
-      const collected = [];
-      index += 1;
-      while (index < lines.length && lines[index].trim() !== delimiter) {
-        collected.push(lines[index]);
-        index += 1;
-      }
-      if (index >= lines.length) throw new Error(`Unterminated multiline string for ${key}`);
-      data[key] = collected.join('\n');
-      continue;
-    }
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
-    }
-    data[key] = value;
+  for (const skill of EXPECTED_SKILLS) {
+    const file = path.join(ROOT, '.agents', 'skills', skill, 'SKILL.md');
+    if (!existsSync(file)) failures.push(`missing canonical skill: .agents/skills/${skill}/SKILL.md`);
   }
-  return data;
-}
-
-function checkGeminiCommand(command, skill, routes) {
-  const commandPath = path.join(ROOT, '.gemini', 'commands', 'p2a', `${command}.toml`);
-  const label = path.relative(ROOT, commandPath);
-  if (!existsSync(commandPath)) return `missing Gemini command shim ${label}`;
-  let data;
-  try {
-    data = parseSimpleToml(readFileSync(commandPath, 'utf8'));
-  } catch (error) {
-    return `invalid TOML in Gemini command shim ${label}: ${error.message}`;
-  }
-  const description = data.description;
-  if (typeof description !== 'string' || !description.trim()) return `Gemini command shim ${label} has missing or empty description`;
-  const prompt = data.prompt;
-  if (typeof prompt !== 'string' || !prompt.trim()) return `Gemini command shim ${label} has missing or empty prompt`;
-  if (!prompt.includes(skill)) return `Gemini command shim ${label} prompt must include skill name ${skill}`;
-  if (!prompt.includes('{{args}}')) return `Gemini command shim ${label} prompt must include {{args}}`;
-  const route = routes.skills.find((item) => item?.id === skill);
-  if (!route) return `context route is missing for ${skill}`;
-  if (route.gemini_command !== command) return `context route for ${skill} must declare gemini_command=${command}`;
-  const references = Array.isArray(route.references) ? route.references : [];
-  for (const reference of references) {
-    if (typeof reference.required !== 'boolean') {
-      return `context route reference required must be boolean for ${skill}:${reference.path}`;
-    }
-    const declaredPaths = [
-      reference.path,
-      ...(Array.isArray(reference.provider_paths)
-        ? reference.provider_paths.map((item) => item?.path)
-        : []),
-    ].filter((item) => typeof item === 'string' && item.trim());
-    if (declaredPaths.some((referencePath) => prompt.includes(referencePath))) {
-      return `Gemini command shim ${label} must not duplicate canonical reference paths from ${skill}/SKILL.md`;
-    }
-    if (typeof reference.condition === 'string' && prompt.includes(reference.condition)) {
-      return `Gemini command shim ${label} must not duplicate canonical reference conditions from ${skill}/SKILL.md`;
-    }
-  }
-  if (prompt.includes('Conditional references for') || prompt.includes('otherwise do not read it')) {
-    return `Gemini command shim ${label} must stay a thin invocation and provider-constraint wrapper`;
-  }
-  return null;
-}
-
-function relativeFileList(sourceRoot) {
-  const files = [];
-  function visit(directory) {
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      const absolute = path.join(directory, entry.name);
-      const relative = path.relative(sourceRoot, absolute);
-      if (entry.isDirectory()) visit(absolute);
-      else if (entry.isFile()) files.push(relative);
-    }
-  }
-  visit(sourceRoot);
-  return files.sort((a, b) => a.localeCompare(b));
-}
-
-export function main() {
-  let contextRoutes;
-  try {
-    contextRoutes = readContextRoutes();
-  } catch (error) {
-    return fail(error.message);
-  }
-  const syncCheck = spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'sync_cli_assets.mjs'), '--check'], {
-    cwd: ROOT,
-    encoding: 'utf8',
-  });
-  if (syncCheck.status !== 0) {
-    if (syncCheck.stderr) process.stderr.write(syncCheck.stderr);
-    return syncCheck.status ?? 1;
+  for (const agent of EXPECTED_AGENTS) {
+    const file = path.join(ROOT, '.agents', 'agents', `${agent}.md`);
+    if (!existsSync(file)) failures.push(`missing canonical agent: .agents/agents/${agent}.md`);
   }
 
-  const contextAudit = auditContext(ROOT);
-  const contextFailure = contextAudit.diagnostics.find((item) => item.severity === 'error');
-  if (contextFailure) {
-    return fail(`context route audit ${contextFailure.code}: ${contextFailure.message}`);
+  const expectedCanonical = new Set([
+    ...EXPECTED_SKILLS.map((s) => `.agents/skills/${s}/SKILL.md`),
+    ...EXPECTED_AGENTS.map((a) => `.agents/agents/${a}.md`),
+  ]);
+  for (const found of listRelativeFiles('.agents')) {
+    if (!expectedCanonical.has(found)) {
+      failures.push(`unexpected canonical file in .agents: ${found}`);
+    }
   }
 
-  for (const skill of SKILLS) {
-    const sourceRoot = path.join(ROOT, '.agents', 'skills', skill);
-    const mirrorRoot = path.join(ROOT, '.claude', 'skills', skill);
-    if (!existsSync(sourceRoot)) return fail(`missing source skill ${sourceRoot}`);
-    if (!existsSync(mirrorRoot)) return fail(`missing Claude skill mirror ${mirrorRoot}`);
-    const sourceFiles = relativeFileList(sourceRoot);
-    const mirrorFiles = relativeFileList(mirrorRoot);
-    if (sourceFiles.join('\n') !== mirrorFiles.join('\n')) return fail(`skill mirror file list drift for ${skill}`);
-    for (const relativeFile of sourceFiles) {
-      const source = path.join(sourceRoot, relativeFile);
-      const mirror = path.join(mirrorRoot, relativeFile);
-      if (!readFileSync(source).equals(readFileSync(mirror))) {
-        return fail(`skill mirror drift for ${skill}/${relativeFile.split(path.sep).join('/')}`);
+  const syncResult = syncCliAssets({ check: true });
+  for (const drifted of syncResult.drifted) {
+    failures.push(`mirror out of sync: ${drifted}`);
+  }
+
+  const expectedSet = new Set(
+    [...expectedMirrorFiles().keys()].map((p) => p.split(path.sep).join('/')),
+  );
+  const mirrorDirs = [
+    '.claude/skills',
+    '.claude/agents',
+    '.codex/agents',
+    '.gemini/agents',
+    '.gemini/commands/p2a',
+  ];
+  for (const dir of mirrorDirs) {
+    for (const found of listRelativeFiles(dir)) {
+      if (!expectedSet.has(found)) {
+        failures.push(`unexpected stale mirror file: ${found}`);
       }
     }
   }
 
-  for (const agent of AGENTS) {
-    const source = path.join(ROOT, '.agents', 'agents', `${agent}.md`);
-    const claude = path.join(ROOT, '.claude', 'agents', `${agent}.md`);
-    const codex = path.join(ROOT, '.codex', 'agents', `${agent}.toml`);
-    const gemini = path.join(ROOT, '.gemini', 'agents', `${agent}.md`);
-    const missing = [source, claude, codex, gemini].filter((filePath) => !existsSync(filePath)).map((filePath) => path.relative(ROOT, filePath));
-    if (missing.length) return fail(`missing agent mirrors for ${agent}: ${missing.join(', ')}`);
-    const sourceText = readFileSync(source, 'utf8');
-    const codexText = readFileSync(codex, 'utf8');
-    const hasWebCapability = /capabilities:\s*[\s\S]*?^\s*-\s+web\s*$/m.test(sourceText.split(/^---\s*$/m)[1] ?? sourceText);
-    if (hasWebCapability && !/^web_search\s*=\s*"live"\s*$/m.test(codexText)) {
-      return fail(`Codex agent mirror ${agent} must enable live web search for the neutral web capability`);
+  const expectedHooks = new Set(['.claude/hooks/p2a-confine-workspace.mjs']);
+  for (const hook of expectedHooks) {
+    if (!existsSync(path.join(ROOT, hook))) {
+      failures.push(`missing Claude hook: ${hook}`);
     }
-    if (!hasWebCapability && /^web_search\s*=/m.test(codexText)) {
-      return fail(`Codex agent mirror ${agent} must inherit parent web search when neutral web capability is absent`);
+  }
+  for (const found of listRelativeFiles('.claude/hooks')) {
+    if (!expectedHooks.has(found)) {
+      failures.push(`unexpected file in .claude/hooks: ${found}`);
     }
   }
 
-  for (const [command, skill] of Object.entries(GEMINI_COMMANDS)) {
-    const error = checkGeminiCommand(command, skill, contextRoutes);
-    if (error) return fail(error);
+  if (failures.length) {
+    for (const item of failures) console.error(`parity failed: ${item}`);
+    return 1;
   }
   console.log('Plan2Agent CLI parity passed');
   return 0;
