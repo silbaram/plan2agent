@@ -21,8 +21,8 @@ const GEMINI_TOOL_MAP = {
   read: ['read_file'],
   search: ['grep_search'],
   web: ['google_web_search', 'web_fetch'],
-  edit: [],
-  shell: [],
+  edit: ['write_file', 'replace'],
+  shell: ['run_shell_command'],
 };
 const CODEX_TIER_EFFORT = { light: 'medium', standard: 'high', heavy: 'max' };
 const GEMINI_TIER_CONFIG = {

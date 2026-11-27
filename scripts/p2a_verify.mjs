@@ -171,7 +171,7 @@ export function runVerification(targetRoot, { taskId = null, cmd = null, timeout
   if (git.isGit) {
     task.changed_files = git.changedFiles;
   }
-  if (!passed) {
+  if (!passed && !work.resume.summary) {
     work.resume.summary = `Verification failed for ${task.id} (exit ${verification.exit_code ?? 'error'}): ${command}`;
   }
   work.resume.updated_at = verification.at;

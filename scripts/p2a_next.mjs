@@ -2,7 +2,7 @@
 
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { configPath, readConfig, workPath } from './p2a_config.mjs';
+import { readConfig, workPath } from './p2a_config.mjs';
 import {
   createDraftWork,
   isPlanDrifted,
@@ -10,6 +10,17 @@ import {
   readyTasks,
   writeWork,
 } from './p2a_work.mjs';
+
+function selectActiveTask(work) {
+  if (!work?.tasks?.length) return null;
+  if (work.resume?.active_task_id) {
+    const preferred = work.tasks.find(
+      (t) => t.id === work.resume.active_task_id && t.status === 'in_progress',
+    );
+    if (preferred) return preferred;
+  }
+  return work.tasks.find((t) => t.status === 'in_progress') ?? null;
+}
 
 function compactWorkSummary(work) {
   if (!work) return null;
@@ -20,11 +31,14 @@ function compactWorkSummary(work) {
     todo: work.tasks.filter((t) => t.status === 'todo').length,
     blocked: work.tasks.filter((t) => t.status === 'blocked').length,
   };
-  const activeTask = work.tasks.find((t) => t.status === 'in_progress') ?? null;
+  const activeTask = selectActiveTask(work);
   return {
     id: work.id,
     status: work.status,
     goal: work.goal,
+    scope: work.scope,
+    non_goals: work.non_goals,
+    constraints: work.constraints,
     approved: work.approval.approved,
     progress: counts,
     tasks: work.tasks.map((t) => ({
@@ -186,7 +200,7 @@ export function evaluateNext(targetRoot, { idea = null, entry = null } = {}) {
     };
   }
 
-  const activeTask = work.tasks.find((t) => t.status === 'in_progress');
+  const activeTask = selectActiveTask(work);
   if (activeTask) {
     const verifyStatus = activeTask.verification?.status ?? 'not_run';
     return {
@@ -273,6 +287,9 @@ export function formatNextHuman(result) {
         lines.push(`최근 메모: ${t.notes.at(-1)}`);
       }
     } else if (result.state === 'draft_needs_approval' || result.state === 'plan_drifted') {
+      if (work.scope?.length) lines.push(`범위: ${work.scope.join(', ')}`);
+      if (work.non_goals?.length) lines.push(`제외: ${work.non_goals.join(', ')}`);
+      if (work.constraints?.length) lines.push(`제약: ${work.constraints.join(', ')}`);
       lines.push('태스크 계획:');
       for (const t of work.tasks) {
         const deps = t.depends_on.length ? ` (선행: ${t.depends_on.join(', ')})` : '';
@@ -291,8 +308,4 @@ export function formatNextHuman(result) {
   lines.push(`안내: ${result.reason}`);
   lines.push(`다음 행동: ${result.action.command}`);
   return lines.join('\n');
-}
-
-export function hasConfig(targetRoot) {
-  return existsSync(configPath(targetRoot));
 }

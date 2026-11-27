@@ -381,10 +381,57 @@ test('edge cases: monorepo subdirectory + Unicode filenames, dependency bypass o
   runP2aJson(['verify', '--task', 'T1', '--target', pkgDir]);
   runP2aJson(['task', 'done', 'T1', '--target', pkgDir]);
 
-  // Malformed config.json handled cleanly by `next` and `validate`
+  // Malformed config.json handled cleanly by `next` and `validate`, and recovered by `init --force`
   writeFileSync(path.join(pkgDir, '.plan2agent', 'config.json'), '{broken json', 'utf8');
   assert.equal(runP2aJson(['next', '--target', pkgDir]).state, 'invalid_config');
   const badVal = runP2a(['validate', '--target', pkgDir]);
   assert.equal(badVal.status, 1);
   assert.match(badVal.stderr, /invalid \.plan2agent\/config\.json/);
+  const recovered = runP2aJson(['init', '--target', pkgDir, '--tools', 'none', '--force']);
+  assert.equal(recovered.config.schema_version, 'p2a.config.v1');
+});
+
+test('next includes scope/constraints, respects active_task_id under --allow-parallel, and verify preserves custom resume.summary', (t) => {
+  const dir = makeTempProject();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+
+  runP2aJson(['init', '--target', dir, '--tools', 'none']);
+  runP2aJson(['next', '--target', dir, '--idea', 'Parallel work check']);
+
+  const workFile = path.join(dir, '.plan2agent', 'work.json');
+  const draft = JSON.parse(readFileSync(workFile, 'utf8'));
+  draft.scope = ['app.mjs'];
+  draft.non_goals = ['unrelated CLI'];
+  draft.constraints = ['keep zero deps'];
+  writeFileSync(workFile, `${JSON.stringify(draft, null, 2)}\n`, 'utf8');
+
+  runP2aJson(['task', 'add', '--target', dir, '--title', 'Task A', '--accept', 'A passes']);
+  runP2aJson(['task', 'add', '--target', dir, '--title', 'Task B', '--accept', 'B passes']);
+
+  const approvalNext = runP2aJson(['next', '--target', dir]);
+  assert.equal(approvalNext.state, 'draft_needs_approval');
+  assert.deepEqual(approvalNext.work.scope, ['app.mjs']);
+  assert.deepEqual(approvalNext.work.non_goals, ['unrelated CLI']);
+  assert.deepEqual(approvalNext.work.constraints, ['keep zero deps']);
+
+  const humanApproval = runP2a(['next', '--target', dir]);
+  assert.match(humanApproval.stdout, /범위: app\.mjs/);
+  assert.match(humanApproval.stdout, /제외: unrelated CLI/);
+  assert.match(humanApproval.stdout, /제약: keep zero deps/);
+
+  runP2aJson(['approve', '--target', dir, '--quote', '진행하자']);
+  runP2aJson(['task', 'start', 'T1', '--target', dir, '--summary', 'Working on T1']);
+  runP2aJson(['task', 'start', 'T2', '--target', dir, '--allow-parallel', '--summary', 'Custom resume handoff for T2']);
+
+  // `p2a next` should pick active_task_id (T2), not just first in_progress (T1)
+  const parallelNext = runP2aJson(['next', '--target', dir]);
+  assert.equal(parallelNext.state, 'task_in_progress');
+  assert.equal(parallelNext.work.active_task.id, 'T2');
+
+  // Failing verification must NOT clobber existing custom resume.summary
+  const failed = runP2a(['verify', '--task', 'T2', '--cmd', 'node -e "process.exit(1)"', '--target', dir, '--json']);
+  assert.equal(failed.status, 1);
+  const afterFail = runP2aJson(['next', '--target', dir]);
+  assert.equal(afterFail.work.resume.summary, 'Custom resume handoff for T2');
+  assert.equal(afterFail.work.active_task.verification.status, 'failed');
 });

@@ -28,6 +28,11 @@ test('CLI provider mirrors are in sync and parity passes', () => {
     encoding: 'utf8',
   });
   assert.equal(parity.status, 0, parity.stderr || parity.stdout);
+
+  const geminiImpl = readFileSync(path.join(REPO_ROOT, '.gemini', 'agents', 'p2a-implementer.md'), 'utf8');
+  assert.match(geminiImpl, /- write_file/);
+  assert.match(geminiImpl, /- replace/);
+  assert.match(geminiImpl, /- run_shell_command/);
 });
 
 test('package.json has zero runtime dependencies and npm pack ships only runtime files', (t) => {

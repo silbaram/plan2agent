@@ -47,7 +47,7 @@ function usage() {
     '  p2a done [--abort] [--target <dir>] [--json]',
     '  p2a validate [--target <dir>] [--json]',
     '  p2a doctor [--target <dir>] [--json]',
-    '  p2a buildlore <status|memory|lookup|handoff> [options]',
+    '  p2a buildlore <status|memory|lookup|search|sync|handoff> [options]',
     '',
     'Global options:',
     '  --help, -h     Show this help.',

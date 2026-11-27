@@ -5,6 +5,9 @@ kind: local
 tools:
   - read_file
   - grep_search
+  - write_file
+  - replace
+  - run_shell_command
 temperature: 0.2
 max_turns: 20
 ---

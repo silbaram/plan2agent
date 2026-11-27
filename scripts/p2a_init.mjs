@@ -94,7 +94,14 @@ function ensureClaudeHookSettings(targetRoot) {
 
 export function initProject(targetRoot, { tools = null, projectId = null, force = false } = {}) {
   const root = path.resolve(targetRoot);
-  const existing = existsSync(configPath(root)) ? readConfig(root) : null;
+  let existing = null;
+  if (existsSync(configPath(root))) {
+    try {
+      existing = readConfig(root);
+    } catch (error) {
+      if (!force) throw error;
+    }
+  }
   const effectiveTools = Array.isArray(tools)
     ? [...tools]
     : (existing && !force && Array.isArray(existing.tools) ? [...existing.tools] : [...TOOL_TARGETS]);
