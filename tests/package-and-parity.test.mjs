@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -131,6 +131,21 @@ test('Claude PreToolUse hook denies escapes/destructive rm and defers normal cal
   if (trySymlink(path.join(outside, 'nonexistent-new.txt'), path.join(workspace, 'dangling-escape.txt'))) {
     assert.equal(
       runHook({ tool_name: 'Write', cwd: workspace, tool_input: { file_path: path.join(workspace, 'dangling-escape.txt') } })?.permissionDecision,
+      'deny',
+    );
+  }
+  // Nested symlinked directory + relative dangling symlink escape must be denied
+  mkdirSync(path.join(workspace, 'a', 'b'), { recursive: true });
+  if (
+    trySymlink(workspace, path.join(workspace, 'a', 'b', 'dir-link'))
+    && trySymlink('../outside-nested.txt', path.join(workspace, 'nested-escape.txt'))
+  ) {
+    assert.equal(
+      runHook({
+        tool_name: 'Write',
+        cwd: workspace,
+        tool_input: { file_path: path.join(workspace, 'a', 'b', 'dir-link', 'nested-escape.txt') },
+      })?.permissionDecision,
       'deny',
     );
   }

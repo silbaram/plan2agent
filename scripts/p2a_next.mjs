@@ -292,7 +292,7 @@ export function formatNextHuman(result) {
     }
     if (work.active_task) {
       const t = work.active_task;
-      const ver = t.verification ? `${t.verification.status} (exit ${t.verification.exit_code})` : '미실행';
+      const ver = t.verification ? `${t.verification.status} (exit ${t.verification.exit_code ?? 'error'})` : '미실행';
       lines.push(`진행 중 태스크: ${t.id} — ${t.title} [검증: ${ver}]`);
       if (t.notes.length) {
         lines.push(`최근 메모: ${t.notes.at(-1)}`);

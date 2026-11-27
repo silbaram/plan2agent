@@ -508,6 +508,12 @@ test('hardening: p2a done freshness, reopen on failed re-verify, block guards, m
 
   // Symlink target mutation after verify changes fingerprint
   unlinkSync(workFile);
+  mkdirSync(workFile);
+  const dirWorkDoctor = runP2a(['doctor', '--target', dir, '--json']);
+  assert.equal(dirWorkDoctor.status, 1);
+  assert.match(JSON.parse(dirWorkDoctor.stdout).errors.join('\n'), /not a regular file/);
+  rmSync(workFile, { recursive: true, force: true });
+
   runP2aJson(['next', '--target', dir, '--idea', 'Symlink fingerprint check']);
   runP2aJson(['task', 'add', '--target', dir, '--title', 'Link task', '--accept', 'ok']);
   runP2aJson(['approve', '--target', dir, '--quote', 'ok']);

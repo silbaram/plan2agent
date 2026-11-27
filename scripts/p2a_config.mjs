@@ -94,11 +94,9 @@ export function detectVerifyCommands(targetRoot) {
       test = 'pytest';
     } else if (existsSync(path.join(root, 'build.gradle')) || existsSync(path.join(root, 'build.gradle.kts'))) {
       const isWin = process.platform === 'win32';
-      const gradle = isWin && existsSync(path.join(root, 'gradlew.bat'))
-        ? 'gradlew.bat'
-        : existsSync(path.join(root, 'gradlew'))
-          ? './gradlew'
-          : 'gradle';
+      const gradle = isWin
+        ? (existsSync(path.join(root, 'gradlew.bat')) ? 'gradlew.bat' : 'gradle')
+        : (existsSync(path.join(root, 'gradlew')) ? './gradlew' : 'gradle');
       test = `${gradle} test`;
     } else if (existsSync(path.join(root, 'pom.xml'))) {
       test = 'mvn test';

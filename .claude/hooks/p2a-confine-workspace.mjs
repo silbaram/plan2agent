@@ -46,7 +46,8 @@ function canonicalizePath(filePath, depth = 0) {
     if (stat) {
       if (stat.isSymbolicLink()) {
         const linkTarget = readlinkSync(current);
-        const resolvedTarget = path.resolve(path.dirname(current), linkTarget);
+        const parentReal = realpathSync.native(path.dirname(current));
+        const resolvedTarget = path.resolve(parentReal, linkTarget);
         const targetCanonical = canonicalizePath(resolvedTarget, depth + 1);
         return tail.length ? path.join(targetCanonical, ...tail) : targetCanonical;
       }

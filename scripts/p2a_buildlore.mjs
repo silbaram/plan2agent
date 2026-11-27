@@ -195,6 +195,10 @@ export function runBuildLore(argv, options = {}) {
   return Number.isInteger(result?.status) ? result.status : 1;
 }
 
-if (process.argv[1] && existsSync(process.argv[1]) && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
+if (
+  process.argv[1]
+  && existsSync(process.argv[1])
+  && realpathSync.native(process.argv[1]) === realpathSync.native(fileURLToPath(import.meta.url))
+) {
   process.exitCode = runBuildLore(process.argv.slice(2));
 }

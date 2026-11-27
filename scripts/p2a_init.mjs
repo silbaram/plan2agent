@@ -89,7 +89,9 @@ function ensureClaudeHookSettings(targetRoot) {
     }
     current = parsed;
   }
-  const hooks = current.hooks && typeof current.hooks === 'object' ? { ...current.hooks } : {};
+  const hooks = current.hooks && typeof current.hooks === 'object' && !Array.isArray(current.hooks)
+    ? { ...current.hooks }
+    : {};
   const preToolUse = Array.isArray(hooks.PreToolUse) ? [...hooks.PreToolUse] : [];
   const alreadyPresent = preToolUse.some((entry) =>
     Array.isArray(entry?.hooks) && entry.hooks.some((h) => h?.command === CLAUDE_HOOK_COMMAND),
@@ -172,6 +174,9 @@ export function diagnoseProject(targetRoot) {
   } else {
     try {
       config = readConfig(root);
+      if (!config) {
+        errors.push('invalid .plan2agent/config.json: path exists but is not a regular file');
+      }
     } catch (error) {
       errors.push(error.message);
     }
@@ -213,7 +218,9 @@ export function diagnoseProject(targetRoot) {
   if (existsSync(workPath(root))) {
     try {
       work = readWork(root);
-      if (isPlanDrifted(work)) {
+      if (!work) {
+        errors.push('invalid .plan2agent/work.json: path exists but is not a regular file');
+      } else if (isPlanDrifted(work)) {
         warnings.push('approved plan in .plan2agent/work.json drifted after approval; reconfirm with `p2a approve`');
       }
     } catch (error) {

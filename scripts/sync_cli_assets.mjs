@@ -194,7 +194,7 @@ export function syncCliAssets({ check = false } = {}) {
 if (
   process.argv[1]
   && existsSync(process.argv[1])
-  && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))
+  && realpathSync.native(process.argv[1]) === realpathSync.native(fileURLToPath(import.meta.url))
 ) {
   const check = process.argv.includes('--check');
   const result = syncCliAssets({ check });

@@ -178,7 +178,7 @@ export function runVerification(targetRoot, { taskId = null, cmd = null, timeout
   const verification = {
     command,
     status: passed ? 'passed' : 'failed',
-    exit_code: Number.isInteger(result.status) ? result.status : null,
+    exit_code: passed ? 0 : (Number.isInteger(result.status) && result.status !== 0 ? result.status : null),
     git_head: git.head,
     worktree_fingerprint: git.worktreeFingerprint,
     at: nowIso(),
