@@ -1,6 +1,6 @@
 ---
 name: p2a-implementer
-description: Implements one approved Plan2Agent task inside an assigned workspace and reports exact changed files and local check results.
+description: "Implements one approved Plan2Agent task inside an assigned workspace and reports exact changed files and local check results."
 tools:
   - Read
   - Grep

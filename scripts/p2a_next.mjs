@@ -94,11 +94,22 @@ export function evaluateNext(targetRoot, { idea = null, entry = null } = {}) {
 
   const hasWorkFile = existsSync(workPath(root));
   if ((idea || entry) && hasWorkFile) {
-    let existing = null;
+    let existing;
     try {
       existing = readWork(root);
-    } catch {
-      existing = null;
+    } catch (error) {
+      return {
+        schema_version: 'p2a.next.v1',
+        state: 'invalid_work',
+        project_root: root,
+        reason: `.plan2agent/work.json is invalid: ${error.message}`,
+        action: {
+          kind: 'cli',
+          command: 'p2a validate',
+          requires_approval: false,
+        },
+        work: null,
+      };
     }
     return {
       schema_version: 'p2a.next.v1',
@@ -244,7 +255,7 @@ export function evaluateNext(targetRoot, { idea = null, entry = null } = {}) {
       state: 'ready_to_finish',
       project_root: root,
       reason: config.buildlore?.enabled
-        ? 'All tasks are done and verified. Optionally capture knowledge with `p2a buildlore handoff`, then clear work.json with `p2a done`.'
+        ? 'All tasks are done and verified. Optionally sync or import knowledge with `p2a buildlore sync` / `p2a buildlore handoff import --file <bundle.json>`, then clear work.json with `p2a done`.'
         : 'All tasks are done and verified. Review the summary and finish with `p2a done` to clear work.json.',
       action: {
         kind: 'approval',

@@ -2,7 +2,7 @@
 /** Thin optional Plan2Agent v1 adapter for the local BuildLore CLI. */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -72,14 +72,14 @@ function parseBuildLoreArgs(argv, defaultTarget) {
   for (let i = 1; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === '--help' || arg === '-h') return { help: true };
-    if (arg === '--target') {
-      target = args[++i];
+    if (arg === '--target' || arg.startsWith('--target=')) {
+      target = arg.includes('=') ? arg.slice('--target='.length) : args[++i];
       if (!target) throw new Error('--target requires a directory');
-    } else if (arg === '--project') {
-      projectId = args[++i];
+    } else if (arg === '--project' || arg.startsWith('--project=')) {
+      projectId = arg.includes('=') ? arg.slice('--project='.length) : args[++i];
       if (!projectId) throw new Error('--project requires a project id');
-    } else if (arg === '--timeout-ms') {
-      const value = args[++i];
+    } else if (arg === '--timeout-ms' || arg.startsWith('--timeout-ms=')) {
+      const value = arg.includes('=') ? arg.slice('--timeout-ms='.length) : args[++i];
       if (!READ_COMMANDS.has(command) || !/^\d+$/u.test(value ?? '') || Number(value) < 1 || Number(value) > 60_000) {
         throw new Error('--timeout-ms requires 1..60000 on read commands');
       }
@@ -89,8 +89,17 @@ function parseBuildLoreArgs(argv, defaultTarget) {
     }
   }
   if (['handoff-read', 'handoff-verify'].includes(command)) {
-    const idIdx = forwarded.indexOf('--id');
-    const idVal = idIdx === -1 ? '' : forwarded[idIdx + 1] ?? '';
+    let idVal = '';
+    for (let i = 0; i < forwarded.length; i += 1) {
+      if (forwarded[i] === '--id') {
+        idVal = forwarded[i + 1] ?? '';
+        break;
+      }
+      if (forwarded[i].startsWith('--id=')) {
+        idVal = forwarded[i].slice('--id='.length);
+        break;
+      }
+    }
     if (!DIGEST_PATTERN.test(idVal)) {
       throw new Error('handoff read/verify requires --id with a canonical sha256 digest');
     }
@@ -103,7 +112,7 @@ export function resolveBuildLoreInvocation(argv, options = {}) {
   if (parsed.help) return { help: true, usage: usage() };
 
   const targetRoot = path.resolve(parsed.target);
-  if (!existsSync(targetRoot) || !lstatSync(targetRoot).isDirectory()) {
+  if (!existsSync(targetRoot) || !statSync(targetRoot).isDirectory()) {
     throw new Error(`--target must point to an existing directory: ${targetRoot}`);
   }
 
@@ -180,7 +189,7 @@ export function runBuildLore(argv, options = {}) {
     return 1;
   }
   if (invocation.boundedRead) {
-    if (result?.status === 0 && result.stdout) (options.stdout ?? ((v) => process.stdout.write(v)))(result.stdout);
+    if (result?.stdout) (options.stdout ?? ((v) => process.stdout.write(v)))(result.stdout);
     if (result?.stderr) (options.stderr ?? ((v) => process.stderr.write(v)))(result.stderr);
   }
   return Number.isInteger(result?.status) ? result.status : 1;

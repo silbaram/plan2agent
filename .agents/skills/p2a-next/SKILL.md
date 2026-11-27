@@ -14,6 +14,9 @@ Use `p2a next --json` as the single source of truth for starting or resuming dev
    - If the user only asked a read-only question (review, explanation, status, git check), answer it directly without changing `.plan2agent/work.json` or advancing tasks.
 2. Inspect the returned `state`, `action`, and `work` summary:
    - `uninitialized`: run `p2a init`, then rerun `p2a next --json`.
+   - `invalid_config` or `invalid_work`: run `p2a doctor` / `p2a validate`, explain the exact error, and fix (or `p2a init --force` for broken config) before proceeding.
+   - `no_work`: start a new request with `p2a next --idea "<user request>" --json` (or `--entry <path>`).
+   - `active_work_exists`: show the existing active work summary and ask whether to resume it, finish it (`p2a done`), or discard it (`p2a done --abort`) before starting the new request.
    - `draft_needs_plan`: continue with `p2a-work` to inspect the codebase and populate `.plan2agent/work.json`.
    - `draft_needs_approval` or `plan_drifted`: present the compact goal, scope, non-goals, constraints, and task list in plain language and ask for one-time confirmation. Once confirmed, run `p2a approve --quote "<exact user utterance>"` and proceed.
    - `task_in_progress`: resume the active task immediately using its recorded `acceptance`, `verification`, `notes`, and `resume.summary` via `p2a-work`.

@@ -94,8 +94,8 @@ Plan2Agent v1.0은 타겟 프로젝트의 `.plan2agent/` 디렉터리에 **최�
 `validateWork()`는 중복 태스크 ID, 자기 참조, 존재하지 않는 선행 태스크, 순환 의존성(cycle)을 모두 거부합니다.
 
 ### 3.3 검증 신선도 격리 (`worktree_fingerprint`)
-`inspectGitWorkspace()`는 `git status --porcelain --untracked-files=all -- . :(exclude).plan2agent`와 변경 파일 내용 해시를 결합해 `worktree_fingerprint`를 계산합니다.
-- 제품 코드가 변경되면 지문이 바뀌어 `p2a task done`이 재검증을 요구합니다.
+`inspectGitWorkspace()`는 `git -c core.quotepath=false status --porcelain -z --untracked-files=all -- . :(exclude).plan2agent`와 변경 파일 내용(심볼릭 링크 타깃 포함) 해시를 결합해 `worktree_fingerprint`를 계산합니다.
+- 제품 코드가 변경되면 지문이 바뀌어 `p2a task done` 및 미커밋 변경이 남아 있는 상태의 `p2a done`이 재검증을 요구합니다(검증 완료 후 깔끔히 `git commit`한 클린 워킹트리에서는 `p2a done` 허용).
 - `.plan2agent/work.json`에 메모나 재개 요약을 기록하는 것은 지문에 포함되지 않으므로 통과된 검증을 깨뜨리지 않습니다.
 
 ### 3.4 `p2a next` 상태 머신

@@ -2,32 +2,25 @@
 /**
  * Plan2Agent Claude Code PreToolUse workspace confinement hook.
  *
- * Enforces deterministic realpath workspace boundaries for Write/Edit tools
- * and blocks obvious destructive root/home Bash removals. Subprocess filesystem
- * isolation is enforced by the provider's OS sandbox.
+ * Emits permissionDecision="deny" when Write/Edit escapes the workspace
+ * (including via symlinks or dangling symlinks) or when Bash attempts obvious
+ * destructive removal of root or home directories. Otherwise exits 0 with no
+ * stdout so Claude Code's normal interactive permission rules stay in effect.
  */
 
 import { lstatSync, readlinkSync, realpathSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 
-function emitDecision(permissionDecision, permissionDecisionReason) {
+function deny(reason) {
   process.stdout.write(`${JSON.stringify({
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
-      permissionDecision,
-      permissionDecisionReason,
+      permissionDecision: 'deny',
+      permissionDecisionReason: reason,
     },
   })}\n`);
-}
-
-function deny(reason) {
-  emitDecision('deny', reason);
-  process.exit(0);
-}
-
-function allow(reason) {
-  emitDecision('allow', reason);
   process.exit(0);
 }
 
@@ -71,13 +64,21 @@ function canonicalizePath(filePath, depth = 0) {
 
 function isInsideWorkspace(candidatePath, workspaceRoot) {
   const rel = path.relative(path.normalize(workspaceRoot), path.normalize(candidatePath));
-  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
+}
+
+function expandHome(rawPath) {
+  if (rawPath === '~') return os.homedir();
+  if (rawPath.startsWith('~/') || rawPath.startsWith('~\\')) {
+    return path.join(os.homedir(), rawPath.slice(2));
+  }
+  return rawPath;
 }
 
 function checkDestructiveBash(command) {
   if (typeof command !== 'string' || !command.trim()) return 'missing Bash command';
   const compact = command.replace(/\s+/g, ' ').trim();
-  if (/(^|[;&|]\s*)(rm|rmdir)\s+(-[^\s]*[rf][^\s]*\s+)*(\/(\s|$)|~(\/|\s|$)|\$HOME(\/|\s|$))/i.test(compact)) {
+  if (/(^|[;&|]\s*)(rm|rmdir)\s+(-[^\s]*[rf][^\s]*\s+)*['"]?(\/(\*|['"]|\s|$)|~(\/|\\|\*|['"]|\s|$)|\$HOME(\/|\\|\*|['"]|\s|$)|\$\{HOME\}(\/|\\|\*|['"]|\s|$))/i.test(compact)) {
     return 'Bash command attempts destructive removal of root or home directory';
   }
   return null;
@@ -107,9 +108,7 @@ if (toolName === 'Write' || toolName === 'Edit') {
   if (typeof rawPath !== 'string' || !rawPath.trim()) {
     deny(`${toolName} is missing tool_input.file_path`);
   }
-  const expanded = rawPath.startsWith('~/')
-    ? path.join(process.env.HOME || '', rawPath.slice(2))
-    : rawPath;
+  const expanded = expandHome(rawPath);
   let resolved;
   try {
     resolved = canonicalizePath(path.isAbsolute(expanded) ? expanded : path.resolve(workspaceRoot, expanded));
@@ -119,13 +118,13 @@ if (toolName === 'Write' || toolName === 'Edit') {
   if (!isInsideWorkspace(resolved, workspaceRoot)) {
     deny(`${toolName} blocked: ${rawPath} resolves outside workspace ${workspaceRoot}`);
   }
-  allow(`${toolName} target stays inside workspace`);
+  process.exit(0);
 }
 
 if (toolName === 'Bash') {
   const reason = checkDestructiveBash(toolInput.command);
   if (reason) deny(reason);
-  allow('Bash command passed Plan2Agent safety check');
+  process.exit(0);
 }
 
 process.exit(0);

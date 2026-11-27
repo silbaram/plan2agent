@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /** Generate Plan2Agent v1 CLI mirrors (.claude, .codex, .gemini) from canonical .agents sources. */
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SKILL_SOURCE = path.join(ROOT, '.agents', 'skills');
@@ -91,7 +91,7 @@ function renderClaudeAgent(agent) {
   return [
     '---',
     `name: ${agent.name}`,
-    `description: ${agent.description}`,
+    `description: ${JSON.stringify(agent.description)}`,
     'tools:',
     ...tools.map((tool) => `  - ${tool}`),
     '---',
@@ -120,7 +120,7 @@ function renderGeminiAgent(agent) {
   return [
     '---',
     `name: ${agent.name}`,
-    `description: ${agent.description}`,
+    `description: ${JSON.stringify(agent.description)}`,
     'kind: local',
     'tools:',
     ...tools.map((tool) => `  - ${tool}`),
@@ -146,7 +146,9 @@ function renderGeminiCommand(entry) {
 export function expectedMirrorFiles() {
   const outputs = new Map();
 
-  for (const entry of readdirSync(SKILL_SOURCE, { withFileTypes: true })) {
+  const skillEntries = readdirSync(SKILL_SOURCE, { withFileTypes: true })
+    .sort((a, b) => a.name.localeCompare(b.name));
+  for (const entry of skillEntries) {
     if (!entry.isDirectory()) continue;
     const src = path.join(SKILL_SOURCE, entry.name, 'SKILL.md');
     if (!existsSync(src)) continue;
@@ -154,7 +156,9 @@ export function expectedMirrorFiles() {
     outputs.set(path.join('.claude', 'skills', entry.name, 'SKILL.md'), body);
   }
 
-  for (const entry of readdirSync(AGENT_SOURCE, { withFileTypes: true })) {
+  const agentEntries = readdirSync(AGENT_SOURCE, { withFileTypes: true })
+    .sort((a, b) => a.name.localeCompare(b.name));
+  for (const entry of agentEntries) {
     if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
     const agent = parseAgentSource(path.join(AGENT_SOURCE, entry.name));
     outputs.set(path.join('.claude', 'agents', `${agent.name}.md`), renderClaudeAgent(agent));
@@ -187,7 +191,11 @@ export function syncCliAssets({ check = false } = {}) {
   return { ok: drifted.length === 0, drifted };
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+if (
+  process.argv[1]
+  && existsSync(process.argv[1])
+  && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))
+) {
   const check = process.argv.includes('--check');
   const result = syncCliAssets({ check });
   if (!result.ok) {

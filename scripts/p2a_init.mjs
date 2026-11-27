@@ -16,10 +16,20 @@ import { isPlanDrifted, readWork } from './p2a_work.mjs';
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
+const CLAUDE_HOOK_COMMAND = 'node .claude/hooks/p2a-confine-workspace.mjs';
+
 export function parseToolList(raw) {
-  if (!raw || raw === 'all') return [...TOOL_TARGETS];
-  if (raw === 'none') return [];
-  const items = raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+  if (raw === undefined || raw === null) return [...TOOL_TARGETS];
+  const normalized = String(raw).trim().toLowerCase();
+  if (!normalized) {
+    throw new Error('--tools requires a non-empty value: codex, claude, gemini, all, or none');
+  }
+  if (normalized === 'all') return [...TOOL_TARGETS];
+  if (normalized === 'none') return [];
+  const items = normalized.split(',').map((s) => s.trim()).filter(Boolean);
+  if (!items.length) {
+    throw new Error('--tools requires at least one tool name: codex, claude, gemini, all, or none');
+  }
   const invalid = items.filter((item) => !TOOL_TARGETS.includes(item));
   if (invalid.length) {
     throw new Error(`unknown --tools value(s): ${invalid.join(', ')}; expected codex, claude, gemini, all, or none`);
@@ -66,24 +76,28 @@ export function providerAssetList(tools) {
 
 function ensureClaudeHookSettings(targetRoot) {
   const settingsPath = path.join(targetRoot, '.claude', 'settings.json');
-  const hookCommand = 'node .claude/hooks/p2a-confine-workspace.mjs';
   let current = {};
   if (existsSync(settingsPath)) {
+    let parsed;
     try {
-      current = JSON.parse(readFileSync(settingsPath, 'utf8'));
-    } catch {
-      current = {};
+      parsed = JSON.parse(readFileSync(settingsPath, 'utf8'));
+    } catch (error) {
+      throw new Error(`cannot update .claude/settings.json because existing file is invalid JSON: ${error.message}`);
     }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('cannot update .claude/settings.json because root JSON value must be an object');
+    }
+    current = parsed;
   }
   const hooks = current.hooks && typeof current.hooks === 'object' ? { ...current.hooks } : {};
   const preToolUse = Array.isArray(hooks.PreToolUse) ? [...hooks.PreToolUse] : [];
   const alreadyPresent = preToolUse.some((entry) =>
-    Array.isArray(entry?.hooks) && entry.hooks.some((h) => h?.command === hookCommand),
+    Array.isArray(entry?.hooks) && entry.hooks.some((h) => h?.command === CLAUDE_HOOK_COMMAND),
   );
   if (!alreadyPresent) {
     preToolUse.push({
       matcher: 'Write|Edit|Bash',
-      hooks: [{ type: 'command', command: hookCommand }],
+      hooks: [{ type: 'command', command: CLAUDE_HOOK_COMMAND }],
     });
   }
   hooks.PreToolUse = preToolUse;
@@ -129,8 +143,10 @@ export function initProject(targetRoot, { tools = null, projectId = null, force 
     if (!existsSync(src)) {
       throw new Error(`packaged provider asset is missing: ${relPath}`);
     }
-    mkdirSync(path.dirname(dst), { recursive: true });
-    copyFileSync(src, dst);
+    if (path.resolve(src) !== path.resolve(dst)) {
+      mkdirSync(path.dirname(dst), { recursive: true });
+      copyFileSync(src, dst);
+    }
     installed.push(relPath);
   }
   if (effectiveTools.includes('claude')) {
@@ -162,13 +178,34 @@ export function diagnoseProject(targetRoot) {
   }
 
   if (config) {
-    const hasVerify = Boolean(config.verify?.test || config.verify?.lint || config.verify?.typecheck);
+    const hasVerify = Boolean(
+      config.verify?.test?.trim() || config.verify?.lint?.trim() || config.verify?.typecheck?.trim(),
+    );
     if (!hasVerify) {
       warnings.push('no verify commands configured in .plan2agent/config.json (pass --cmd to `p2a verify` or set verify.test)');
     }
     for (const relPath of providerAssetList(config.tools ?? [])) {
       if (!existsSync(path.join(root, relPath))) {
         warnings.push(`missing installed provider asset: ${relPath} (run \`p2a init\` to restore)`);
+      }
+    }
+    if ((config.tools ?? []).includes('claude')) {
+      const settingsPath = path.join(root, '.claude', 'settings.json');
+      if (!existsSync(settingsPath)) {
+        warnings.push('missing .claude/settings.json hook registration (run `p2a init` to restore)');
+      } else {
+        try {
+          const parsed = JSON.parse(readFileSync(settingsPath, 'utf8'));
+          const preToolUse = Array.isArray(parsed?.hooks?.PreToolUse) ? parsed.hooks.PreToolUse : [];
+          const hasHook = preToolUse.some((entry) =>
+            Array.isArray(entry?.hooks) && entry.hooks.some((h) => h?.command === CLAUDE_HOOK_COMMAND),
+          );
+          if (!hasHook) {
+            warnings.push('Plan2Agent workspace confinement hook is not registered in .claude/settings.json (run `p2a init`)');
+          }
+        } catch (error) {
+          errors.push(`invalid .claude/settings.json: ${error.message}`);
+        }
       }
     }
   }

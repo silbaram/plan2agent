@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /** Plan2Agent v1 CLI entrypoint — minimal task & session-resume harness. */
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { findProjectRoot, readConfig } from './p2a_config.mjs';
 import {
@@ -33,11 +33,11 @@ function usage() {
     `Plan2Agent (p2a) v${PACKAGE_JSON.version} — minimal task & session-resume harness`,
     '',
     'Usage:',
-    '  p2a init [--target <dir>] [--tools codex,claude,gemini|all|none] [--project-id <id>] [--force]',
+    '  p2a init [--target <dir>] [--tools codex,claude,gemini|all|none] [--project-id <id>] [--force] [--json]',
     '  p2a next [--target <dir>] [--idea "<text>" | --entry <path>] [--json]',
     '  p2a approve --quote "<user utterance>" [--target <dir>] [--json]',
     '  p2a task list [--target <dir>] [--json]',
-    '  p2a task add --title "<text>" --accept "<criterion>" [--accept ...] [--id <id>] [--depends <id> ...] [--target <dir>]',
+    '  p2a task add --title "<text>" --accept "<criterion>" [--accept ...] [--id <id>] [--depends <id> ...] [--target <dir>] [--json]',
     '  p2a task start <id> [--summary "<text>"] [--allow-parallel] [--target <dir>] [--json]',
     '  p2a task note <id> [--note "<text>"] [--summary "<text>"] [--target <dir>] [--json]',
     '  p2a task block <id> --reason "<text>" [--summary "<text>"] [--target <dir>] [--json]',
@@ -108,6 +108,12 @@ function cmdNext(argv) {
     allowPositionals: false,
   });
   if (values.help) { console.log(usage()); return 0; }
+  if (values.idea !== undefined && !values.idea.trim()) {
+    throw new Error('--idea requires a non-empty description');
+  }
+  if (values.entry !== undefined && !values.entry.trim()) {
+    throw new Error('--entry requires a non-empty file path');
+  }
   if (values.idea && values.entry) {
     throw new Error('pass either --idea or --entry, not both');
   }
@@ -186,7 +192,7 @@ function cmdTask(argv) {
 
   if (subcommand === 'add') {
     if (!values.title?.trim()) throw new Error('task add requires --title "<text>"');
-    const acceptance = (values.accept ?? []).filter((s) => s.trim());
+    const acceptance = (values.accept ?? []).map((s) => s.trim()).filter(Boolean);
     if (!acceptance.length) throw new Error('task add requires at least one --accept "<criterion>"');
     const depends = (values.depends ?? [])
       .flatMap((entry) => entry.split(','))
@@ -298,7 +304,8 @@ function cmdDone(argv) {
   });
   if (values.help) { console.log(usage()); return 0; }
   const targetRoot = resolveTarget(values.target);
-  const finished = finishWork(targetRoot, { abort: values.abort });
+  const git = values.abort ? null : inspectGitWorkspace(targetRoot);
+  const finished = finishWork(targetRoot, { abort: values.abort, git });
   if (values.json) {
     printJson({ cleared: true, aborted: values.abort, work: finished });
   } else {
@@ -391,6 +398,10 @@ export function main(argv = process.argv.slice(2)) {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+if (
+  process.argv[1]
+  && existsSync(process.argv[1])
+  && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))
+) {
   process.exitCode = main();
 }

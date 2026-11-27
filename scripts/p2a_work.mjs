@@ -84,6 +84,37 @@ function assertValidTaskDag(tasks) {
 export function validateWork(data) {
   validateSchema(data, WORK_SCHEMA);
   assertValidTaskDag(data.tasks);
+  if (!data.goal.trim()) {
+    throw new ValidationError('work.goal must not be whitespace-only');
+  }
+  if (!data.resume.updated_at.trim()) {
+    throw new ValidationError('resume.updated_at must not be whitespace-only');
+  }
+  for (const task of data.tasks) {
+    if (!task.title.trim()) {
+      throw new ValidationError(`task ${task.id} title must not be whitespace-only`);
+    }
+    if (task.acceptance.some((item) => !item.trim())) {
+      throw new ValidationError(`task ${task.id} acceptance entries must not be whitespace-only`);
+    }
+    if (task.verification) {
+      if (!task.verification.command.trim() || !task.verification.at.trim()) {
+        throw new ValidationError(`task ${task.id} verification command and timestamp must not be whitespace-only`);
+      }
+      if (task.verification.status === 'passed' && task.verification.exit_code !== 0) {
+        throw new ValidationError(`task ${task.id} passed verification must have exit_code 0`);
+      }
+      if (task.verification.status === 'failed' && task.verification.exit_code === 0) {
+        throw new ValidationError(`task ${task.id} failed verification cannot have exit_code 0`);
+      }
+    }
+  }
+  if (data.status !== 'draft' && !data.approval.approved) {
+    throw new ValidationError(`work status "${data.status}" requires approval.approved === true`);
+  }
+  if (data.status === 'done' && data.tasks.some((t) => t.status !== 'done')) {
+    throw new ValidationError('work status "done" requires all tasks to have status "done"');
+  }
   if (data.approval.approved) {
     if (!data.tasks.length) {
       throw new ValidationError('approved work must contain at least one task');
@@ -315,7 +346,11 @@ export function blockTask(targetRoot, taskId, { reason, summary = null }) {
   }
   const work = readWork(targetRoot);
   if (!work) throw new Error('no .plan2agent/work.json found');
+  assertApprovedAndCurrent(work);
   const task = findTask(work, taskId);
+  if (task.status === 'done') {
+    throw new Error(`task ${taskId} is already done and cannot be blocked`);
+  }
   task.status = 'blocked';
   task.notes.push(`blocked: ${reason.trim()}`);
   if (work.resume.active_task_id === task.id) {
@@ -399,7 +434,7 @@ export function completeTask(targetRoot, taskId, { summary = null, currentFinger
   return writeWork(targetRoot, work);
 }
 
-export function finishWork(targetRoot, { abort = false } = {}) {
+export function finishWork(targetRoot, { abort = false, git = null } = {}) {
   const work = readWork(targetRoot);
   if (!work) {
     throw new Error('no active .plan2agent/work.json to finish');
@@ -415,6 +450,16 @@ export function finishWork(targetRoot, { abort = false } = {}) {
     );
     if (unverified.length) {
       throw new Error(`cannot finish work without passing verification on: ${unverified.map((t) => t.id).join(', ')}`);
+    }
+    if (git?.isGit && git.changedFiles.length > 0 && git.worktreeFingerprint) {
+      const latestVerified = [...work.tasks]
+        .filter((t) => t.verification?.worktree_fingerprint)
+        .sort((a, b) => Date.parse(b.verification.at) - Date.parse(a.verification.at))[0];
+      if (latestVerified && latestVerified.verification.worktree_fingerprint !== git.worktreeFingerprint) {
+        throw new Error(
+          `workspace has unverified changes after the last passing verification (${latestVerified.id}); rerun p2a verify --task ${latestVerified.id} before p2a done`,
+        );
+      }
     }
   }
   const snapshot = structuredClone(work);

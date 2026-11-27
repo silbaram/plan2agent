@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -37,9 +37,22 @@ test('resolveBuildLoreInvocation resolves project_id from config.json and enforc
     /canonical sha256 digest/,
   );
 
-  // Explicit --project override works
-  const overridden = resolveBuildLoreInvocation(['status', '--project', 'custom-id', '--target', dir]);
+  // Explicit --project override and --flag=value syntax work
+  const overridden = resolveBuildLoreInvocation(['status', '--project=custom-id', `--target=${dir}`]);
   assert.deepEqual(overridden.args, ['knowledge', 'status', '--project', 'custom-id']);
+  const handoffEq = resolveBuildLoreInvocation(['handoff', 'verify', `--id=${digest}`, `--target=${dir}`]);
+  assert.deepEqual(handoffEq.args, ['handoff', 'verify', '--project', 'demo-service', `--id=${digest}`]);
+
+  // Symlinked --target directory is accepted
+  const linkDir = path.join(os.tmpdir(), `p2a-bl-link-${Date.now()}`);
+  try {
+    symlinkSync(dir, linkDir, 'dir');
+    t.after(() => rmSync(linkDir, { recursive: true, force: true }));
+    const viaLink = resolveBuildLoreInvocation(['status', '--target', linkDir]);
+    assert.deepEqual(viaLink.args, ['knowledge', 'status', '--project', 'demo-service']);
+  } catch (error) {
+    if (!(process.platform === 'win32' && (error.code === 'EPERM' || error.code === 'EACCES'))) throw error;
+  }
 });
 
 test('resolveBuildLoreInvocation falls back to .buildlore/connection.json for status', (t) => {
@@ -79,6 +92,16 @@ test('runBuildLore handles help, mocked success, and missing binary gracefully',
   assert.equal(okCode, 0);
   assert.equal(out, '{"hits":[]}\n');
   assert.equal(err, '');
+
+  // Non-zero bounded read still surfaces stdout error payload
+  out = '';
+  const failedJsonCode = runBuildLore(['memory', '--task', 'resume', '--target', dir], {
+    runner: () => ({ status: 2, stdout: '{"error":"index missing"}\n', stderr: '' }),
+    stdout: (s) => { out += s; },
+    stderr: (s) => { err += s; },
+  });
+  assert.equal(failedJsonCode, 2);
+  assert.equal(out, '{"error":"index missing"}\n');
 
   err = '';
   const missingCode = runBuildLore(['status', '--target', dir], {

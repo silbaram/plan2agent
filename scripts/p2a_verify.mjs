@@ -2,7 +2,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, readFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readlinkSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { DEFAULT_VERIFY_TIMEOUT_MS, P2A_DIR, readConfig } from './p2a_config.mjs';
 import { assertApprovedAndCurrent, findTask, nowIso, readWork, writeWork } from './p2a_work.mjs';
@@ -45,8 +45,18 @@ function parsePorcelainZPaths(porcelainZOutput, p2aPrefix) {
   return [...new Set(files)].sort();
 }
 
+function canonicalDir(dirPath) {
+  const resolved = path.resolve(dirPath);
+  if (!existsSync(resolved)) return resolved;
+  try {
+    return realpathSync.native(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
 export function inspectGitWorkspace(targetRoot) {
-  const root = path.resolve(targetRoot);
+  const root = canonicalDir(targetRoot);
   const inside = runGit(root, ['rev-parse', '--is-inside-work-tree']);
   if (inside.status !== 0 || inside.stdout.trim() !== 'true') {
     return {
@@ -57,7 +67,9 @@ export function inspectGitWorkspace(targetRoot) {
     };
   }
   const topRes = runGit(root, ['rev-parse', '--show-toplevel']);
-  const gitRoot = topRes.status === 0 && topRes.stdout.trim() ? path.resolve(topRes.stdout.trim()) : root;
+  const gitRoot = topRes.status === 0 && topRes.stdout.trim()
+    ? canonicalDir(topRes.stdout.trim())
+    : root;
   const p2aRelFromGitRoot = normalizeSlashes(path.relative(gitRoot, path.join(root, P2A_DIR)) || P2A_DIR);
 
   const headRes = runGit(root, ['rev-parse', 'HEAD']);
@@ -68,7 +80,11 @@ export function inspectGitWorkspace(targetRoot) {
     'status', '--porcelain', '-z', '--untracked-files=all',
     '--', '.', `:(exclude)${P2A_DIR}`,
   ]);
-  const statusText = statusRes.status === 0 ? statusRes.stdout : '';
+  if (statusRes.error || statusRes.status !== 0) {
+    const detail = statusRes.error?.message || statusRes.stderr?.trim() || `exit ${statusRes.status}`;
+    throw new Error(`failed to inspect git workspace status: ${detail}`);
+  }
+  const statusText = statusRes.stdout;
   const changedFiles = parsePorcelainZPaths(statusText, p2aRelFromGitRoot);
 
   const hash = createHash('sha256');
@@ -76,14 +92,14 @@ export function inspectGitWorkspace(targetRoot) {
   hash.update(`status:\n${statusText}\n`);
   for (const relPath of changedFiles) {
     const absPath = path.join(gitRoot, relPath);
-    if (existsSync(absPath)) {
+    const stat = lstatSync(absPath, { throwIfNoEntry: false });
+    if (stat) {
       try {
-        const stat = lstatSync(absPath);
         if (stat.isFile()) {
           hash.update(`file:${relPath}:${stat.size}\n`);
           hash.update(readFileSync(absPath));
         } else if (stat.isSymbolicLink()) {
-          hash.update(`symlink:${relPath}\n`);
+          hash.update(`symlink:${relPath}:${readlinkSync(absPath)}\n`);
         }
       } catch {
         hash.update(`unreadable:${relPath}\n`);
@@ -129,7 +145,10 @@ export function runVerification(targetRoot, { taskId = null, cmd = null, timeout
   if (!work) throw new Error('no .plan2agent/work.json found');
   assertApprovedAndCurrent(work);
 
-  const resolvedTaskId = taskId ?? work.resume.active_task_id ?? work.tasks.find((t) => t.status === 'in_progress')?.id;
+  const preferredActive = work.resume.active_task_id
+    ? work.tasks.find((t) => t.id === work.resume.active_task_id && t.status === 'in_progress')?.id
+    : null;
+  const resolvedTaskId = taskId ?? preferredActive ?? work.tasks.find((t) => t.status === 'in_progress')?.id;
   if (!resolvedTaskId) {
     throw new Error('no active task specified or in_progress; pass --task <id> or start a task first');
   }
@@ -171,8 +190,15 @@ export function runVerification(targetRoot, { taskId = null, cmd = null, timeout
   if (git.isGit) {
     task.changed_files = git.changedFiles;
   }
-  if (!passed && !work.resume.summary) {
-    work.resume.summary = `Verification failed for ${task.id} (exit ${verification.exit_code ?? 'error'}): ${command}`;
+  if (!passed) {
+    if (task.status === 'done') {
+      task.status = 'in_progress';
+      work.status = 'in_progress';
+      work.resume.active_task_id = task.id;
+    }
+    if (!work.resume.summary) {
+      work.resume.summary = `Verification failed for ${task.id} (exit ${verification.exit_code ?? 'error'}): ${command}`;
+    }
   }
   work.resume.updated_at = verification.at;
   writeWork(root, work);

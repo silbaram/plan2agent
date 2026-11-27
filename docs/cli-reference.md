@@ -1,6 +1,6 @@
 # Plan2Agent CLI 레퍼런스
 
-모든 명령은 `--target <dir>`(생략 시 상위 디렉터리를 탐색해 `.plan2agent/`가 있는 루트 사용)과 `--json`(기계 판독용 출력)을 지원합니다.
+대부분의 명령은 `--target <dir>`(생략 시 `.git` 경계 안에서 상위로 탐색해 `.plan2agent/`가 있는 루트 사용; 단 `p2a init`은 현재 작업 디렉터리 사용)과 `--json`(기계 판독용 출력)을 지원합니다.
 
 ## `p2a init`
 
@@ -63,7 +63,7 @@ p2a verify [--task <id>] [--cmd "<command>"] [--target <dir>] [--json]
 
 - `--task` 생략 시 현재 `active_task_id` 또는 `in_progress` 태스크를 대상으로 합니다.
 - `--cmd` 생략 시 `.plan2agent/config.json`의 `verify.test`, `verify.lint`, `verify.typecheck` 중 설정된 명령을 `&&`로 연결해 실행합니다.
-- 실패 시 종료 코드 `1`을 반환하고 `resume.summary`에 실패 요약을 기록합니다.
+- 실패 시 종료 코드 `1`을 반환하며, 이미 `done` 상태이던 태스크가 실패하면 `in_progress`로 되돌리고 `resume.summary`가 비어 있을 때만 기본 실패 요약을 기록합니다.
 
 ## `p2a done`
 

@@ -71,6 +71,18 @@ function main() {
     }
   }
 
+  const expectedHooks = new Set(['.claude/hooks/p2a-confine-workspace.mjs']);
+  for (const hook of expectedHooks) {
+    if (!existsSync(path.join(ROOT, hook))) {
+      failures.push(`missing Claude hook: ${hook}`);
+    }
+  }
+  for (const found of listRelativeFiles('.claude/hooks')) {
+    if (!expectedHooks.has(found)) {
+      failures.push(`unexpected file in .claude/hooks: ${found}`);
+    }
+  }
+
   if (failures.length) {
     for (const item of failures) console.error(`parity failed: ${item}`);
     return 1;

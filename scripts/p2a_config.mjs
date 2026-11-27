@@ -1,8 +1,9 @@
 /** Minimal project config detection, read, write, and validation for Plan2Agent v1. */
 
-import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { ValidationError, validateSchema } from './p2a_schema.mjs';
 
@@ -45,8 +46,17 @@ export function atomicWriteJson(filePath, data) {
   const dir = path.dirname(filePath);
   mkdirSync(dir, { recursive: true });
   const temp = path.join(dir, `.${path.basename(filePath)}.${randomUUID()}.tmp`);
-  writeFileSync(temp, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
-  renameSync(temp, filePath);
+  try {
+    writeFileSync(temp, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+    renameSync(temp, filePath);
+  } catch (error) {
+    try {
+      if (existsSync(temp)) unlinkSync(temp);
+    } catch {
+      // Best-effort cleanup of temp file.
+    }
+    throw error;
+  }
 }
 
 export function detectVerifyCommands(targetRoot) {
@@ -66,25 +76,33 @@ export function detectVerifyCommands(targetRoot) {
           ? 'yarn'
           : 'npm';
       const run = pm === 'npm' ? 'npm run' : pm;
-      if (typeof scripts.test === 'string' && !scripts.test.includes('no test specified')) {
+      if (typeof scripts.test === 'string' && scripts.test.trim() && !scripts.test.includes('no test specified')) {
         test = pm === 'npm' ? 'npm test' : `${pm} test`;
       }
-      if (typeof scripts.lint === 'string') lint = `${run} lint`;
-      if (typeof scripts.typecheck === 'string') typecheck = `${run} typecheck`;
+      if (typeof scripts.lint === 'string' && scripts.lint.trim()) lint = `${run} lint`;
+      if (typeof scripts.typecheck === 'string' && scripts.typecheck.trim()) typecheck = `${run} typecheck`;
     } catch {
       // Malformed package.json leaves verification commands unset for explicit configuration.
     }
-  } else if (existsSync(path.join(root, 'Cargo.toml'))) {
-    test = 'cargo test';
-  } else if (existsSync(path.join(root, 'go.mod'))) {
-    test = 'go test ./...';
-  } else if (existsSync(path.join(root, 'pyproject.toml')) || existsSync(path.join(root, 'pytest.ini'))) {
-    test = 'pytest';
-  } else if (existsSync(path.join(root, 'build.gradle')) || existsSync(path.join(root, 'build.gradle.kts'))) {
-    const gradle = existsSync(path.join(root, 'gradlew')) ? './gradlew' : 'gradle';
-    test = `${gradle} test`;
-  } else if (existsSync(path.join(root, 'pom.xml'))) {
-    test = 'mvn test';
+  }
+  if (!test) {
+    if (existsSync(path.join(root, 'Cargo.toml'))) {
+      test = 'cargo test';
+    } else if (existsSync(path.join(root, 'go.mod'))) {
+      test = 'go test ./...';
+    } else if (existsSync(path.join(root, 'pyproject.toml')) || existsSync(path.join(root, 'pytest.ini'))) {
+      test = 'pytest';
+    } else if (existsSync(path.join(root, 'build.gradle')) || existsSync(path.join(root, 'build.gradle.kts'))) {
+      const isWin = process.platform === 'win32';
+      const gradle = isWin && existsSync(path.join(root, 'gradlew.bat'))
+        ? 'gradlew.bat'
+        : existsSync(path.join(root, 'gradlew'))
+          ? './gradlew'
+          : 'gradle';
+      test = `${gradle} test`;
+    } else if (existsSync(path.join(root, 'pom.xml'))) {
+      test = 'mvn test';
+    }
   }
 
   return {
@@ -147,6 +165,9 @@ export function findProjectRoot(startDir = process.cwd()) {
   while (true) {
     if (existsSync(configPath(current)) || existsSync(workPath(current))) {
       return current;
+    }
+    if (existsSync(path.join(current, '.git'))) {
+      return path.resolve(startDir);
     }
     const parent = path.dirname(current);
     if (parent === current) return path.resolve(startDir);

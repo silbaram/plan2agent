@@ -7,6 +7,8 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import os from 'node:os';
@@ -434,4 +436,91 @@ test('next includes scope/constraints, respects active_task_id under --allow-par
   const afterFail = runP2aJson(['next', '--target', dir]);
   assert.equal(afterFail.work.resume.summary, 'Custom resume handoff for T2');
   assert.equal(afterFail.work.active_task.verification.status, 'failed');
+});
+
+test('hardening: p2a done freshness, reopen on failed re-verify, block guards, malformed settings fail-closed, and validation invariants', (t) => {
+  const dir = makeTempProject();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+
+  // Malformed .claude/settings.json must fail closed (not get silently overwritten)
+  mkdirSync(path.join(dir, '.claude'), { recursive: true });
+  writeFileSync(path.join(dir, '.claude', 'settings.json'), '{not valid json', 'utf8');
+  assert.equal(runP2a(['init', '--target', dir, '--tools', 'claude']).status, 1);
+  assert.equal(readFileSync(path.join(dir, '.claude', 'settings.json'), 'utf8'), '{not valid json');
+
+  // Remove broken settings, test case-insensitive --tools and empty rejection
+  unlinkSync(path.join(dir, '.claude', 'settings.json'));
+  assert.equal(runP2a(['init', '--target', dir, '--tools', '']).status, 1);
+  assert.equal(runP2a(['init', '--target', dir, '--tools', ',,,']).status, 1);
+  runP2aJson(['init', '--target', dir, '--tools', 'CLAUDE']);
+
+  // Removing hook registration from .claude/settings.json triggers doctor warning
+  writeFileSync(path.join(dir, '.claude', 'settings.json'), '{}\n', 'utf8');
+  const docWarn = runP2aJson(['doctor', '--target', dir]);
+  assert.equal(docWarn.warnings.some((w) => w.includes('.claude/settings.json')), true);
+  runP2aJson(['init', '--target', dir, '--tools', 'claude']);
+
+  // Empty --idea rejected explicitly
+  assert.equal(runP2a(['next', '--target', dir, '--idea', '   ']).status, 1);
+
+  runP2aJson(['next', '--target', dir, '--idea', 'Verify hardening']);
+  runP2aJson(['task', 'add', '--target', dir, '--title', 'Only task', '--accept', 'passes']);
+
+  // Cannot block unapproved draft task
+  assert.equal(runP2a(['task', 'block', 'T1', '--target', dir, '--reason', 'too early']).status, 1);
+
+  runP2aJson(['approve', '--target', dir, '--quote', '진행하자']);
+  runP2aJson(['task', 'start', 'T1', '--target', dir]);
+  writeFileSync(path.join(dir, 'app.mjs'), 'export const value = 1; // clean\n', 'utf8');
+  runP2aJson(['verify', '--task', 'T1', '--target', dir]);
+  runP2aJson(['task', 'done', 'T1', '--target', dir]);
+
+  // Cannot block already-done task
+  assert.equal(runP2a(['task', 'block', 'T1', '--target', dir, '--reason', 'late']).status, 1);
+
+  // Editing code AFTER `task done` must block `p2a done` while workspace is dirty
+  writeFileSync(path.join(dir, 'app.mjs'), 'export const value = 999;\n', 'utf8');
+  const dirtyDone = runP2a(['done', '--target', dir]);
+  assert.equal(dirtyDone.status, 1);
+  assert.match(dirtyDone.stderr, /unverified changes/);
+
+  // Re-verifying a `done` task that now fails reopens it to `in_progress` (no ready_to_finish deadlock)
+  const reFail = runP2a(['verify', '--task', 'T1', '--target', dir, '--json']);
+  assert.equal(reFail.status, 1);
+  const reopened = runP2aJson(['next', '--target', dir]);
+  assert.equal(reopened.state, 'task_in_progress');
+  assert.equal(reopened.work.active_task.id, 'T1');
+
+  // Fix, verify, complete, then commit cleanly -> `p2a done` succeeds on clean committed tree!
+  writeFileSync(path.join(dir, 'app.mjs'), 'export const value = 1; // verified\n', 'utf8');
+  runP2aJson(['verify', '--task', 'T1', '--target', dir]);
+  runP2aJson(['task', 'done', 'T1', '--target', dir]);
+  execFileSync('git', ['add', 'app.mjs', '.claude'], { cwd: dir });
+  execFileSync('git', ['commit', '-q', '-m', 'verified change'], { cwd: dir });
+  const committedDone = runP2aJson(['done', '--target', dir]);
+  assert.equal(committedDone.cleared, true);
+
+  // Contradictory verification or corrupted work.json with --idea returns invalid_work
+  runP2aJson(['next', '--target', dir, '--idea', 'Corruption check']);
+  const workFile = path.join(dir, '.plan2agent', 'work.json');
+  writeFileSync(workFile, '{broken', 'utf8');
+  assert.equal(runP2aJson(['next', '--target', dir, '--idea', 'New idea']).state, 'invalid_work');
+
+  // Symlink target mutation after verify changes fingerprint
+  unlinkSync(workFile);
+  runP2aJson(['next', '--target', dir, '--idea', 'Symlink fingerprint check']);
+  runP2aJson(['task', 'add', '--target', dir, '--title', 'Link task', '--accept', 'ok']);
+  runP2aJson(['approve', '--target', dir, '--quote', 'ok']);
+  runP2aJson(['task', 'start', 'T1', '--target', dir]);
+  try {
+    symlinkSync('app.mjs', path.join(dir, 'active-link'));
+    runP2aJson(['verify', '--task', 'T1', '--target', dir]);
+    unlinkSync(path.join(dir, 'active-link'));
+    symlinkSync('test.mjs', path.join(dir, 'active-link'));
+    const retargeted = runP2a(['task', 'done', 'T1', '--target', dir]);
+    assert.equal(retargeted.status, 1);
+    assert.match(retargeted.stderr, /workspace changed after the last passing verification/);
+  } catch (error) {
+    if (!(process.platform === 'win32' && (error.code === 'EPERM' || error.code === 'EACCES'))) throw error;
+  }
 });
